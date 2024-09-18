@@ -16,6 +16,9 @@ This script can do the following:
 - format & style those excel sheets for easy usage
 - Read back the data from all the sheets to produce a CopyRight 'import' sheet -- currently under development.
 
+Take a look at the cli help function:
+![image](https://github.com/user-attachments/assets/c2038652-3e68-4ebf-9bec-e677721e001a)
+
 
 # Setting up things to use the toolkit
 
@@ -42,8 +45,11 @@ Make a folder called 'raw_copyright_data' (or whatever name you changed it to in
 Run the cli with standard settings to create the initial sheets:
 
     uv run easy_access_cli.py
+If all is well, you'll see something like this:
+![image](https://github.com/user-attachments/assets/0724f886-f067-45d7-98f3-67e9eff8e25e)
+If something is wrong, you'll either get a short warning/error message with the specific issue; or you'll get a giant list of detailed errors. Probably the last. Sorry!
 
-Or, if you want to check out all available cli options:
+If you want to check out all available cli options use the --help option (see the screenshot above):
 
     uv run easy_access_cli.py --help
 
