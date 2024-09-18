@@ -39,37 +39,30 @@ This python file contains the following:
     - typer function cli provides a command line interface
     - helper classes File and Directory for handling... files and directories.
 """
+
+import json
+import os
 import pathlib
 import shutil
+from datetime import datetime
+from enum import Enum
 
+import dotenv
+import openpyxl
 import openpyxl.worksheet
 import openpyxl.worksheet.datavalidation
-from openpyxl.worksheet.table import Table as ExcelTable
-from openpyxl.worksheet.table import TableStyleInfo
-from openpyxl.formatting import Rule
-from openpyxl.formatting.rule import CellIsRule
-from openpyxl.styles import Font, Color, PatternFill
-from openpyxl.styles.differential import DifferentialStyle
-
 import openpyxl.worksheet.table
 import openpyxl.worksheet.worksheet
-import typer
-from typing_extensions import Annotated
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
 import polars as pl
-from pathlib import Path
-import os
-from datetime import datetime
-import dotenv
-from enum import Enum
-import json
-import openpyxl
-
+import typer
+from openpyxl.worksheet.table import Table as ExcelTable
+from openpyxl.worksheet.table import TableStyleInfo
+from rich.console import Console
+from typing_extensions import Annotated
 
 print: callable = Console(emoji=True, markup=True).print
-dotenv.load_dotenv('settings.env')
+dotenv.load_dotenv("settings.env")
+
 
 def info(text: str):
     """
@@ -77,18 +70,19 @@ def info(text: str):
     """
     print(f"[cyan]:information: |> [/cyan] {text}")
 
+
 def warn(text: str):
     """
     Prints a warning message.
     """
     print(f":warning: [bold red] Warning! [/bold red] |> {text}")
 
+
 def cool(text: str):
     """
     Prints a nice message.
     """
     print(f":smiling_face_with_sunglasses: [yellow] {text} [/yellow]")
-
 
 
 class Directory:
@@ -111,56 +105,62 @@ class Directory:
         self.post_init()
 
     def post_init(self) -> None:
-        '''
+        """
         Checks to see if this is actually a dir,
         or create it if create_dir is set to True.
-        '''
+        """
         if not self.full.exists():
             if self.create_dir:
                 self.create()
             else:
-                raise FileNotFoundError(f"Directory {self.full} does not exist and create_dir is set to False.")
+                raise FileNotFoundError(
+                    f"Directory {self.full} does not exist and create_dir is set to False."
+                )
         if not self.full.is_dir():
             raise NotADirectoryError(f"Directory {self.full} is not a directory.")
 
-
     @property
-    def files(self) -> list['File']:
-        '''
+    def files(self) -> list["File"]:
+        """
         Gets all files in the dir as a list of File objects.
-        '''
-        return [File(self.full / file) for file in self.full.iterdir() if file.is_file()]
+        """
+        return [
+            File(self.full / file) for file in self.full.iterdir() if file.is_file()
+        ]
 
     @property
-    def files_r(self) -> list['File']:
-        '''
+    def files_r(self) -> list["File"]:
+        """
         Recursively gets all files in the dir, so including files in subdirs, as a list of File objects.
-        '''
-        return [File(self.full / file) for file in self.full.rglob('*') if file.is_file()]
+        """
+        return [
+            File(self.full / file) for file in self.full.rglob("*") if file.is_file()
+        ]
 
     @property
-    def dirs(self, r: bool = False) -> list['Directory']:
-        '''
+    def dirs(self, r: bool = False) -> list["Directory"]:
+        """
         Returns a list of all dirs in this Directory as a list of Directory objects.
         If r is set to True, it will return all children dirs recursively.
-        '''
+        """
         if not r:
             return [Directory(self, d) for d in self.full.iterdir() if d.is_dir()]
         if r:
-            return [Directory(self, d) for d in self.full.rglob('*') if d.is_dir()]
+            return [Directory(self, d) for d in self.full.rglob("*") if d.is_dir()]
+
     @property
-    def newest_file(self) -> 'File':
-        '''
+    def newest_file(self) -> "File":
+        """
         Returns the newest file in the dir as a File object.
-        '''
+        """
         all_files = self.files
         return max(all_files, key=lambda x: x.created())
 
     @property
     def newest_file_r(self) -> str:
-        '''
+        """
         Recursively gets the newest file in the dir, so including files in subdirs, as a File object.
-        '''
+        """
         all_files = self.files_r
         return max(all_files, key=lambda x: x.created())
 
@@ -178,7 +178,6 @@ class Directory:
         except FileExistsError:
             pass
 
-
     def __eq__(self, other) -> bool:
         return self.full == other.full
 
@@ -188,8 +187,9 @@ class Directory:
     def __repr__(self):
         return f"DirPath('{self.input_path_str}') -> {self.full}"
 
+
 class File:
-    '''
+    """
     Simple class for files + operations
     Parameters:
         path: str or Path
@@ -197,7 +197,8 @@ class File:
             OR
             absolute path to the file.
             Should always end with the filename including extension.
-    '''
+    """
+
     def __init__(self, path: str | pathlib.Path):
         self._path_init_str = str(path)
 
@@ -209,14 +210,14 @@ class File:
             self._extension = path.suffix
             self._dir = Directory(str(self._path.absolute().parent))
         elif isinstance(path, str):
-            if '/' in path:
-                self._name = path.rsplit('/', 1)[-1]
-                self._dir = Directory(path.rsplit('/', 1)[0], create_dir=True)
+            if "/" in path:
+                self._name = path.rsplit("/", 1)[-1]
+                self._dir = Directory(path.rsplit("/", 1)[0], create_dir=True)
             else:
                 self._name = path
                 self._dir = Directory(os.getcwd())
 
-            self._extension = self._name.split('.')[-1]
+            self._extension = self._name.split(".")[-1]
             self._path = self._dir.full / self._name
 
     @property
@@ -251,15 +252,15 @@ class File:
     def modified(self) -> datetime:
         return datetime.fromtimestamp(self._path.stat().st_mtime)
 
-    def copy(self, new_path: str) -> 'File':
+    def copy(self, new_path: str) -> "File":
         shutil.copy(self._path, new_path)
         return File(new_path)
 
-    def move(self, new_path: str) -> 'File':
+    def move(self, new_path: str) -> "File":
         shutil.move(self._path, new_path)
         return File(new_path)
 
-    def rename(self, new_name: str) -> 'File':
+    def rename(self, new_name: str) -> "File":
         self._path = self._dir.full / new_name
         return File(self._path)
 
@@ -275,23 +276,70 @@ class File:
         else:
             return f"FilePath('{self._path}')"
 
+
 class Functions(str, Enum):
     """
     CLI option for picking which functions to run, see cli()
     """
+
     both = "both"
     read = "read"
     export = "export"
 
+
 # The main CLI function:
-def cli(do: Annotated[Functions, typer.Option(case_sensitive=False, help="Which tool to run: read in new data, export current data, or both.", rich_help_panel="Functions")] = Functions.read,
-        changes: Annotated[bool, typer.Option(help="Only add items that have been changed to new faculty sheets.", rich_help_panel="Functions")] = True,
-        other_sheet: Annotated[str | None, typer.Option(help="(relative) path to a xlsx sheet to read in instead of CopyRight Data.", rich_help_panel="Read in data from alternate source")] = None,
-        copyright_export_dir: Annotated[str | None, typer.Argument(help="Overwrite location for files exported from CopyRight", rich_help_panel="Overwite Directory Locations")] = None,
-        copyright_import_dir: Annotated[str | None, typer.Argument(help="Overwrite location for files to be imported back into CopyRight", rich_help_panel="Overwite Directory Locations")] = None,
-        faculties_dir: Annotated[str | None, typer.Argument(help="Overwrite location for faculty sheets", rich_help_panel="Overwite Directory Locations")] = None,
-        all_items_dir: Annotated[str | None, typer.Argument(help="Overwrite location for 'all items' sheet", rich_help_panel="Overwite Directory Locations")] = None,
-        ):
+def cli(
+    do: Annotated[
+        Functions,
+        typer.Option(
+            case_sensitive=False,
+            help="Which tool to run: read in new data, export current data, or both.",
+            rich_help_panel="Functions",
+        ),
+    ] = Functions.read,
+    changes: Annotated[
+        bool,
+        typer.Option(
+            help="Only add items that have been changed to new faculty sheets.",
+            rich_help_panel="Functions",
+        ),
+    ] = True,
+    other_sheet: Annotated[
+        str | None,
+        typer.Option(
+            help="(relative) path to a xlsx sheet to read in instead of CopyRight Data.",
+            rich_help_panel="Read in data from alternate source",
+        ),
+    ] = None,
+    copyright_export_dir: Annotated[
+        str | None,
+        typer.Argument(
+            help="Overwrite location for files exported from CopyRight",
+            rich_help_panel="Overwite Directory Locations",
+        ),
+    ] = None,
+    copyright_import_dir: Annotated[
+        str | None,
+        typer.Argument(
+            help="Overwrite location for files to be imported back into CopyRight",
+            rich_help_panel="Overwite Directory Locations",
+        ),
+    ] = None,
+    faculties_dir: Annotated[
+        str | None,
+        typer.Argument(
+            help="Overwrite location for faculty sheets",
+            rich_help_panel="Overwite Directory Locations",
+        ),
+    ] = None,
+    all_items_dir: Annotated[
+        str | None,
+        typer.Argument(
+            help="Overwrite location for 'all items' sheet",
+            rich_help_panel="Overwite Directory Locations",
+        ),
+    ] = None,
+):
     """
     Runs the Easy Access toolkit with the specified settings.\n
     Make sure that these two files are present in the current dir and contain the required info:\n\n
@@ -310,51 +358,67 @@ def cli(do: Annotated[Functions, typer.Option(case_sensitive=False, help="Which 
     """
 
     if do not in [Functions.both, Functions.read, Functions.export]:
-        warn("No functions selected! Aborting the script. Next time, enable at least one of 'Function' options; for details run ea-cli --help.")
+        warn(
+            "No functions selected! Aborting the script. Next time, enable at least one of 'Function' options; for details run ea-cli --help."
+        )
         cool("Thank you for using the Easy Access tool!")
         raise typer.Exit(code=1)
 
-    if all(not x for x in [copyright_export_dir, copyright_import_dir, faculties_dir, all_items_dir]):
+    if all(
+        not x
+        for x in [
+            copyright_export_dir,
+            copyright_import_dir,
+            faculties_dir,
+            all_items_dir,
+        ]
+    ):
         dirs = None
     else:
-        dirs={
-            'copyright_export':copyright_export_dir,
-            'copyright_import':copyright_import_dir,
-            'faculties':faculties_dir,
-            'all_items':all_items_dir,
+        dirs = {
+            "copyright_export": copyright_export_dir,
+            "copyright_import": copyright_import_dir,
+            "faculties": faculties_dir,
+            "all_items": all_items_dir,
         }
 
-    tool = EasyAccessTool(functions=do, only_changes=changes, dirs=dirs, other_sheet=other_sheet)
+    tool = EasyAccessTool(
+        functions=do, only_changes=changes, dirs=dirs, other_sheet=other_sheet
+    )
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
+
 
 class EasyAccessTool:
     """
     This class contains all the actual functionality for handling the data and creating the sheets.
     """
+
     # which functions to run when self.run() is called
     settings: list[callable] = []
 
     # keep track of relevant files and directories
-    files: dict[str,File]
-    dirs: dict[str,Directory] = {
-        'root':Directory(os.getcwd()),
-        'copyright_export':Directory(os.getenv("COPYRIGHT_EXPORT_DIR")),
-        'copyright_import':Directory(os.getenv("COPYRIGHT_IMPORT_DIR")),
-        'all_items':Directory(os.getenv("ALL_ITEMS_DIR")),
-        'faculties':Directory(os.getenv("FACULTIES_DIR")),
+    files: dict[str, File]
+    dirs: dict[str, Directory] = {
+        "root": Directory(os.getcwd()),
+        "copyright_export": Directory(os.getenv("COPYRIGHT_EXPORT_DIR")),
+        "copyright_import": Directory(os.getenv("COPYRIGHT_IMPORT_DIR")),
+        "all_items": Directory(os.getenv("ALL_ITEMS_DIR")),
+        "faculties": Directory(os.getenv("FACULTIES_DIR")),
     }
 
     # the various dataframes created from / writing to .xlsx files
-    raw_copyright_data: pl.DataFrame = pl.DataFrame() # data directly from copyRight
-    copyright_data: pl.DataFrame = pl.DataFrame() # data with a bit of cleanup
-    faculty_sheet_data: pl.DataFrame = pl.DataFrame() # data from the faculty sheets
-    all_items_sheet_data: pl.DataFrame = pl.DataFrame() # data from the 'all_items' sheet
+    raw_copyright_data: pl.DataFrame = pl.DataFrame()  # data directly from copyRight
+    copyright_data: pl.DataFrame = pl.DataFrame()  # data with a bit of cleanup
+    faculty_sheet_data: pl.DataFrame = pl.DataFrame()  # data from the faculty sheets
+    all_items_sheet_data: pl.DataFrame = (
+        pl.DataFrame()
+    )  # data from the 'all_items' sheet
 
     # maps copyright data column 'departments' to faculties
     dept_mapping_path = File("department_mapping.json")
-    DEPARTMENT_MAPPING = json.load(open(dept_mapping_path.path, encoding='utf-8'))
+    DEPARTMENT_MAPPING = json.load(open(dept_mapping_path.path, encoding="utf-8"))
 
     # list of all found/used faculties
     faculties: list[str]
@@ -372,13 +436,51 @@ class EasyAccessTool:
     # flag to indicate if there are no new items to add
     no_new_items: bool = False
     # standard column order for the complete data sheets
-    column_order = ["material_id","period","department","course_code","course_name","url","filename","title","owner","filetype","classification","type","ml_prediction","manual_classification","manual_identifier","scope","remarks","auditor","last_change","status","google_search_file","isbn","doi","in_collection","pagecount","wordcount","picturecount","author","publisher","reliability","pages_x_students","count_students_registered","retrieved_from_copyright_on","workflow_status","faculty"]
-    def __init__(self,
-                    functions: Functions | None = Functions.both,
-                    dirs: dict[str,str] | None = None,
-                    only_changes: bool = True,
-                    other_sheet: str | None = None
-                ) -> None:
+    column_order = [
+        "material_id",
+        "period",
+        "department",
+        "course_code",
+        "course_name",
+        "url",
+        "filename",
+        "title",
+        "owner",
+        "filetype",
+        "classification",
+        "type",
+        "ml_prediction",
+        "manual_classification",
+        "manual_identifier",
+        "scope",
+        "remarks",
+        "auditor",
+        "last_change",
+        "status",
+        "google_search_file",
+        "isbn",
+        "doi",
+        "in_collection",
+        "pagecount",
+        "wordcount",
+        "picturecount",
+        "author",
+        "publisher",
+        "reliability",
+        "pages_x_students",
+        "count_students_registered",
+        "retrieved_from_copyright_on",
+        "workflow_status",
+        "faculty",
+    ]
+
+    def __init__(
+        self,
+        functions: Functions | None = Functions.both,
+        dirs: dict[str, str] | None = None,
+        only_changes: bool = True,
+        other_sheet: str | None = None,
+    ) -> None:
         """
         Parameters:
             setting:  str | None
@@ -403,7 +505,6 @@ class EasyAccessTool:
         if other_sheet:
             self.other_sheet = File(other_sheet)
 
-
         # export only new items, or all ingested items?
         self.only_changes = only_changes
 
@@ -413,30 +514,49 @@ class EasyAccessTool:
             self.settings = []
         elif functions == Functions.both:
             if not self.other_sheet:
-                self.settings = [self.read_copyright_export, self.process_copyright_export,  # read in new data
-                            self.read_all_items_sheet, self.read_faculty_sheets, # read in data manually added to sheets
-                            self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
-                            self.create_faculty_sheets, self.create_all_items_sheet] # create new sheets with new data
+                self.settings = [
+                    self.read_copyright_export,
+                    self.process_copyright_export,  # read in new data
+                    self.read_all_items_sheet,
+                    self.read_faculty_sheets,  # read in data manually added to sheets
+                    self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
+                    self.create_faculty_sheets,
+                    self.create_all_items_sheet, # create new sheets with new data
+                ]
             else:
-                self.settings = [self.read_other_sheet,  # read in new data
-                                self.read_all_items_sheet, self.read_faculty_sheets, # read in data manually added to sheets
-                                self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
-                                self.create_faculty_sheets, self.create_all_items_sheet] # create new sheets with new data
+                self.settings = [
+                    self.read_other_sheet,  # read in new data
+                    self.read_all_items_sheet,
+                    self.read_faculty_sheets,  # read in data manually added to sheets
+                    self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
+                    self.create_faculty_sheets,
+                    self.create_all_items_sheet, # create new sheets with new data
+                ]
 
         elif functions == Functions.read:
             if not self.other_sheet:
-                self.settings = [self.read_copyright_export, self.process_copyright_export,  # read in new data
-                            self.create_faculty_sheets, self.create_all_items_sheet] # create new sheets with new data
+                self.settings = [
+                    self.read_copyright_export,
+                    self.process_copyright_export,  # read in new data
+                    self.create_faculty_sheets,
+                    self.create_all_items_sheet, # create new sheets with new data
+                ]
             else:
-                self.settings = [self.read_other_sheet,self.process_copyright_export,  # read in new data
-                    self.create_faculty_sheets, self.create_all_items_sheet # create new sheets with new data
+                self.settings = [
+                    self.read_other_sheet,
+                    self.process_copyright_export,  # read in new data
+                    self.create_faculty_sheets,
+                    self.create_all_items_sheet,  # create new sheets with new data
                 ]
         elif functions == Functions.export:
-            self.settings = [self.read_faculty_sheets,  # read in data manually added to sheets
-                            self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
-                        ]
+            self.settings = [
+                self.read_faculty_sheets,  # read in data manually added to sheets
+                self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
+            ]
             if self.other_sheet:
-                warn(f"Note: Only exporting data, so the contents other sheet {self.other_sheet} will have no effect on the output.")
+                warn(
+                    f"Note: Only exporting data, so the contents of other sheet {self.other_sheet} will have no effect on the output."
+                )
 
         # if dirs is set, add them to the self.dirs dict
         if dirs:
@@ -462,33 +582,45 @@ class EasyAccessTool:
         info(f"Reading in data from {self.other_sheet.name}")
         self.copyright_data = pl.read_excel(self.other_sheet.path)
         self.latest_file_date = self.other_sheet.modified.strftime("%Y-%m-%d")
-        info(f"Read {len(self.copyright_data)} items from {self.other_sheet.name}. Item was lasted changed on {self.latest_file_date}")
+        info(
+            f"Read {len(self.copyright_data)} items from {self.other_sheet.name}. Item was lasted changed on {self.latest_file_date}"
+        )
 
-        if 'workflow_status' not in self.copyright_data.columns:
+        if "workflow_status" not in self.copyright_data.columns:
+            self.copyright_data = self.copyright_data.with_columns(
+                pl.Series("workflow_status", ["ToDo"] * len(self.copyright_data))
+            )
+        if "retrieved_from_copyright_on" not in self.copyright_data.columns:
+            if "added_to_sheet_on" not in self.copyright_data.columns:
                 self.copyright_data = self.copyright_data.with_columns(
-                    pl.Series("workflow_status", ["ToDo"] * len(self.copyright_data))
-                )
-        if  'retrieved_from_copyright_on' not in self.copyright_data.columns:
-            if 'added_to_sheet_on' not in self.copyright_data.columns:
-                self.copyright_data = self.copyright_data.with_columns(
-                    pl.Series("retrieved_from_copyright_on", [self.latest_file_date] * len(self.copyright_data))
+                    pl.Series(
+                        "retrieved_from_copyright_on",
+                        [self.latest_file_date] * len(self.copyright_data),
+                    )
                 )
             else:
                 self.copyright_data = self.copyright_data.rename(
-                    {"added_to_sheet_on":'retrieved_from_copyright_on'}
+                    {"added_to_sheet_on": "retrieved_from_copyright_on"}
                 )
 
-        self.latest_file_date = max(self.copyright_data.select(pl.col("retrieved_from_copyright_on")).to_series().to_list())
+        self.latest_file_date = max(
+            self.copyright_data.select(pl.col("retrieved_from_copyright_on"))
+            .to_series()
+            .to_list()
+        )
         self.copyright_data = self.copyright_data.select(self.column_order)
 
-
     def read_copyright_export(self) -> None:
-        info(f"Reading in newest Copyright Data from directory: {self.dirs['copyright_export']}")
+        info(
+            f"Reading in newest Copyright Data from directory: {self.dirs['copyright_export']}"
+        )
         try:
-            all_files = self.dirs['copyright_export'].files
+            all_files = self.dirs["copyright_export"].files
             self.latest_file = max(all_files, key=lambda x: x.created)
             self.latest_file_date = self.latest_file.created.strftime("%Y-%m-%d")
-            info(f"Selected newest copyright export file:\n          {self.latest_file.name}\n          created @ {self.latest_file_date}")
+            info(
+                f"Selected newest copyright export file:\n          {self.latest_file.name}\n          created @ {self.latest_file_date}"
+            )
             self.raw_copyright_data = pl.read_excel(self.latest_file.path)
         except FileNotFoundError:
             warn(f"No files found in {self.dirs['copyright_export']}")
@@ -514,8 +646,11 @@ class EasyAccessTool:
                 .replace("#", "count_")
                 .replace("*", "x")
                 .lower()
-                ).with_columns(
-                pl.Series("retrieved_from_copyright_on", [self.latest_file_date] * len(self.raw_copyright_data)),
+            ).with_columns(
+                pl.Series(
+                    "retrieved_from_copyright_on",
+                    [self.latest_file_date] * len(self.raw_copyright_data),
+                ),
                 pl.Series("workflow_status", ["ToDo"] * len(self.raw_copyright_data)),
                 pl.col("last_change").dt.strftime("%Y-%m-%d"),
                 faculty=pl.col("department").replace_strict(
@@ -526,28 +661,24 @@ class EasyAccessTool:
         if self.only_changes:
             self.read_faculty_sheets()
             if self.faculty_sheet_data.is_empty():
-                info("No faculty sheets found. Adding all items without checking for changes.")
+                info(
+                    "No faculty sheets found. Adding all items without checking for changes."
+                )
             else:
                 # compare self.copyright_data with self.faculty_sheet_data
                 # only keep items from self.copyright_data with a value in col material_id that is not in self.faculty_sheet_data
                 # AND items with a matching material_id but a different value in col last_change
                 not_in_faculty = self.copyright_data.join(
-                    self.faculty_sheet_data,
-                    on="material_id",
-                    how="anti"
+                    self.faculty_sheet_data, on="material_id", how="anti"
                 )
-                matching_id_diff_change = self.copyright_data.join(
-                    self.faculty_sheet_data,
-                    on="material_id",
-                    how="inner"
-                ).filter(
-                    pl.col("last_change") != pl.col("last_change_right")
-                ).select(
-                    pl.all().exclude("last_change_right")
-                ).drop_nulls(
-                    pl.col("material_id")
-                ).filter(
-                    pl.col("status") == "Deleted"
+                matching_id_diff_change = (
+                    self.copyright_data.join(
+                        self.faculty_sheet_data, on="material_id", how="inner"
+                    )
+                    .filter(pl.col("last_change") != pl.col("last_change_right"))
+                    .select(pl.all().exclude("last_change_right"))
+                    .drop_nulls(pl.col("material_id"))
+                    .filter(pl.col("status") == "Deleted")
                 )
 
                 if not_in_faculty.is_empty():
@@ -557,12 +688,15 @@ class EasyAccessTool:
                     else:
                         self.copyright_data = matching_id_diff_change
                 if not matching_id_diff_change.is_empty():
-                    self.copyright_data = pl.concat([not_in_faculty, matching_id_diff_change])
+                    self.copyright_data = pl.concat(
+                        [not_in_faculty, matching_id_diff_change]
+                    )
                 else:
                     self.copyright_data = not_in_faculty
 
-
-        self.faculties = self.copyright_data.select(pl.col("faculty").unique()).to_series().to_list()
+        self.faculties = (
+            self.copyright_data.select(pl.col("faculty").unique()).to_series().to_list()
+        )
 
     def create_faculty_sheets(self) -> None:
         """
@@ -572,7 +706,7 @@ class EasyAccessTool:
         if self.faculties:
             self.faculties.sort()
         for faculty in self.faculties:
-            faculty_dir = Directory(self.dirs['faculties'].full / faculty)
+            faculty_dir = Directory(self.dirs["faculties"].full / faculty)
             if faculty is None or faculty == "":
                 faculty = "no_faculty_found"
             filename = f"{faculty}_{self.latest_file_date}.xlsx"
@@ -590,7 +724,6 @@ class EasyAccessTool:
             info(f"Created sheet {filename}")
             self.finalize_sheet(File(str(faculty_dir.full / filename)))
 
-
     def finalize_sheet(self, file: File) -> None:
         """
         Add the data entry sheet to a fresh Faculty Excel file.
@@ -598,24 +731,40 @@ class EasyAccessTool:
         and contain dropdowns for data entry.
         """
 
-        wb = openpyxl.load_workbook(filename = str(file.path))
-        wb.active.title = 'Complete data'
+        wb = openpyxl.load_workbook(filename=str(file.path))
+        wb.active.title = "Complete data"
 
         # Create the Data Entry sheet
         # -----------------------------
 
-        entry_sheet: openpyxl.worksheet.worksheet.Worksheet = wb.create_sheet('Data entry', index=1)
+        entry_sheet: openpyxl.worksheet.worksheet.Worksheet = wb.create_sheet(
+            "Data entry", index=1
+        )
         keep_cols = [6, 34, 14, 16, 17, 13, 1, 8, 9, 28, 3, 5, ""]
-        col_names = ['url', 'workflow_status', 'manual_classification', 'scope', 'remarks', 'ml_prediction',
-                'material_id', 'title', 'owner', 'author', 'department', 'course_name']
+        col_names = [
+            "url",
+            "workflow_status",
+            "manual_classification",
+            "scope",
+            "remarks",
+            "ml_prediction",
+            "material_id",
+            "title",
+            "owner",
+            "author",
+            "department",
+            "course_name",
+        ]
         max_row = 0
         url = False
 
         for new_col, old in enumerate(keep_cols, start=1):
             if isinstance(old, str):
                 break
-            for row, cell in enumerate(wb.active.iter_rows(min_col=old, max_col=old, values_only=True), start=1):
-                if row == 1 and cell[0]=='url':
+            for row, cell in enumerate(
+                wb.active.iter_rows(min_col=old, max_col=old, values_only=True), start=1
+            ):
+                if row == 1 and cell[0] == "url":
                     url = True
                 elif row == 1:
                     url = False
@@ -631,14 +780,21 @@ class EasyAccessTool:
 
         # Dropdown items for certain cells
         # -----------------------------------
-        dropdowndata = [(2,'B', '"ToDo,Done,InProgress"'), # workflow status
-                        (3,'C', '"open access, eigen materiaal - powerpoint, eigen materiaal - overig, lange overname, eigen materiaal - titelindicatie"'), # manual classification
-                        ]
+        dropdowndata = [
+            (2, "B", '"ToDo,Done,InProgress"'),  # workflow status
+            (
+                3,
+                "C",
+                '"open access, eigen materiaal - powerpoint, eigen materiaal - overig, lange overname, eigen materiaal - titelindicatie"',
+            ),  # manual classification
+        ]
         for colnum, col_letter, itemlist in dropdowndata:
-            dv = openpyxl.worksheet.datavalidation.DataValidation(type="list", formula1=itemlist, allow_blank=False)
+            dv = openpyxl.worksheet.datavalidation.DataValidation(
+                type="list", formula1=itemlist, allow_blank=False
+            )
             dv.error = "Please select a valid option from the list"
             dv.errorTitle = "Invalid option"
-            dv.prompt= "Please select from the list"
+            dv.prompt = "Please select from the list"
             dv.promptTitle = "List selection"
             entry_sheet.add_data_validation(dv)
             dv.add(f"{col_letter}2:{col_letter}{max_row}")
@@ -647,35 +803,35 @@ class EasyAccessTool:
         # -----------------
         table = ExcelTable(displayName="DataEntry", ref=f"A1:L{max_row}")
         tabstyle = TableStyleInfo(
-            name=f'TableStyleMedium{self.style_iter}',
+            name=f"TableStyleMedium{self.style_iter}",
             showRowStripes=True,
         )
-        self.style_iter = self.style_iter+1
+        self.style_iter = self.style_iter + 1
         table.tableStyleInfo = tabstyle
         entry_sheet.add_table(table)
 
-        wb.save(filename = str(file.path))
+        wb.save(filename=str(file.path))
 
     def create_all_items_sheet(self) -> None:
-
         """
         Add all items in the current Copyright data to a single sheet for CIP ease of use.
         """
         if not self.no_new_items:
             filename = f"all_items_{self.latest_file_date}.xlsx"
             i = 1
-            while os.path.exists(self.dirs['all_items'].full / filename):
+            while os.path.exists(self.dirs["all_items"].full / filename):
                 filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
                 i += 1
 
-            self.copyright_data.write_excel(self.dirs['all_items'].full / filename)
+            self.copyright_data.write_excel(self.dirs["all_items"].full / filename)
             info(f"Created sheet: {self.dirs['all_items'].full / filename}")
+
     def read_faculty_sheets(self) -> None:
         """
         Reads in all data from all sheets in the faculties dir
         and stores it in self.faculty_sheet_data as a single concatted dataframe.
         """
-        self.faculty_sheet_data = self.read_sheets(self.dirs['faculties'].files_r)
+        self.faculty_sheet_data = self.read_sheets(self.dirs["faculties"].files_r)
 
     def read_all_items_sheet(self) -> None:
         """
@@ -683,8 +839,10 @@ class EasyAccessTool:
         and stores it in self.all_items_sheet_data as a single concatted dataframe.
         """
         if False:
-            self.all_items_sheet_data  = self.read_sheets(self.dirs['all_items'].files_r)
-        warn("read_all_items_sheet isn't used at the moment. If you want to import data from an 'all_items' sheet, please use the --other-sheet option in the cli instead.")
+            self.all_items_sheet_data = self.read_sheets(self.dirs["all_items"].files_r)
+        warn(
+            "read_all_items_sheet isn't used at the moment. If you want to import data from an 'all_items' sheet, please use the --other-sheet option in the cli instead."
+        )
 
     def read_sheets(self, files: list[File]) -> pl.DataFrame:
         """
@@ -694,12 +852,12 @@ class EasyAccessTool:
         """
         file_data = []
         for file in files:
-            if file.extension not in ['.xls', '.xlsx']:
-                warn(f'{file.name} is not an excel file, skipping.')
+            if file.extension not in [".xls", ".xlsx"]:
+                warn(f"{file.name} is not an excel file, skipping.")
                 continue
             try:
-                current_data = pl.read_excel(file.path, sheet_name='Complete data')
-            except Exception as e:
+                current_data = pl.read_excel(file.path, sheet_name="Complete data")
+            except Exception:
                 current_data = pl.read_excel(file.path)
 
             current_data = self.validate_ea_sheet(current_data, file)
@@ -713,7 +871,7 @@ class EasyAccessTool:
             result = pl.DataFrame()
         return result.unique()
 
-    def validate_ea_sheet(self, df: pl.DataFrame, file:File) -> pl.DataFrame:
+    def validate_ea_sheet(self, df: pl.DataFrame, file: File) -> pl.DataFrame:
         """
         For a given dataframe created from an EA excel sheet,
         check the data for errors.
@@ -750,14 +908,15 @@ class EasyAccessTool:
             return df
 
     def create_import_sheet(self) -> None:
-        '''
+        """
         combine self.faculty_sheet_data and self.all_items_sheet_data
         clean it up
         change from UT Easy Access format to SURF CopyRight format
         create & export an .xlsx sheet that can be sent to SURF to be imported into CopyRight.
-        '''
-        #TODO
+        """
+        # TODO
         ...
+
 
 if __name__ == "__main__":
     typer.run(cli)
