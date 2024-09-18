@@ -1,3 +1,20 @@
+# datafiles
+*.xls
+*.xlsx
+*.csv
+
+# documents
+*.doc
+*.docx
+*.pdf
+
+# datadirs
+cip_sheets/
+copyright_data_for_SURF_import/
+ET_backup_17_sept/
+faculty_sheets/
+raw_copyright_data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
