@@ -75,13 +75,13 @@ def info(text: str):
     """
     Prints an information message.
     """
-    print(f":information: [cyan] {text} [/cyan]")
+    print(f"[cyan]:information: |> [/cyan] {text}")
 
 def warn(text: str):
     """
     Prints a warning message.
     """
-    print(f":warning: [bold red] {text} [/bold red]")
+    print(f":warning: [bold red] Warning! [/bold red] |> {text}")
 
 def cool(text: str):
     """
@@ -369,6 +369,8 @@ class EasyAccessTool:
     # path to another sheet to read in instead of CopyRight data
     other_sheet: File | None = None
 
+    # flag to indicate if there are no new items to add
+    no_new_items: bool = False
     # standard column order for the complete data sheets
     column_order = ["material_id","period","department","course_code","course_name","url","filename","title","owner","filetype","classification","type","ml_prediction","manual_classification","manual_identifier","scope","remarks","auditor","last_change","status","google_search_file","isbn","doi","in_collection","pagecount","wordcount","picturecount","author","publisher","reliability","pages_x_students","count_students_registered","retrieved_from_copyright_on","workflow_status","faculty"]
     def __init__(self,
@@ -460,14 +462,14 @@ class EasyAccessTool:
         info(f"Reading in data from {self.other_sheet.name}")
         self.copyright_data = pl.read_excel(self.other_sheet.path)
         self.latest_file_date = self.other_sheet.modified.strftime("%Y-%m-%d")
-        info(f"Read {len(self.copyright_data)} items from {self.other_sheet.name}. Last change: {self.latest_file_date}")
+        info(f"Read {len(self.copyright_data)} items from {self.other_sheet.name}. Item was lasted changed on {self.latest_file_date}")
 
-        if not 'workflow_status' in self.copyright_data.columns:
+        if 'workflow_status' not in self.copyright_data.columns:
                 self.copyright_data = self.copyright_data.with_columns(
                     pl.Series("workflow_status", ["ToDo"] * len(self.copyright_data))
                 )
-        if not 'retrieved_from_copyright_on' in self.copyright_data.columns:
-            if not 'added_to_sheet_on' in self.copyright_data.columns:
+        if  'retrieved_from_copyright_on' not in self.copyright_data.columns:
+            if 'added_to_sheet_on' not in self.copyright_data.columns:
                 self.copyright_data = self.copyright_data.with_columns(
                     pl.Series("retrieved_from_copyright_on", [self.latest_file_date] * len(self.copyright_data))
                 )
@@ -481,12 +483,12 @@ class EasyAccessTool:
 
 
     def read_copyright_export(self) -> None:
-        info(f"Reading in newest Copyright Data from {self.dirs['copyright_export']}")
+        info(f"Reading in newest Copyright Data from directory: {self.dirs['copyright_export']}")
         try:
             all_files = self.dirs['copyright_export'].files
             self.latest_file = max(all_files, key=lambda x: x.created)
             self.latest_file_date = self.latest_file.created.strftime("%Y-%m-%d")
-            info(f"Selected newest file: {self.latest_file.name}")
+            info(f"Selected newest copyright export file:\n          {self.latest_file.name}\n          created @ {self.latest_file_date}")
             self.raw_copyright_data = pl.read_excel(self.latest_file.path)
         except FileNotFoundError:
             warn(f"No files found in {self.dirs['copyright_export']}")
@@ -551,6 +553,7 @@ class EasyAccessTool:
                 if not_in_faculty.is_empty():
                     if matching_id_diff_change.is_empty():
                         info("No new items to add!")
+                        self.no_new_items = True
                     else:
                         self.copyright_data = matching_id_diff_change
                 if not matching_id_diff_change.is_empty():
@@ -658,14 +661,15 @@ class EasyAccessTool:
         """
         Add all items in the current Copyright data to a single sheet for CIP ease of use.
         """
-        filename = f"all_items_{self.latest_file_date}.xlsx"
-        i = 1
-        while os.path.exists(self.dirs['all_items'].full / filename):
-            filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
-            i += 1
+        if not self.no_new_items:
+            filename = f"all_items_{self.latest_file_date}.xlsx"
+            i = 1
+            while os.path.exists(self.dirs['all_items'].full / filename):
+                filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
+                i += 1
 
-        self.copyright_data.write_excel(self.dirs['all_items'].full / filename)
-        info(f"Created sheet: {self.dirs['all_items'].full} / {filename}")
+            self.copyright_data.write_excel(self.dirs['all_items'].full / filename)
+            info(f"Created sheet: {self.dirs['all_items'].full / filename}")
     def read_faculty_sheets(self) -> None:
         """
         Reads in all data from all sheets in the faculties dir
@@ -678,7 +682,9 @@ class EasyAccessTool:
         Reads in all data from all 'all_items' sheets
         and stores it in self.all_items_sheet_data as a single concatted dataframe.
         """
-        self.all_items_sheet_data  = self.read_sheets(self.dirs['all_items'].files_r)
+        if False:
+            self.all_items_sheet_data  = self.read_sheets(self.dirs['all_items'].files_r)
+        warn("read_all_items_sheet isn't used at the moment. If you want to import data from an 'all_items' sheet, please use the --other-sheet option in the cli instead.")
 
     def read_sheets(self, files: list[File]) -> pl.DataFrame:
         """
@@ -689,7 +695,7 @@ class EasyAccessTool:
         file_data = []
         for file in files:
             if file.extension not in ['.xls', '.xlsx']:
-                print(f'{file.name} is not an excel file, skipping.')
+                warn(f'{file.name} is not an excel file, skipping.')
                 continue
             try:
                 current_data = pl.read_excel(file.path, sheet_name='Complete data')
@@ -710,21 +716,26 @@ class EasyAccessTool:
     def validate_ea_sheet(self, df: pl.DataFrame, file:File) -> pl.DataFrame:
         """
         For a given dataframe created from an EA excel sheet,
-        check that the data is in the correct format, and the values are correct.
-        If not, try to fix, else print the errors.
+        check the data for errors.
+        If found, try to fix, else print the errors.
         If the sheet is not validated, return an empty dataframe.
 
-        TODO: Implement this function.
+        Current implementation is bare:
+        - is sheet empty? if yes: print error
+        - set all columns to type str
+
+        TODO: Implement this function fully.
         TODO: handle multiple sheets in the same file
 
         """
         valid = True
         errlist = []
-        warn(':triangular_flag: Sheet validation is not implemented at the moment.')
         if df.is_empty():
             valid = False
             errlist.append("Sheet is empty")
         if valid:
+            # set all columns to type str
+            df = df.with_columns(pl.exclude(pl.Utf8).cast(str))
             # check that the sheet has the correct columns
             ...
         if valid:
