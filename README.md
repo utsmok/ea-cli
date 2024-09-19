@@ -56,7 +56,7 @@ If you want to check out all available cli options use the --help option (see th
 
 # uv? What is that?
 
-UV is an all-in-one python manager. It's a great way to run python scripts and manage dependencies: very easy, very fast, and it runs completely separate from any other python installations on your computer. I -highly- recommend using it in general, but especially for this script.
+uv is an all-in-one python manager. It's a great way to run python scripts and manage dependencies: very easy, very fast, and it runs completely separate from any other python installations on your computer. I -highly- recommend using it in general, but especially for this script.
 Of course, you can use any python installation you want to run the script, but using uv is definitely the easiest way to get started.
 
 ## Installing uv
@@ -73,7 +73,9 @@ Then type in:
 
 press enter, and you've fully installed uv!
 Run  the help info of the easy access script with the following command:
+
     uv run easy_access_cli.py --help
 
 To run the script using default settings, use the following command:
+
     uv run easy_access_cli.py
