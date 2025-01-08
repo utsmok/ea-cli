@@ -1,0 +1,16 @@
+{
+    "TNW": {
+        "B-CSE: Chemical Engineering":"CSE",
+        "M-CSE: Chemical Science & Engineering":"CSE",
+        "M-AP: Applied Physics":"TN_AP",
+        "B-TN: Technische Natuurkunde":"TN_AP",
+        "B-AT: Advanced Technology":"AT_NANO",
+        "M-NT: Nanotechnology": "AT_NANO",
+        "B-BMT: Biomedische Technologie":"BMT_BME",
+        "M-BME: Biomedical Engineering": "BMT_BME",
+        "B-GZW: Gezondheidswetenschappen":"HS_GZW",
+        "M-HS: Health Sciences": "HS_GZW",
+        "B-TG: Technische Geneeskunde":"TG_TM",
+        "M-TM: Technical Medicine":"TG_TM"
+    }
+}
