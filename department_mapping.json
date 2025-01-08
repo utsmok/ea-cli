@@ -55,5 +55,6 @@
     "M-PA: Public Administration":"BMS",
     "M-HS: Health Sciences":"TNW",
     "B-CREA-VU: Creative Technology - Amsterdam (VU-UT)": "EEMCS",
-    "ET: Engineering Technology": "ET"
+    "ET: Engineering Technology": "ET",
+    "Master Public Management": "BMS"
 }
