@@ -15,4 +15,7 @@ dependencies = [
     "trogon>=0.6.0",
     "requests>=2.32.3",
     "pydantic>=2.10.4",
+    "httpx>=0.28.1",
+    "lxml>=5.3.0",
+    "bs4>=0.0.2",
 ]

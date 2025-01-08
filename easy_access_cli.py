@@ -36,11 +36,15 @@ This python file contains the following:
     - typer function cli provides a command line interface
     - helper classes File and Directory for handling... files and directories.
 """
-import requests
+import re
+import asyncio
+import time
+import httpx
 import json
 import os
 import pathlib
 import shutil
+import bs4
 from datetime import datetime, timedelta
 from enum import Enum
 import locale
@@ -734,7 +738,7 @@ class EasyAccessTool:
 
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
-            self.copyright_data = self.add_osiris_data(self.copyright_data)
+            self.copyright_data = asyncio.run(self.add_osiris_data(self.copyright_data))
 
         if self.only_changes:
             self.read_faculty_sheets()
@@ -1172,7 +1176,7 @@ class EasyAccessTool:
         # TODO
         ...
 
-    def add_osiris_data(self, df: pl.DataFrame) -> pl.DataFrame:
+    async def add_osiris_data(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         For a given df with faculty data, retrieve missing/required data from OSIRIS
 
@@ -1207,7 +1211,8 @@ class EasyAccessTool:
                 info(f'code extraction results: {first_try}, name extraction results: {second_try}')
             return tempresults
 
-        def get_data_from_osiris(input_number: int, jaar: int = 2024) -> dict[str, dict[str,str|list|set]]:
+        async def get_data_from_osiris(input_number: int, httpx_client:httpx.AsyncClient, semaphore: asyncio.Semaphore, jaar: int = 2024,  ) -> dict[str, dict[str,str|list|set]]:
+            print_details = False
             startstring: str = '{"from":0,"size":25,"sort":[{"cursus_lange_naam.raw":{"order":"asc"}},{"cursus":{"order":"asc"}},{"collegejaar":{"order":"desc"}}],"aggs":{"agg_terms_collegejaar":{"filter":{"bool":{"must":[]}},"aggs":{"agg_collegejaar_buckets":{"terms":{"field":"collegejaar","size":2500,"order":{"_term":"desc"}}}}},"agg_terms_blokken_nested.periode_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_blokken_nested.periode_omschrijving":{"terms":{"field":"blokken_nested.periode_omschrijving","size":2500,"order":{"_term":"asc"},"exclude":"Periode: [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]"}},"nested_aggs":{"nested":{"path":"blokken_nested"},"aggs":{"nested_aggs":{"filter":{"bool":{"must":[]}},"aggs":{"agg_blokken_nested.periode_omschrijving_buckets":{"terms":{"field":"blokken_nested.periode_omschrijving","size":2500,"order":{"_term":"asc"},"exclude":"Periode: [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]"},"aggs":{"items":{"reverse_nested":{}}}}}}}}}},"agg_terms_faculteit_naam":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_faculteit_naam_buckets":{"terms":{"field":"faculteit_naam","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_coordinerend_onderdeel_oms":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_coordinerend_onderdeel_oms_buckets":{"terms":{"field":"coordinerend_onderdeel_oms","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_categorie_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_categorie_omschrijving_buckets":{"terms":{"field":"categorie_omschrijving","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_voertalen.voertaal_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_voertalen.voertaal_omschrijving_buckets":{"terms":{"field":"voertalen.voertaal_omschrijving","size":2500,"order":{"_term":"asc"}}}}}},"post_filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"query":{"bool":{"must":[{"multi_match":{"query":'
             jaar: int = 2024 #startjaar academisch jaar, 2024 = 2024-2025
             if jaar != 2024:
@@ -1245,146 +1250,283 @@ class EasyAccessTool:
                                 "accept-encoding": "gzip, deflate, br, zstd",
                                 "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
                             }
-            x = requests.post(
-                url=url,
-                headers=headers,
-                data=body
-            )
-
-            results = x.json().get('hits',{}).get('hits')
-            datadict = {}
-            if not results:
-                return
-            else:
-                print(str(len(results))+f' hit(s) for code {input_number} for year {jaar} - {jaar+1}.')
-                for h,result in enumerate(results):
-                    print(f'------- Result {h} -----------\n')
-                    rawdata:dict = result.get('_source')
-                    teachers = []
-                    # pretty print the raw data
-                    print(rawdata.keys())
-                    for key, value in rawdata.items():
-                        if value == "" or not value or value == [] or value == {}:
-                            continue
-                        gaplen = 25 - len(key)
-                        if gaplen <= 0:
-                            gaplen = 1
-                            key = key[:21]+"..."
-                        gap = " "+"─"*(gaplen-1)
-                        if isinstance(value, list):
-                            if len(value) == 0:
-                                continue
-                            if len(value) == 1:
-                                print(f"{key}{gap}─ {list(value[0].values())[0]}")
-                                items = list(value[0].values())[0]
-                            else:
-                                gap = f"{key}{gap}┬ "
-                                i = 0
-                                items = [list(item.values())[0] for item in value]
-                                itemset = set(items)
-                                items = list(itemset)
-                                for item in items:
-                                    i += 1
-                                    if i - (len(items)) == 0:
-                                        gap = " "*(len(key)+gaplen)+"└ "
-                                    elif i == 2:
-                                        gap = " "*(len(key)+gaplen)+"├ "
-                                    if isinstance(item, dict):
-                                        print(f"{gap}{list(item.values())[0]}")
-                                    else:
-                                        print(f"{gap}{item}")
-                            if key == 'docenten':
-                                teachers = items
-
-                        else:
-                            if '\n' not in str(value):
-                                print(f"{key}{gap}─ {value}")
-                            else:
-                                lines = value.split("\n")
-                                printer = f"{key}{gap}┬ "
-                                i = 0
-                                for line in lines:
-                                    i = i+1
-                                    if i - len(lines) == 0:
-                                        printer = " "*(len(key)+gaplen)+"└ "
-                                    elif i > 1:
-                                        printer = f"{" "*(len(key)+gaplen)}├ "
-                                    print(f'{printer}{line}')
-
-                    datadict[rawdata.get('cursus')] = {
-                        'cursuscode':rawdata.get('cursus'),
-                        'internal_id':rawdata.get('id_cursus'),
-                        'year':rawdata.get('collegejaar'),
-                        'short_name':rawdata.get('cursus_korte_naam'),
-                        'name':rawdata.get('cursus_lange_naam'),
-                        'faculty':rawdata.get('faculteit'),
-                        'faculty_long':rawdata.get('faculteit_naam'),
-                        'programme':rawdata.get('coordinerend_onderdeel_oms'),
-                        'ec':rawdata.get('punten'),
-                        'language':[x.get('voertaal_omschrijving') for x in rawdata.get('voertalen')],
-                        'notes':rawdata.get('opmerking_cursus'),
-                        'category':rawdata.get('categorie_omschrijving'),
-                        'teachers': teachers,
-                        'contacts':set(),
-                        'docenten':set(),
-                        'examinators':set(),
-                        'unknown_role':set()
-                    }
-                    print('\n')
-
-                headers_course = {'accept':'application/json, text/plain, */*' ,
-                'accept-language':'en-US,en;q=0.9,nl-NL;q=0.8,nl;q=0.7' ,
-                'authorization':'undefined undefined' ,
-                'cache-control':'no-cache, no-store, must-revalidate, private' ,
-                'client_type':'web' ,
-                'content-type':'application/json' ,
-                'dnt':'1' ,
-                'manifest':'24.46_B346_c0d3b6a1' ,
-                'pragma':'no-cache' ,
-                'priority':'u=1, i' ,
-                'referer':'https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursussen' ,
-                'release_version':'c0d3b6a1d72bf1610166027c903b46fc10580f30' ,
-                'sec-ch-ua':'"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"' ,
-                'sec-ch-ua-mobile':'?0' ,
-                'sec-ch-ua-platform':'"Windows"' ,
-                'sec-fetch-dest':'empty' ,
-                'sec-fetch-mode':'cors' ,
-                'sec-fetch-site':'same-origin' ,
-                'taal':'NL' ,
-                'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
-                newdatadict = datadict.copy()
-                for course, data in datadict.items():
-                    internal_id = data.get('internal_id')
-                    url_course = f'https://utwente.osiris-student.nl/student/osiris/owc/cursussen/{internal_id}'
-                    course_details = requests.get(
-                        url=url_course,
-                        headers=headers_course,
+            try:
+                async with semaphore:
+                    x = await httpx_client.post(
+                        url=url,
+                        headers=headers,
+                        data=body
                     )
 
-                    if course_details.status_code == 200:
-                        course_data = course_details.json()
-                        for datapoint in course_data.get('items'):
-                            if datapoint.get('rubriek') == 'rubriek-docenten':
-                                docentdata = datapoint.get('velden')
-                        if docentdata:
-                            for docentitem in docentdata:
-                                if docentitem.get('waarde'):
-                                    for docenttype in docentitem.get('waarde'):
-                                        for persoon in docenttype.get('velden'):
-                                            if docenttype.get('omschrijving') == 'Contactpersoon':
-                                                newdatadict[course]['contacts'].add(persoon.get('docent'))
-                                            elif docenttype.get('omschrijving') == 'Docent':
-                                                newdatadict[course]['docenten'].add(persoon.get('docent'))
-                                            elif docenttype.get('omschrijving') == 'Examinator':
-                                                newdatadict[course]['examinators'].add(persoon.get('docent'))
-                                            else:
-                                                newdatadict[course]['unknown_role'].add(persoon)
+                    results = x.json().get('hits',{}).get('hits')
+                    datadict = {}
+                    if not results:
+                        return
                     else:
-                        print('Error!')
-                        print(course_details.status_code)
+                        if len(results) != 1:
+                            print(str(len(results))+f' hit(s) for code {input_number} for year {jaar} - {jaar+1}.')
+                            print_details = True
 
-                print(newdatadict)
-                return newdatadict
+                        for h,result in enumerate(results):
+                            print(f'------- Result {h} -----------\n') if print_details else None
+                            rawdata:dict = result.get('_source')
+                            teachers = []
+                            # pretty print the raw data
+                            print(rawdata.keys()) if print_details else None
+                            for key, value in rawdata.items():
+                                if value == "" or not value or value == [] or value == {}:
+                                    continue
+                                gaplen = 25 - len(key)
+                                if gaplen <= 0:
+                                    gaplen = 1
+                                    key = key[:21]+"..."
+                                gap = " "+"─"*(gaplen-1)
+                                if isinstance(value, list):
+                                    if len(value) == 0:
+                                        continue
+                                    if len(value) == 1:
+                                        print(f"{key}{gap}─ {list(value[0].values())[0]}") if print_details else None
+                                        items = list(value[0].values())[0]
+                                    else:
+                                        gap = f"{key}{gap}┬ "
+                                        i = 0
+                                        items = [list(item.values())[0] for item in value]
+                                        itemset = set(items)
+                                        items = list(itemset)
+                                        for item in items:
+                                            i += 1
+                                            if i - (len(items)) == 0:
+                                                gap = " "*(len(key)+gaplen)+"└ "
+                                            elif i == 2:
+                                                gap = " "*(len(key)+gaplen)+"├ "
+                                            if isinstance(item, dict):
+                                                print(f"{gap}{list(item.values())[0]}") if print_details else None
+                                            else:
+                                                print(f"{gap}{item}") if print_details else None
+                                    if key == 'docenten':
+                                        teachers = items
+
+                                else:
+                                    if '\n' not in str(value):
+                                        print(f"{key}{gap}─ {value}") if print_details else None
+                                    else:
+                                        lines = value.split("\n")
+                                        printer = f"{key}{gap}┬ "
+                                        i = 0
+                                        for line in lines:
+                                            i = i+1
+                                            if i - len(lines) == 0:
+                                                printer = " "*(len(key)+gaplen)+"└ "
+                                            elif i > 1:
+                                                printer = f"{" "*(len(key)+gaplen)}├ "
+                                            print(f'{printer}{line}') if print_details else None
+
+                            datadict[rawdata.get('cursus')] = {
+                                'cursuscode':rawdata.get('cursus'),
+                                'internal_id':rawdata.get('id_cursus'),
+                                'year':rawdata.get('collegejaar'),
+                                'short_name':rawdata.get('cursus_korte_naam'),
+                                'name':rawdata.get('cursus_lange_naam'),
+                                'faculty':rawdata.get('faculteit'),
+                                'faculty_long':rawdata.get('faculteit_naam'),
+                                'programme':rawdata.get('coordinerend_onderdeel_oms'),
+                                'ec':rawdata.get('punten'),
+                                'language':[x.get('voertaal_omschrijving') for x in rawdata.get('voertalen')],
+                                'notes':rawdata.get('opmerking_cursus'),
+                                'category':rawdata.get('categorie_omschrijving'),
+                                'teachers': teachers,
+                                'contacts':set(),
+                                'docenten':set(),
+                                'examinators':set(),
+                                'unknown_role':set(),
+                                'tutors':set(),
+                            }
+                            print('\n') if print_details else None
+
+                        headers_course = {'accept':'application/json, text/plain, */*' ,
+                        'accept-language':'en-US,en;q=0.9,nl-NL;q=0.8,nl;q=0.7' ,
+                        'authorization':'undefined undefined' ,
+                        'cache-control':'no-cache, no-store, must-revalidate, private' ,
+                        'client_type':'web' ,
+                        'content-type':'application/json' ,
+                        'dnt':'1' ,
+                        'manifest':'24.46_B346_c0d3b6a1' ,
+                        'pragma':'no-cache' ,
+                        'priority':'u=1, i' ,
+                        'referer':'https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursussen' ,
+                        'release_version':'c0d3b6a1d72bf1610166027c903b46fc10580f30' ,
+                        'sec-ch-ua':'"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"' ,
+                        'sec-ch-ua-mobile':'?0' ,
+                        'sec-ch-ua-platform':'"Windows"' ,
+                        'sec-fetch-dest':'empty' ,
+                        'sec-fetch-mode':'cors' ,
+                        'sec-fetch-site':'same-origin' ,
+                        'taal':'NL' ,
+                        'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+                        newdatadict = datadict.copy()
+                        for course, data in datadict.items():
+                            internal_id = data.get('internal_id')
+                            url_course = f'https://utwente.osiris-student.nl/student/osiris/owc/cursussen/{internal_id}'
+                            course_details = httpx.get(
+                                url=url_course,
+                                headers=headers_course,
+                            )
+
+                            if course_details.status_code == 200:
+                                course_data = course_details.json()
+                                for datapoint in course_data.get('items'):
+                                    if datapoint.get('rubriek') == 'rubriek-docenten':
+                                        docentdata = datapoint.get('velden')
+                                if docentdata:
+                                    for docentitem in docentdata:
+                                        if docentitem.get('waarde'):
+                                            for docenttype in docentitem.get('waarde'):
+                                                for persoon in docenttype.get('velden'):
+                                                    if docenttype.get('omschrijving') == 'Contactpersoon':
+                                                        newdatadict[course]['contacts'].add(persoon.get('docent'))
+                                                    elif docenttype.get('omschrijving') == 'Docent':
+                                                        newdatadict[course]['docenten'].add(persoon.get('docent'))
+                                                    elif docenttype.get('omschrijving') == 'Examinator':
+                                                        newdatadict[course]['examinators'].add(persoon.get('docent'))
+                                                    elif docenttype.get('omschrijving') == "Tutor":
+                                                        newdatadict[course]['tutors'].add(persoon.get('docent'))
+                                                    else:
+                                                        try:
+                                                            newdatadict[course]['unknown_role'].add(persoon.get('docent'))
+                                                        except Exception as e:
+                                                            pass
+                            else:
+                                print('Error!')
+                                print(course_details.status_code)
+
+                        print(newdatadict) if print_details else None
+                        return newdatadict
+            except Exception as e:
+                print('excption when getting course details')
+                print(e)
+                return
+
+        async def get_data_from_people_page(name:str, httpx_client: httpx.AsyncClient, semaphore: asyncio.Semaphore) -> dict:
+            url: str = "https://people.utwente.nl/overview"
+            headers: dict = {
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "accept-language": "en-US,en;q=0.9",
+                "priority": "u=0, i",
+                "sec-ch-ua": "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\"",
+                "sec-fetch-dest": "document",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "same-origin",
+                "sec-fetch-user": "?1",
+                "upgrade-insecure-requests": "1"
+            }
+            async with semaphore:
+                url = f'https://people.utwente.nl/overview?query={name}'
+                r = await httpx_client.get(url,headers=headers)
+                print(f'{name} --> {r.request}')
+                #print(r.text)
+                data = r.text
+                pattern = r'data-link="([^"]+)"'
+
+                if data:
+                    matches = re.findall(pattern, data)
+                    if matches:
+                        new_url:str = "https://people.utwente.nl/"+matches[0]
+                        try:
+                            r = await httpx_client.get(new_url, headers=headers)
+                            page_data = None
+                            r.raise_for_status()
+                            data = r.text
+                            page_data = bs4.BeautifulSoup(data, 'lxml')
+                            found_name = page_data.find("h1", class_='pageheader__title').strings
+                            main_name = ''
+                            other_names = []
+                            for possible_name in found_name:
+                                if not main_name:
+                                    main_name = possible_name
+                                else:
+                                    other_names.append(str(possible_name).strip().replace('(','').replace(')',''))
+
+                            if not main_name.strip().lower() == name.strip().lower():
+                                print(f"{main_name} != input name: {name}")
+                                print('still processing')
+                            for link in page_data.find_all('a'):
+                                if 'mailto:' in link.get('href'):
+                                    email = link.get('href').replace('mailto:','')
+
+
+                            orgs = []
+                            found_orgs = []
+                            faculty = ''
+                            facultyabbr = ''
+                            org_data = page_data.find_all(class_='widget-linklist--smallicons')
+                            if len(org_data) >= 1:
+                                org_data = org_data[0].find_all(class_='widget-linklist__text')
+                            else:
+                                org_data = []
+                            for org in org_data:
+                                text = org.string
+                                if '(' in text:
+                                    try:
+                                        orgname = text.split('(')[0]
+                                        orgabbr = text.split('(')[1].split(')')[0]
+                                        if orgabbr in ["BMS", "ET", "EEMCS", "ITC", "TNW"]:
+                                            faculty = orgname
+                                            facultyabbr = orgabbr
+                                        else:
+                                            found_orgs.append({'name':orgname,'abbr':orgabbr})
+                                    except Exception as e:
+                                        pass
+
+                            if faculty and facultyabbr and found_orgs:
+                                orgs.append({'name':faculty,'abbr':facultyabbr})
+                                for org in found_orgs:
+                                    if facultyabbr in org.get('abbr'):
+                                        cleaned_abbr = org.get('abbr').replace('-'+facultyabbr,'')
+                                        orgs.append({'name':org.get('name'),'abbr':cleaned_abbr})
+                                        continue
+                                    orgs.append({'name':org.get('name'),'abbr':org.get('abbr')})
+
+                            education_tab = page_data.find("div",id="tabpanel-education")
+                            courses = []
+                            programmes = []
+                            for link in education_tab.find_all('a'):
+                                if 'https://utwente.osiris-student.nl' in link.get('href'):
+                                    # course
+                                    linktext = link.string
+                                    code, coursename = linktext.split(' - ', 1)
+                                    courses.append({'course_code':code,'course_name':coursename})
+                                if 'https://www.utwente.nl/' in link.get('href'):
+                                    # programme
+                                    url = link.get('href')
+                                    programme = link.string
+                                    programmes.append({'name':programme,'url':url})
+
+                            person_data = {
+                                'input_name':name,
+                                'main_name':main_name,
+                                'other_names':other_names,
+                                'email':email,
+                                'orgs':orgs,
+                                'courses':courses,
+                                'programmes':programmes,
+                                'faculty':facultyabbr,
+                                'people_page_url':new_url
+                            }
+                            return person_data
+
+                        except Exception as e:
+                            print(f'error while retrieving / processing {new_url} for person {name}')
+                            raise e
+
+
+
+
+
+
+
+
         # step 1: determine list of courseids to search for
         # each row in the df should have 1 or multiple course codes attached to it.
         # we are going to search for each of these course codes in OSIRIS.
@@ -1432,11 +1574,8 @@ class EasyAccessTool:
         # then we build a set of all the course codes we need to look up
         lookup_values = set()
         for code, name in zip(course_code_list, course_name_list):
-
             result = determine_course_code(code, name)
-
             lookup_values.update(result)
-
 
         if len(lookup_values) == 0:
             info('No course codes found, skipping OSIRIS data enrichment')
@@ -1447,27 +1586,39 @@ class EasyAccessTool:
         # then retrieve data from OSIRIS for each of the values in lookup_values
         course_data_dict = {}
         not_found = set()
-        for code in lookup_values:
-            if code in course_data_dict:
-                continue
-            result = get_data_from_osiris(code)
-            if result:
-                course_data_dict.update(result)
-            else:
-                for year in [2023, 2022, 2021, 2020, 2019, '']:
-                    warn(f'No data found for course code {code}, trying with year {year}')
-                    result = get_data_from_osiris(code, 2023)
+        found_amount = 0
+        max_concurrent = 5
+        semaphore = asyncio.Semaphore(max_concurrent)  # Rate limiting with semaphore
+        starttime = int(time.time())
+        async with httpx.AsyncClient(timeout=60) as client:
+            tasks = []
+
+            for num, code in enumerate(lookup_values):
+                if code in course_data_dict:
+                    continue
+                task1 = asyncio.create_task(get_data_from_osiris(httpx_client=client, input_number=code, semaphore=semaphore))
+                course_data_dict[code] = {}
+                tasks.append((code, task1))
+
+            for code, task in tasks:
+                result = await task  # Get the result of the task
+                if result:
+                    course_data_dict.update(result)
+                    found_amount += 1
+                else:
+                    warn(f"No data found for course code {code}, trying without yearfilter")
+                    result = await get_data_from_osiris(httpx_client=client, input_number=code, jaar='', semaphore=semaphore)
                     if result:
                         course_data_dict.update(result)
-                        continue
-                not_found.add(code)
+                        found_amount += 1
+                    else:
+                        not_found.add(code)
 
-
-        info('data for '+str(len(list(course_data_dict.keys())))+' courses found in OSIRIS from '+str(len(lookup_values))+' course codes.')
-        info(f'Course codes not found: ')
-        for code in not_found:
-            print('            '+str(code))
-        input('press any key to continue')
+        info(f'Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes in {int(time.time()-starttime)} seconds.')
+        if len(not_found) > 0:
+            info(f'{len(not_found)} course codes not found: ')
+            for code in not_found:
+                print('            '+str(code))
         # now, for each row in 'enriched_df', detect course codes (just like we did before).
         # look up that course code as a key in course_data_dict to retrieve a dict with details for that course.
         # add the following data to the row (colname -> keyname in course_data_dict[course_code]):
@@ -1478,6 +1629,8 @@ class EasyAccessTool:
         #   - col 'osiris_short_name' = short_name
         #   - col 'osiris_faculty' = faculty
         #   - col 'osiris_notes' = notes
+        #   - col 'osiris_teachers' = docenten
+        #   - col 'osiris_examinators' = examinators
 
         # for each set of data, if len > 1, join as strs with ' | ' as separator.
 
@@ -1493,6 +1646,7 @@ class EasyAccessTool:
             return row
 
         new_data = []
+        persons_to_retrieve = set()
         for row in enriched_df.to_dicts():
 
             codes = determine_course_code(row.get('course_code'), row.get('course_name'))
@@ -1505,20 +1659,33 @@ class EasyAccessTool:
             short_name = set()
             faculty = set()
             notes = set()
+            teachers = set()
+            examinators = set()
 
 
             for code in list(codes):
                 if code in course_data_dict:
                     data = course_data_dict.get(code)
+                    if not data:
+                        continue
                     internal_id.add(data.get('internal_id'))
-                    contact.update(data.get('contacts'))
                     programme.add(data.get('programme'))
                     name.add(data.get('name'))
                     short_name.add(data.get('short_name'))
                     faculty.add(data.get('faculty'))
                     notes.add(data.get('notes'))
+
+                    teachers.update(data.get('docenten'))
+                    examinators.update(data.get('examinators'))
+                    contact.update(data.get('contacts'))
+
+
                 else:
                     warn(f'No data found for course code {code}')
+
+            persons_to_retrieve.update(contact)
+            #persons_to_retrieve.update(teachers)
+            #persons_to_retrieve.update(examinators)
 
             setcollection = [
                 (internal_id, 'osiris_internal_id'),
@@ -1527,17 +1694,53 @@ class EasyAccessTool:
                 (name, 'osiris_name'),
                 (short_name, 'osiris_short_name'),
                 (faculty, 'osiris_faculty'),
-                (notes, 'osiris_notes')
+                (notes, 'osiris_notes'),
+                (teachers, 'osiris_teachers'),
+                (examinators, 'osiris_examinators'),
             ]
+
 
             for itemset, itemcol in setcollection:
                 row = add_data_to_row(row, itemset, itemcol)
 
-            print(row)
             new_data.append(row)
 
-        enriched_df = pl.DataFrame(new_data)
+        enriched_df = pl.DataFrame(new_data, infer_schema_length=2000)
         print(enriched_df)
+        #enriched_df.write_csv("enriched_data.csv")
+        print(f'now retrieving person data for {len(persons_to_retrieve)} people.')
+        person_data = []
+        persontasks = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            for person in persons_to_retrieve:
+                    persontasks.append(asyncio.create_task(get_data_from_people_page(person, httpx_client=client, semaphore=semaphore)))
+            for task in persontasks:
+                try:
+                    parsed_data = await task
+                    if parsed_data:
+                        person_data.append(parsed_data)
+                except Exception as e:
+                    print(e)
+                    pass
+        print(f'got data for {len(person_data)} persons.')
+        if len(person_data) > 0:
+            person_data_for_csv = []
+            for person in person_data:
+                tmp = {
+                    'name': person.get('main_name'),
+                    'first_name': person.get('other_names')[0] if isinstance(person.get('other_names'), list) else None,
+                    'email': person.get('email'),
+                    'faculty': person.get('faculty'),
+                    #'courses': ' | '.join([x.get('course_name') for x in person.get('courses')]) if isinstance(person.get('courses'), list) else None,
+                    'programmes': ' | '.join([x.get('name') for x in person.get('programmes')]) if isinstance(person.get('programmes'), list) else None,
+                    'people_page': person.get('people_page_url')
+                }
+                tmp['orgs'] = ' | '.join([org.get('name') for org in person.get('orgs') if org.get('abbr') != person.get('faculty')]) if isinstance(person.get('orgs'), list) else None
+                person_data_for_csv.append(tmp)
+
+            person_df = pl.DataFrame(person_data_for_csv, infer_schema_length=2000)
+            print(person_df)
+            person_df.write_csv("person_data.csv")
         input('done with enriching! press any key to continue.')
         return enriched_df
 
