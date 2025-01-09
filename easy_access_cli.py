@@ -36,6 +36,9 @@ This python file contains the following:
     - typer function cli provides a command line interface
     - helper classes File and Directory for handling... files and directories.
 """
+import json
+import sqlalchemy
+import sqlite3
 import re
 import asyncio
 import time
@@ -1655,6 +1658,7 @@ class EasyAccessTool:
         persons_to_retrieve = set()
         extended_persons_to_retrieve = set()
         new_detailed_data = []
+        starttime = int(time.time())
         for row in enriched_df.to_dicts():
 
             codes = determine_course_code(row.get('course_code'), row.get('course_name'))
@@ -1723,30 +1727,33 @@ class EasyAccessTool:
                     final_detailed_data[k] = v
             new_detailed_data.append(final_detailed_data)
 
-
+        print(f'retrieved osiris data for {len(new_data)} rows in {int(time.time())-starttime} seconds.')
         enriched_df = pl.DataFrame(new_data, infer_schema_length=8000)
         print(enriched_df)
 
         enriched_df.write_csv("enriched_data.csv")
-        try:
-            print(new_detailed_data[0:20])
-            full_data = pl.DataFrame(new_detailed_data, infer_schema_length=50000, strict=False)
-            print(full_data)
-        except Exception as e:
-            print(e)
-            pass
-        try:
-            full_data.write_database(
-                "enriched_data",
-                connection="sqlite:///database.db",
-                if_table_exists="replace"
-            )
 
-        except Exception as e:
-            print(e)
-            pass
+        def convert_to_json_if_needed(column: pl.Series) -> pl.Series:
+                if column.dtype == pl.Struct:
+                    return column.struct.json_encode()
+                elif column.dtype == pl.List:
+                    return column.list.join(seperator=" | ")
+                else:
+                    return column
+
         try:
-            full_data.write_ndjson("enriched_data.ndjson")
+            # turn 'new_detailed_data' into json and store as 'enriched_data.json'
+            detailed_data_json = json.dumps(new_detailed_data, indent=4)
+            with open("enriched_data.json", "w") as f:
+                f.write(detailed_data_json)
+
+            # now store 'detailed_data_json' in database.db (sqlite db) using sqlite3 module
+            conn = sqlite3.connect('database.db')
+            c = conn.cursor()
+            c.execute("CREATE TABLE IF NOT EXISTS detailed_data (data json)")
+            c.execute("INSERT INTO enriched_data (data) VALUES (?)", (detailed_data_json,))
+            conn.commit()
+            conn.close()
         except Exception as e:
             print(e)
             pass
@@ -1769,13 +1776,17 @@ class EasyAccessTool:
 
         print(f'got data for {len(person_data)} persons in {int(time.time())-starttime} seconds.')
         try:
-            persondata_df = pl.DataFrame(person_data, infer_schema_length=8000)
-            print(persondata_df)
-            persondata_df.write_database(
-                "person_data",
-                connection="sqlite:///database.db",
-                if_table_exists="replace"
-            )
+            person_data_json = json.dumps(person_data, indent=4)
+            with open("person_data.json", "w") as f:
+                f.write(person_data_json)
+
+            # now store 'detailed_data_json' in database.db (sqlite db) using sqlite3 module
+            conn = sqlite3.connect('database.db')
+            c = conn.cursor()
+            c.execute("CREATE TABLE IF NOT EXISTS detailed_person_data (data json)")
+            c.execute("INSERT INTO enriched_data (data) VALUES (?)", (person_data_json))
+            conn.commit()
+            conn.close()
         except Exception as e:
             print(e)
             pass
