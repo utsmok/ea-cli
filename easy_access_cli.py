@@ -727,7 +727,7 @@ class EasyAccessTool:
                     [self.latest_file_date] * len(self.raw_copyright_data),
                 ),
                 pl.Series("workflow_status", ["ToDo"] * len(self.raw_copyright_data)),
-                pl.col("last_change").dt.strftime("%Y-%m-%d"),
+                pl.col("last_change").str.replace(r"^-$", "").str.strip_chars().str.strptime(pl.Date, "%Y-%m-%d", strict=False).dt.strftime("%Y-%m-%d"),
                 faculty=pl.col("department").replace_strict(
                     self.DEPARTMENT_MAPPING, default="Unmapped"
                 ),
@@ -1193,23 +1193,29 @@ class EasyAccessTool:
             For a given course code and name, determine the correct course code(s).
             Returns a set of course codes or None if no valid course code could be found.
             '''
-            found = False
-            tempresults = set()
-            first_try = code.split('-')[1].strip()
-            if len(first_try) >= 8 and first_try.isdigit():
-                tempresults.add(first_try)
-                found = True
-            else:
-                second_try = name.split(';')[1].split('(')[0]
-                for c in second_try.split(','):
-                    c = c.strip()
-                    if c.isdigit() and len(c) >= 8:
-                        tempresults.add(c)
-                        found = True
-            if not found:
-                warn(f'No valid course code found for {code} - {name}')
-                info(f'code extraction results: {first_try}, name extraction results: {second_try}')
-            return tempresults
+            try:
+                found = False
+                tempresults = set()
+                first_try = code.split('-')[1].strip()
+                if len(first_try) >= 8 and first_try.isdigit():
+                    tempresults.add(first_try)
+                    found = True
+                else:
+                    second_try = name.split(';')[1].split('(')[0]
+                    for c in second_try.split(','):
+                        c = c.strip()
+                        if c.isdigit() and len(c) >= 8:
+                            tempresults.add(c)
+                            found = True
+                if not found:
+                    warn(f'No valid course code found for {code} - {name}')
+                    info(f'code extraction results: {first_try}, name extraction results: {second_try}')
+                return tempresults
+            except Exception as e:
+                warn(f'Error in determine_course_code: {e}')
+                return tempresults
+
+
 
         async def get_data_from_osiris(input_number: int, httpx_client:httpx.AsyncClient, semaphore: asyncio.Semaphore, jaar: int = 2024,  ) -> dict[str, dict[str,str|list|set]]:
             print_details = False
@@ -1304,7 +1310,7 @@ class EasyAccessTool:
                                             else:
                                                 print(f"{gap}{item}") if print_details else None
                                     if key == 'docenten':
-                                        teachers = items
+                                        teachers = set(items)
 
                                 else:
                                     if '\n' not in str(value):
@@ -1400,6 +1406,7 @@ class EasyAccessTool:
                                 print(course_details.status_code)
 
                         print(newdatadict) if print_details else None
+
                         return newdatadict
             except Exception as e:
                 print('excption when getting course details')
@@ -1522,11 +1529,6 @@ class EasyAccessTool:
 
 
 
-
-
-
-
-
         # step 1: determine list of courseids to search for
         # each row in the df should have 1 or multiple course codes attached to it.
         # we are going to search for each of these course codes in OSIRIS.
@@ -1567,6 +1569,7 @@ class EasyAccessTool:
         # Circuit Analysis 1 and 2; CA12,CA34 (2024-JAAR) --> Course codes: [CA12, CA34] --> ERROR: no valid course codes -> return empty list
 
         # first we extract the cols as lists using to_dict()
+
         course_data_dict = enriched_df.select(pl.col('course_code'),pl.col('course_name')).to_dict()
         course_code_list = course_data_dict.get('course_code').to_list()
         course_name_list = course_data_dict.get('course_name').to_list()
@@ -1587,7 +1590,7 @@ class EasyAccessTool:
         course_data_dict = {}
         not_found = set()
         found_amount = 0
-        max_concurrent = 5
+        max_concurrent = 10
         semaphore = asyncio.Semaphore(max_concurrent)  # Rate limiting with semaphore
         starttime = int(time.time())
         async with httpx.AsyncClient(timeout=60) as client:
@@ -1634,6 +1637,9 @@ class EasyAccessTool:
 
         # for each set of data, if len > 1, join as strs with ' | ' as separator.
 
+        # besides that, also make a 'complete' set of data: the original row updated with the full data from osiris.
+        # prefix each osiris col with 'osiris_' to prevent conflicts with existing columns & easily identify it.
+
         def add_data_to_row(row: dict, data:set, colname:str) -> dict:
             if len(data) == 0:
                 row[colname] = None
@@ -1647,6 +1653,8 @@ class EasyAccessTool:
 
         new_data = []
         persons_to_retrieve = set()
+        extended_persons_to_retrieve = set()
+        new_detailed_data = []
         for row in enriched_df.to_dicts():
 
             codes = determine_course_code(row.get('course_code'), row.get('course_name'))
@@ -1661,13 +1669,16 @@ class EasyAccessTool:
             notes = set()
             teachers = set()
             examinators = set()
-
-
+            new_row = row.copy()
+            if len(list(codes)) > 1:
+                warn(f'Multiple course codes found for course code {row.get("course_code")}, course name {row.get("course_name")}: {codes}')
             for code in list(codes):
                 if code in course_data_dict:
                     data = course_data_dict.get(code)
                     if not data:
                         continue
+                    new_row.update({'osiris_'+str(a):b for a,b in data.items()})
+
                     internal_id.add(data.get('internal_id'))
                     programme.add(data.get('programme'))
                     name.add(data.get('name'))
@@ -1684,8 +1695,8 @@ class EasyAccessTool:
                     warn(f'No data found for course code {code}')
 
             persons_to_retrieve.update(contact)
-            #persons_to_retrieve.update(teachers)
-            #persons_to_retrieve.update(examinators)
+            extended_persons_to_retrieve.update(teachers)
+            extended_persons_to_retrieve.update(examinators)
 
             setcollection = [
                 (internal_id, 'osiris_internal_id'),
@@ -1704,15 +1715,48 @@ class EasyAccessTool:
                 row = add_data_to_row(row, itemset, itemcol)
 
             new_data.append(row)
+            final_detailed_data = {}
+            for k, v in new_row.items():
+                if isinstance(v, set):
+                    final_detailed_data[k] = list(v)
+                else:
+                    final_detailed_data[k] = v
+            new_detailed_data.append(final_detailed_data)
 
-        enriched_df = pl.DataFrame(new_data, infer_schema_length=2000)
+
+        enriched_df = pl.DataFrame(new_data, infer_schema_length=8000)
         print(enriched_df)
-        #enriched_df.write_csv("enriched_data.csv")
+
+        enriched_df.write_csv("enriched_data.csv")
+        try:
+            print(new_detailed_data[0:20])
+            full_data = pl.DataFrame(new_detailed_data, infer_schema_length=50000, strict=False)
+            print(full_data)
+        except Exception as e:
+            print(e)
+            pass
+        try:
+            full_data.write_database(
+                "enriched_data",
+                connection="sqlite:///database.db",
+                if_table_exists="replace"
+            )
+
+        except Exception as e:
+            print(e)
+            pass
+        try:
+            full_data.write_ndjson("enriched_data.ndjson")
+        except Exception as e:
+            print(e)
+            pass
+
         print(f'now retrieving person data for {len(persons_to_retrieve)} people.')
         person_data = []
         persontasks = []
+        starttime = int(time.time())
         async with httpx.AsyncClient(timeout=30) as client:
-            for person in persons_to_retrieve:
+            for person in persons_to_retrieve | extended_persons_to_retrieve:
                     persontasks.append(asyncio.create_task(get_data_from_people_page(person, httpx_client=client, semaphore=semaphore)))
             for task in persontasks:
                 try:
@@ -1722,8 +1766,21 @@ class EasyAccessTool:
                 except Exception as e:
                     print(e)
                     pass
-        print(f'got data for {len(person_data)} persons.')
+
+        print(f'got data for {len(person_data)} persons in {int(time.time())-starttime} seconds.')
+        try:
+            persondata_df = pl.DataFrame(person_data, infer_schema_length=8000)
+            print(persondata_df)
+            persondata_df.write_database(
+                "person_data",
+                connection="sqlite:///database.db",
+                if_table_exists="replace"
+            )
+        except Exception as e:
+            print(e)
+            pass
         if len(person_data) > 0:
+
             person_data_for_csv = []
             for person in person_data:
                 tmp = {
@@ -1738,7 +1795,7 @@ class EasyAccessTool:
                 tmp['orgs'] = ' | '.join([org.get('name') for org in person.get('orgs') if org.get('abbr') != person.get('faculty')]) if isinstance(person.get('orgs'), list) else None
                 person_data_for_csv.append(tmp)
 
-            person_df = pl.DataFrame(person_data_for_csv, infer_schema_length=2000)
+            person_df = pl.DataFrame(person_data_for_csv, infer_schema_length=8000)
             print(person_df)
             person_df.write_csv("person_data.csv")
         input('done with enriching! press any key to continue.')
