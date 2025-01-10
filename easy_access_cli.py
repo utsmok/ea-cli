@@ -1751,7 +1751,7 @@ class EasyAccessTool:
             conn = sqlite3.connect('database.db')
             c = conn.cursor()
             c.execute("CREATE TABLE IF NOT EXISTS detailed_data (data json)")
-            c.execute("INSERT INTO enriched_data (data) VALUES (?)", (detailed_data_json,))
+            c.execute("INSERT INTO detailed_data (data) VALUES (?)", (detailed_data_json))
             conn.commit()
             conn.close()
         except Exception as e:
@@ -1784,7 +1784,7 @@ class EasyAccessTool:
             conn = sqlite3.connect('database.db')
             c = conn.cursor()
             c.execute("CREATE TABLE IF NOT EXISTS detailed_person_data (data json)")
-            c.execute("INSERT INTO enriched_data (data) VALUES (?)", (person_data_json))
+            c.execute("INSERT INTO detailed_person_data (data) VALUES (?)", (person_data_json))
             conn.commit()
             conn.close()
         except Exception as e:
