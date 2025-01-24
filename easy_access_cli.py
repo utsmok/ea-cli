@@ -566,7 +566,7 @@ class EasyAccessTool:
 
         self.disable_writes = not save_files
         self.enrich_with_osiris_data = True # set to False to disable enriching the data with OSIRIS data
-        self.refresh_osiris_data = True # set to False to disable pulling in new data from osiris / people page
+        self.refresh_osiris_data = False # set to False to disable pulling in new data from osiris / people page
         # determine which functions to run
         # first check if we need to read in copyRight data (default), or other sheets
 
@@ -745,8 +745,9 @@ class EasyAccessTool:
 
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
-            self.enrich_sheets(self.copyright_data)
-
+            self.copyright_data = self.enrich_sheets(self.copyright_data)
+            # set dtype of all columns to str
+            self.copyright_data = self.copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
         if self.only_changes:
             self.read_faculty_sheets()
             if self.faculty_sheet_data.is_empty():
@@ -1122,9 +1123,9 @@ class EasyAccessTool:
                 info(f'skipping {file.path}')
                 continue
             try:
-                current_data = pl.read_excel(file.path, sheet_name=sheetname)
+                current_data = pl.read_excel(file.path, sheet_name=sheetname, infer_schema_length=None)
             except Exception:
-                current_data = pl.read_excel(file.path)
+                current_data = pl.read_excel(file.path, infer_schema_length=None)
 
             current_data = self.validate_ea_sheet(current_data, file)
             if current_data.is_empty():
@@ -1132,7 +1133,7 @@ class EasyAccessTool:
             else:
                 file_data.append(current_data)
         if file_data:
-            result: pl.DataFrame = pl.concat(file_data)
+            result: pl.DataFrame = pl.concat(file_data, how="diagonal_relaxed")
         else:
             result = pl.DataFrame()
         return result.unique()
@@ -1848,7 +1849,7 @@ class EasyAccessTool:
                 merged_data = join_coalesce_all(full_data, data_entry, on="material_id", prefer_right=set(data_entry.columns) - {"material_id"})
                 # set all columns to type str for easy concatting
 
-                all_faculty_data = pl.concat([all_faculty_data, merged_data])
+                all_faculty_data = pl.concat([all_faculty_data, merged_data], how="diagonal_relaxed")
 
         return all_faculty_data
 
@@ -1947,7 +1948,6 @@ class EasyAccessTool:
             if all_faculty_data.is_empty():
                 continue
 
-            all_faculty_data = self.add_osiris_data(all_faculty_data)
             all_faculty_data = all_faculty_data.with_columns(
                 pl.col('pages_x_students').cast(pl.Int32).mul(self.fine_amount).alias('possible_fine')
             )
