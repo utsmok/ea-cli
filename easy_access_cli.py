@@ -566,7 +566,7 @@ class EasyAccessTool:
 
         self.disable_writes = not save_files
         self.enrich_with_osiris_data = True # set to False to disable enriching the data with OSIRIS data
-
+        self.refresh_osiris_data = True # set to False to disable pulling in new data from osiris / people page
         # determine which functions to run
         # first check if we need to read in copyRight data (default), or other sheets
 
@@ -579,6 +579,7 @@ class EasyAccessTool:
         # set the functions to run
         if functions is None:
             self.settings = []
+
         elif functions == Functions.both:
             if not self.other_sheet:
                 self.settings = [
@@ -738,10 +739,13 @@ class EasyAccessTool:
         self.faculties = (
             self.copyright_data.select(pl.col("faculty").unique()).to_series().to_list()
         )
+        # refresh OSIRIS data if bool is set
+        if self.refresh_osiris_data:
+            asyncio.run(self.update_osiris_data(self.copyright_data))
 
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
-            self.copyright_data = asyncio.run(self.add_osiris_data(self.copyright_data))
+            self.enrich_sheets(self.copyright_data)
 
         if self.only_changes:
             self.read_faculty_sheets()
@@ -1179,21 +1183,9 @@ class EasyAccessTool:
         # TODO
         ...
 
-    async def add_osiris_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        For a given df with faculty data, retrieve missing/required data from OSIRIS
-
-        first make a list of what to search for
-        then scrape the data / use api
-        then enrich the df and return it
-
-        base the df structure on self.copyright_data
-        """
-
-        enriched_df: pl.DataFrame = copy.copy(df)
-        def determine_course_code(code: str, name: str) -> set | None:
+    def determine_course_code(self, code: str, name: str) -> set | None:
             '''
-            For a given course code and name, determine the correct course code(s).
+            For a given course code and name (cols of a copyright item), determine the correct course code(s).
             Returns a set of course codes or None if no valid course code could be found.
             '''
             try:
@@ -1217,6 +1209,14 @@ class EasyAccessTool:
             except Exception as e:
                 warn(f'Error in determine_course_code: {e}')
                 return tempresults
+
+
+    async def update_osiris_data(self, df: pl.DataFrame) -> None:
+        """
+        For a given df with copyright items, retrieve all OSIRIS course data + person data from people pages.
+
+        Stores the data as 3 jsons in the ea-cli dir root; to be used for enriching later.
+        """
 
 
 
@@ -1268,7 +1268,7 @@ class EasyAccessTool:
                     )
 
                     results = x.json().get('hits',{}).get('hits')
-                    datadict = {}
+                    datadict = dict()
                     if not results:
                         return
                     else:
@@ -1313,7 +1313,18 @@ class EasyAccessTool:
                                             else:
                                                 print(f"{gap}{item}") if print_details else None
                                     if key == 'docenten':
-                                        teachers = set(items)
+                                        if isinstance(items, list):
+                                            if len(items) == 1:
+                                                teachers = set()
+                                                teachers.add(items[0])
+                                            else:
+                                                teachers = set(items)
+                                        elif isinstance(items, set):
+                                            teachers = items
+                                        elif isinstance(items, str):
+                                            teachers = set()
+                                            teachers.add(items)
+
 
                                 else:
                                     if '\n' not in str(value):
@@ -1404,11 +1415,18 @@ class EasyAccessTool:
                                                             newdatadict[course]['unknown_role'].add(persoon.get('docent'))
                                                         except Exception as e:
                                                             pass
+                                    for field in ['teachers','docenten', 'examinators', 'tutors', 'unknown_role', 'contacts']:
+                                        if isinstance(newdatadict[course].get(field, None), set):
+                                            newdatadict[course][field]=list(newdatadict[course][field])
+                                            if len(newdatadict[course][field]) > 8 and all(len(x) == 1 for x in newdatadict[course][field]):
+                                                newdatadict[course][field] = []
+
                             else:
                                 print('Error!')
                                 print(course_details.status_code)
 
                         print(newdatadict) if print_details else None
+
 
                         return newdatadict
             except Exception as e:
@@ -1573,19 +1591,19 @@ class EasyAccessTool:
 
         # first we extract the cols as lists using to_dict()
 
-        course_data_dict = enriched_df.select(pl.col('course_code'),pl.col('course_name')).to_dict()
+        course_data_dict = df.select(pl.col('course_code'),pl.col('course_name')).to_dict()
         course_code_list = course_data_dict.get('course_code').to_list()
         course_name_list = course_data_dict.get('course_name').to_list()
 
         # then we build a set of all the course codes we need to look up
         lookup_values = set()
         for code, name in zip(course_code_list, course_name_list):
-            result = determine_course_code(code, name)
+            result = self.determine_course_code(code, name)
             lookup_values.update(result)
 
         if len(lookup_values) == 0:
             info('No course codes found, skipping OSIRIS data enrichment')
-            return enriched_df
+            return
         else:
             info(f'Found {len(lookup_values)} course codes to look up in OSIRIS')
 
@@ -1595,11 +1613,9 @@ class EasyAccessTool:
         found_amount = 0
         max_concurrent = 10
         semaphore = asyncio.Semaphore(max_concurrent)  # Rate limiting with semaphore
-        starttime = int(time.time())
         async with httpx.AsyncClient(timeout=60) as client:
             tasks = []
-
-            for num, code in enumerate(lookup_values):
+            for code in lookup_values:
                 if code in course_data_dict:
                     continue
                 task1 = asyncio.create_task(get_data_from_osiris(httpx_client=client, input_number=code, semaphore=semaphore))
@@ -1612,7 +1628,6 @@ class EasyAccessTool:
                     course_data_dict.update(result)
                     found_amount += 1
                 else:
-                    warn(f"No data found for course code {code}, trying without yearfilter")
                     result = await get_data_from_osiris(httpx_client=client, input_number=code, jaar='', semaphore=semaphore)
                     if result:
                         course_data_dict.update(result)
@@ -1620,148 +1635,28 @@ class EasyAccessTool:
                     else:
                         not_found.add(code)
 
-        info(f'Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes in {int(time.time()-starttime)} seconds.')
+        info(f'Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes.')
+        # store course_data_dict as a json file
+        with open('osiris_data.json', 'w') as f:
+            json.dump(course_data_dict, f, indent=4)
         if len(not_found) > 0:
             info(f'{len(not_found)} course codes not found: ')
             for code in not_found:
                 print('            '+str(code))
-        # now, for each row in 'enriched_df', detect course codes (just like we did before).
-        # look up that course code as a key in course_data_dict to retrieve a dict with details for that course.
-        # add the following data to the row (colname -> keyname in course_data_dict[course_code]):
-        #   - col 'osiris_id' = internal_id
-        #   - col 'osiris_contact' = contacts
-        #   - col 'osiris_programme' = programme
-        #   - col 'osiris_name' = name
-        #   - col 'osiris_short_name' = short_name
-        #   - col 'osiris_faculty' = faculty
-        #   - col 'osiris_notes' = notes
-        #   - col 'osiris_teachers' = docenten
-        #   - col 'osiris_examinators' = examinators
 
-        # for each set of data, if len > 1, join as strs with ' | ' as separator.
-
-        # besides that, also make a 'complete' set of data: the original row updated with the full data from osiris.
-        # prefix each osiris col with 'osiris_' to prevent conflicts with existing columns & easily identify it.
-
-        def add_data_to_row(row: dict, data:set, colname:str) -> dict:
-            if len(data) == 0:
-                row[colname] = None
-            elif len(data) == 1:
-                row[colname] = list(data)[0]
-            else:
-                data = list(data)
-                data = [str(x) for x in data]
-                row[colname] = ' | '.join(data)
-            return row
-
-        new_data = []
+        # now look up all the person data
         persons_to_retrieve = set()
         extended_persons_to_retrieve = set()
-        new_detailed_data = []
-        starttime = int(time.time())
-        for row in enriched_df.to_dicts():
+        for data in course_data_dict.values():
+            if data.get('contacts'):
+                persons_to_retrieve.update(data.get('contacts'))
+            for field in ['docenten', 'examinators']:
+                if data.get(field):
+                    extended_persons_to_retrieve.update(data.get(field))
 
-            codes = determine_course_code(row.get('course_code'), row.get('course_name'))
-            if not codes:
-                continue
-            internal_id = set()
-            contact = set()
-            programme = set()
-            name = set()
-            short_name = set()
-            faculty = set()
-            notes = set()
-            teachers = set()
-            examinators = set()
-            new_row = row.copy()
-            if len(list(codes)) > 1:
-                warn(f'Multiple course codes found for course code {row.get("course_code")}, course name {row.get("course_name")}: {codes}')
-            for code in list(codes):
-                if code in course_data_dict:
-                    data = course_data_dict.get(code)
-                    if not data:
-                        continue
-                    new_row.update({'osiris_'+str(a):b for a,b in data.items()})
-
-                    internal_id.add(data.get('internal_id'))
-                    programme.add(data.get('programme'))
-                    name.add(data.get('name'))
-                    short_name.add(data.get('short_name'))
-                    faculty.add(data.get('faculty'))
-                    notes.add(data.get('notes'))
-
-                    teachers.update(data.get('docenten'))
-                    examinators.update(data.get('examinators'))
-                    contact.update(data.get('contacts'))
-
-
-                else:
-                    warn(f'No data found for course code {code}')
-
-            persons_to_retrieve.update(contact)
-            extended_persons_to_retrieve.update(teachers)
-            extended_persons_to_retrieve.update(examinators)
-
-            setcollection = [
-                (internal_id, 'osiris_internal_id'),
-                (contact, 'osiris_contacts'),
-                (programme, 'osiris_programme'),
-                (name, 'osiris_name'),
-                (short_name, 'osiris_short_name'),
-                (faculty, 'osiris_faculty'),
-                (notes, 'osiris_notes'),
-                (teachers, 'osiris_teachers'),
-                (examinators, 'osiris_examinators'),
-            ]
-
-
-            for itemset, itemcol in setcollection:
-                row = add_data_to_row(row, itemset, itemcol)
-
-            new_data.append(row)
-            final_detailed_data = {}
-            for k, v in new_row.items():
-                if isinstance(v, set):
-                    final_detailed_data[k] = list(v)
-                else:
-                    final_detailed_data[k] = v
-            new_detailed_data.append(final_detailed_data)
-
-        print(f'retrieved osiris data for {len(new_data)} rows in {int(time.time())-starttime} seconds.')
-        enriched_df = pl.DataFrame(new_data, infer_schema_length=8000)
-        print(enriched_df)
-
-        enriched_df.write_csv("enriched_data.csv")
-
-        def convert_to_json_if_needed(column: pl.Series) -> pl.Series:
-                if column.dtype == pl.Struct:
-                    return column.struct.json_encode()
-                elif column.dtype == pl.List:
-                    return column.list.join(seperator=" | ")
-                else:
-                    return column
-
-        try:
-            # turn 'new_detailed_data' into json and store as 'enriched_data.json'
-            detailed_data_json = json.dumps(new_detailed_data, indent=4)
-            with open("enriched_data.json", "w") as f:
-                f.write(detailed_data_json)
-
-            # now store 'detailed_data_json' in database.db (sqlite db) using sqlite3 module
-            conn = sqlite3.connect('database.db')
-            c = conn.cursor()
-            c.execute("CREATE TABLE IF NOT EXISTS detailed_data (data json)")
-            c.execute("INSERT INTO detailed_data (data) VALUES (?)", (detailed_data_json))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(e)
-            pass
-
-        print(f'now retrieving person data for {len(persons_to_retrieve)} people.')
+        info(f'now retrieving person data for {len(persons_to_retrieve)} people.')
         person_data = []
         persontasks = []
-        starttime = int(time.time())
         async with httpx.AsyncClient(timeout=30) as client:
             for person in persons_to_retrieve | extended_persons_to_retrieve:
                     persontasks.append(asyncio.create_task(get_data_from_people_page(person, httpx_client=client, semaphore=semaphore)))
@@ -1774,43 +1669,112 @@ class EasyAccessTool:
                     print(e)
                     pass
 
-        print(f'got data for {len(person_data)} persons in {int(time.time())-starttime} seconds.')
+        info(f'got data for {len(person_data)} persons')
         try:
-            person_data_json = json.dumps(person_data, indent=4)
-            with open("person_data.json", "w") as f:
-                f.write(person_data_json)
-
-            # now store 'detailed_data_json' in database.db (sqlite db) using sqlite3 module
-            conn = sqlite3.connect('database.db')
-            c = conn.cursor()
-            c.execute("CREATE TABLE IF NOT EXISTS detailed_person_data (data json)")
-            c.execute("INSERT INTO detailed_person_data (data) VALUES (?)", (person_data_json))
-            conn.commit()
-            conn.close()
+            json.dump(person_data, open('person_data.json', 'w'), indent=4)
         except Exception as e:
             print(e)
             pass
-        if len(person_data) > 0:
+        person_dict = {a.get('input_name'):a for a in person_data}
 
-            person_data_for_csv = []
-            for person in person_data:
-                tmp = {
-                    'name': person.get('main_name'),
-                    'first_name': person.get('other_names')[0] if isinstance(person.get('other_names'), list) else None,
-                    'email': person.get('email'),
-                    'faculty': person.get('faculty'),
-                    #'courses': ' | '.join([x.get('course_name') for x in person.get('courses')]) if isinstance(person.get('courses'), list) else None,
-                    'programmes': ' | '.join([x.get('name') for x in person.get('programmes')]) if isinstance(person.get('programmes'), list) else None,
-                    'people_page': person.get('people_page_url')
-                }
-                tmp['orgs'] = ' | '.join([org.get('name') for org in person.get('orgs') if org.get('abbr') != person.get('faculty')]) if isinstance(person.get('orgs'), list) else None
-                person_data_for_csv.append(tmp)
+        # finally, combine the two by adding the contact details to the course data
+        info(f'Now enriching each osiris course with detailed contact data.')
+        osiris_data_w_contacts = dict()
+        for code, entry in course_data_dict.items():
+            contactdetails = {}
+            if entry.get('contacts'):
+                for contact in entry.get('contacts'):
+                    details = person_dict.get(contact)
+                    if details:
+                        contactdetails[contact] = {
+                            'name': details.get('main_name'),
+                            'first_name':details.get('other_names')[0],
+                            'email': details.get('email'),
+                            'faculty': details.get('faculty'),
+                            'orgs': details.get('orgs'),
+                            'programmes': details.get('programmes'),
+                            'people_page': details.get('people_page_url'),
+                        }
+            entry['contacts'] = contactdetails
+            osiris_data_w_contacts[code] = entry
+        try:
+            json.dump(osiris_data_w_contacts, open('osiris_data_w_contacts.json', 'w'), indent=4)
+        except Exception as e:
+            print(e)
+            pass
 
-            person_df = pl.DataFrame(person_data_for_csv, infer_schema_length=8000)
-            print(person_df)
-            person_df.write_csv("person_data.csv")
-        input('done with enriching! press any key to continue.')
-        return enriched_df
+        info('Done. Stored data in json files:\n    osiris_data.json\n    person_data.json\n    osiris_data_w_contacts.json')
+
+    def enrich_sheets(self, df: pl.DataFrame) -> pl.DataFrame:
+        '''
+        Read in OSIRIS/people page data from jsons in the current dir.
+        Enrich the supplied df with the information contained in the jsons.
+        Return the enriched dataframe.
+        '''
+        try:
+            osiris_data_w_contacts = json.load(open('osiris_data_w_contacts.json'))
+        except Exception as e:
+            print(e)
+            info('No OSIRIS data found or unreadable. Skipping OSIRIS data enrichment. Please run the cli again with the refresh_osiris_data flag set to True.')
+            return
+
+
+        item_data = df.select(pl.col('course_code'),pl.col('course_name'),pl.col('material_id')).to_dicts()
+        enriched_item_data = []
+        osiris_cat_link='https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursus/zoek?trefwoord='
+        info('now determining course codes and enriching rows with OSIRIS data')
+        for item in item_data:
+            course_codes = self.determine_course_code(item['course_code'], item['course_name'])
+
+            if not course_codes:
+                continue
+
+            course_codes = list(course_codes)
+
+            if len(course_codes) < 1:
+                continue
+
+            new_item = dict()
+            new_item['material_id'] = item['material_id']
+            if len(course_codes) == 1:
+                new_item['osiris_course_codes_found']= course_codes[0]
+            if len(course_codes) > 1:
+                new_item['osiris_course_codes_found'] = ' | '.join(course_codes)
+            found_osiris_data = osiris_data_w_contacts.get(course_codes[0], None)
+
+            if not found_osiris_data:
+                continue
+
+            new_item['osiris_course_code_data_selected'] = course_codes[0]
+            new_item['osiris_catalogue_url'] = osiris_cat_link + course_codes[0]
+            new_item['osiris_programme'] = found_osiris_data.get('programme')
+            if found_osiris_data.get('contacts'):
+                contacts = found_osiris_data.get('contacts')
+                if len(contacts) == 1:
+                    new_item['contact_name'] = list(contacts.keys())[0]
+                    new_item['contact_email'] = list(contacts.values())[0].get('email')
+                    if list(contacts.values())[0].get('orgs'):
+                        maxlen = 0
+                        curabbr = ''
+                        for org in list(contacts.values())[0].get('orgs'):
+                            if len(org.get('abbr')) > maxlen and any(org.get('abbr').startswith(x) for x in ['EEMCS', 'BMS','TNW','ET','ITC']):
+                                maxlen = len(org.get('abbr'))
+                                curabbr = org.get('abbr')
+                        if maxlen > 0:
+                            new_item['contact_org'] = curabbr
+            enriched_item_data.append(new_item)
+
+        enriched_items_df = pl.DataFrame(enriched_item_data)
+        df = df.join(enriched_items_df, on='material_id', how='left')
+        info('Enriched df with OSIRIS data. First 5 rows with found results:')
+        i = 0
+        for row in df.head(100).to_dicts():
+            if row.get('osiris_programme'):
+                i = i+1
+                print(row)
+            if i > 5:
+                break
+        return df
 
     def get_all_faculty_data(self) -> pl.DataFrame:
         """
