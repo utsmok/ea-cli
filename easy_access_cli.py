@@ -348,6 +348,13 @@ def cli(
             rich_help_panel="Functions",
         ),
     ] = True,
+    osiris_update: Annotated[
+        bool,
+        typer.Option(
+            help="If enabled, will retrieve fresh osiris data for all course + people page data.",
+            rich_help_panel="Functions",
+    ),
+    ] = False,
     other_sheet: Annotated[
         str | None,
         typer.Option(
@@ -429,7 +436,7 @@ def cli(
     }
 
     tool = EasyAccessTool(
-        functions=do, only_changes=changes, dirs=dirs, other_sheet=other_sheet, save_files=save
+        functions=do, only_changes=changes, dirs=dirs, other_sheet=other_sheet, save_files=save, refresh_osiris_data=osiris_update
     )
     tool.run()
 
@@ -546,6 +553,7 @@ class EasyAccessTool:
         only_changes: bool = True,
         other_sheet: str | None = None,
         save_files: bool = True,
+        refresh_osiris_data: bool = False
     ) -> None:
         """
         Parameters:
@@ -568,7 +576,7 @@ class EasyAccessTool:
 
         self.disable_writes = not save_files
         self.enrich_with_osiris_data = True # set to False to disable enriching the data with OSIRIS data
-        self.refresh_osiris_data = False # set to False to disable pulling in new data from osiris / people page
+        self.refresh_osiris_data = refresh_osiris_data # set to False to disable pulling in new data from osiris / people page
         # determine which functions to run
         # first check if we need to read in copyRight data (default), or other sheets
 
@@ -588,7 +596,6 @@ class EasyAccessTool:
                     self.read_copyright_export,
                     self.process_copyright_export,  # read in new data
                     self.read_all_items_sheets,
-                    self.read_faculty_sheets,  # read in data manually added to sheets
                     self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
                     self.create_faculty_sheets,
                     self.create_all_items_sheet, # create new sheets with new data
@@ -702,6 +709,8 @@ class EasyAccessTool:
                 f"Selected newest copyright export file:\n          {self.latest_file.name}\n          created @ {self.latest_file_date}"
             )
             self.raw_copyright_data = pl.read_excel(self.latest_file.path)
+            # cast all columns to str
+            self.raw_copyright_data = self.raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
 
         except FileNotFoundError:
             warn(f"No files found in {self.dirs['copyright_export']}")
@@ -751,7 +760,7 @@ class EasyAccessTool:
             # set dtype of all columns to str
             self.copyright_data = self.copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
         if self.only_changes:
-            self.read_faculty_sheets()
+            self.read_faculty_sheets(include_overview=False)
             if self.faculty_sheet_data.is_empty():
                 info(
                     "No faculty sheets found. Adding all items without checking for changes."
@@ -1195,12 +1204,12 @@ class EasyAccessTool:
                 self.copyright_data.write_excel(self.dirs["all_items"].full / filename)
                 info(f"Created sheet: {self.dirs['all_items'].full / filename}")
 
-    def read_faculty_sheets(self) -> None:
+    def read_faculty_sheets(self, include_overview: bool = True) -> None:
         """
         Reads in all data from all sheets in the faculties dir
         and stores it in self.faculty_sheet_data as a single concatted dataframe.
         """
-        self.faculty_sheet_data = self.get_all_faculty_data()
+        self.faculty_sheet_data = self.get_all_faculty_data(include_overview=include_overview)
 
     def read_all_items_sheets(self) -> None:
         """
@@ -1867,17 +1876,10 @@ class EasyAccessTool:
 
         enriched_items_df = pl.DataFrame(enriched_item_data)
         df = df.join(enriched_items_df, on='material_id', how='left')
-        info('Enriched df with OSIRIS data. First 5 rows with found results:')
-        i = 0
-        for row in df.head(100).to_dicts():
-            if row.get('osiris_programme'):
-                i = i+1
-                print(row)
-            if i > 5:
-                break
+        info('Enriched df with OSIRIS data.')
         return df
 
-    def get_all_faculty_data(self) -> pl.DataFrame:
+    def get_all_faculty_data(self, include_overview: bool = True) -> pl.DataFrame:
         """
         Read in all available faculty sheets
         and merge the 'complete data' and 'data entry' sheets for each one.
@@ -1886,14 +1888,14 @@ class EasyAccessTool:
         all_faculty_data = pl.DataFrame()
         for faculty in self.faculties:
             info(f'getting data for faculty {faculty}')
-            faculty_data = self.get_faculty_data(faculty)
+            faculty_data = self.get_faculty_data(faculty, include_overview=include_overview)
             if faculty_data.is_empty():
                 continue
             all_faculty_data = pl.concat([all_faculty_data, faculty_data], how="diagonal_relaxed")
 
         return all_faculty_data.unique()
 
-    def get_faculty_data(self, faculty: str, del_overview: bool = False) -> pl.DataFrame:
+    def get_faculty_data(self, faculty: str, del_overview: bool = False, include_overview: bool = True) -> pl.DataFrame:
         """
         for a given faculty, read in all available faculty sheets
         and merge the 'complete data' and 'data entry' sheets for each one.
@@ -1925,21 +1927,36 @@ class EasyAccessTool:
         faculty_files = faculty_dir.files_r
 
         all_faculty_data = pl.DataFrame()
+
+        prefer_overview_cols = False # set to True to give edits in total_overview file higher priority than edits in each weekly faculty excel
+
+        total_overview = pl.DataFrame()
+        overview_file: File = None
+        latest_mod_date = None
+        if include_overview:
+            for file in faculty_files:
+                if 'total_overview' in file.name and faculty in file.name:
+                    try:
+                        total_overview_complete = pl.read_excel(file.path, sheet_name="Complete data")
+                        total_overview_data_entry = pl.read_excel(file.path, sheet_name="Data entry")
+                        total_overview = join_coalesce_all(total_overview_complete, total_overview_data_entry, on="material_id", prefer_right=set(total_overview_data_entry.columns) - {"material_id"})
+                    except ValueError:
+                        total_overview = pl.read_excel(file.path)
+
+                    overview_file = file
         for file in faculty_files:
             if file.extension not in [".xls", ".xlsx"]:
-                continue
-            if 'overview' in file.name and faculty in file.name:
-                if del_overview:
-                    file.delete()
                 continue
             elif 'overview' in file.name:
                 continue
             else:
+                latest_mod_date = file.modified if latest_mod_date is None else max(latest_mod_date, file.modified)
                 full_data = pl.read_excel(file.path, sheet_name="Complete data")
                 data_entry = pl.read_excel(file.path, sheet_name="Data entry")
 
                 full_data = self.validate_ea_sheet(full_data, file)
                 data_entry = self.validate_ea_sheet(data_entry, file)
+
 
                 # merge data_entry into full_data on column material_id.
                 # data from data_entry will overwrite data from full_data
@@ -1947,10 +1964,37 @@ class EasyAccessTool:
                 # keep the columns in full_data that are not in data_entry
 
                 merged_data = join_coalesce_all(full_data, data_entry, on="material_id", prefer_right=set(data_entry.columns) - {"material_id"})
-                # set all columns to type str for easy concatting
-
+                merged_data = merged_data.unique(subset="material_id")
                 all_faculty_data = pl.concat([all_faculty_data, merged_data], how="diagonal_relaxed")
+                all_faculty_data = all_faculty_data.unique(subset="material_id")
 
+        if not total_overview.is_empty():
+            if (latest_mod_date < overview_file.modified) and (not prefer_overview_cols):
+                info(f'Latest mod date for overview is newer than latest mod date for any other sheet for {faculty}.')
+                all_overview_man_class = total_overview.select(pl.col("manual_classification")).to_series().to_list()
+                all_overview_man_class = [i for i in all_overview_man_class if i not in [None, '', '-',' ']]
+                all_faculty_data_man_class = all_faculty_data.select(pl.col("manual_classification")).to_series().to_list()
+                all_faculty_data_man_class = [i for i in all_faculty_data_man_class if i not in [None, '', '-',' ']]
+                print(f'{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data.')
+                if len(all_faculty_data_man_class) < len(all_overview_man_class):
+                    print(f'all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}.')
+                    prefer_overview_cols = True
+            if prefer_overview_cols:
+                preffered_cols = set(total_overview.columns) - {"material_id"}
+                all_faculty_data = join_coalesce_all(all_faculty_data, total_overview, on="material_id", prefer_right=preffered_cols)
+            else:
+                preffered_cols = set(all_faculty_data.columns) - {"material_id"}
+                all_faculty_data = join_coalesce_all(total_overview, all_faculty_data, on="material_id", prefer_right=preffered_cols)
+            all_faculty_data = all_faculty_data.unique(subset="material_id")
+
+        if del_overview:
+            if overview_file:
+                overview_file.delete()
+            else:
+                for file in faculty_files:
+                    if 'total_overview' in file.name and faculty in file.name:
+                        file.delete()
+                        break
         return all_faculty_data
 
     def create_faculty_overview(self) -> None:
@@ -2090,6 +2134,7 @@ class EasyAccessTool:
             info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
             if not self.disable_writes:
                 all_faculty_data.write_excel(fac_file.path)
+                self.finalize_sheet(fac_file, all_faculty_data)
             locale.setlocale(locale.LC_ALL, '')
 
         # now we have the data for all faculties, and written the excel files to disk.
