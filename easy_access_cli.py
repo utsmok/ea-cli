@@ -36,6 +36,8 @@ This python file contains the following:
     - typer function cli provides a command line interface
     - helper classes File and Directory for handling... files and directories.
 """
+from collections import OrderedDict
+from dataclasses import dataclass, field
 import json
 import sqlalchemy
 import sqlite3
@@ -908,7 +910,7 @@ class EasyAccessTool:
                 info(f'{faculty}:{gap}{faculty_data.shape[0]}')
             if not self.disable_writes:
                 faculty_data.write_excel(faculty_dir.full / filename)
-                self.finalize_sheet(File(str(faculty_dir.full / filename)))
+                self.finalize_sheet(File(str(faculty_dir.full / filename)), faculty_data)
 
     def create_programme_sheets(self, faculty: str) -> None:
         """
@@ -941,15 +943,154 @@ class EasyAccessTool:
             for groupname, df in final_data.items():
                 filename = programme_dir.full / f'{groupname}_{self.latest_file_date}.xlsx'
                 df.write_excel(filename)
-                self.finalize_sheet(File(str(filename)))
+                self.finalize_sheet(File(str(filename)), df)
                 info(f'created programme sheet {groupname}_{self.latest_file_date}.xlsx')
 
-    def finalize_sheet(self, file: File) -> None:
+    def finalize_sheet(self, file: File, data: pl.DataFrame) -> None:
         """
+        New implementation of finalize_sheet
+        this function mainly build the second sheet for data entry.
+        Input: an excel file with the complete data, and a dataframe with that same data to be processed for the data entry sheet
+
+        Adds the sheet to the workbook and saves it, doesnt return any data.
+        """
+
+        @dataclass
+        class ColInfo:
+            '''
+            contains the info for a single col used in a DataEntrySheet
+            '''
+            name: str # the colname as included in the sheet (e.g. 'manual_classification')
+            dropdown_options: str = '' # the options for the dropdown; if not applicable, an empty str
+            is_url: bool = False # format as url or not?
+            is_new: bool = False # if True, this col is not present in the original data
+            is_editable: bool = False # if True, this col can be edited
+            new_name: str = "" # if not empty, this col will be renamed to this name
+            default_val: str = "" # if 'is_new' is True, use this as the default value for the new col
+            @property
+            def has_dropdown(self) -> bool:
+                return len(self.dropdown_options) > 0
+
+        @dataclass
+        class DataEntrySheet:
+            '''
+            Use to add a dateentry sheet to an excel file.
+            Has functions to add data from dataframe, format as table, add datavalidation, and save
+            '''
+            sheet_name: str
+            cols: list[ColInfo] # a list with the cols in order of appearance from left to right
+            table_style: TableStyleInfo
+            workbook: openpyxl.Workbook
+            sheet: openpyxl.worksheet.worksheet.Worksheet = field(init=False)
+            file_path: str
+            max_row: int = 0
+
+            def __post_init__(self):
+                self.sheet = wb.create_sheet(self.sheet_name, index=1)
+
+            def add_data(self, data: pl.DataFrame) -> None:
+                self.max_row = data.shape[0]
+                colnum = 0
+                prefix = ''
+                for col in self.cols:
+                    colnum += 1
+                    if col.new_name:
+                        col_name = col.new_name
+                    else:
+                        col_name = col.name
+                    if col.is_new:
+                        # create new coldata
+                        col_data = [col.default_val] * self.max_row
+                    else:
+                        # retrieve coldata from dataframe
+                        col_data = data.select(pl.col(col.name)).to_series().to_list()
+                        if col.default_val != '':
+                            for item_num, item in enumerate(col_data):
+                                if item == '' or not item:
+                                    col_data[item_num] = col.default_val
+
+                    self.sheet.cell(1, colnum).value = col_name
+                    for row, cell_data in enumerate(col_data, start=2):
+                        self.sheet.cell(row, colnum).value = cell_data
+                        if col.is_url:
+                            self.sheet.cell(row, colnum).hyperlink = cell_data
+
+                for colnum, col in enumerate(self.cols):
+                    col_letter = chr(ord('A') + colnum)
+                    colnum += 1
+                    if col.has_dropdown:
+                        dv = openpyxl.worksheet.datavalidation.DataValidation(
+                            type="list", formula1=col.dropdown_options, allowBlank=True
+                        )
+                        dv.error = "Please select a valid option from the list"
+                        dv.errorTitle = "Invalid option"
+                        dv.prompt = "Please select from the list"
+                        dv.promptTitle = "List selection"
+                        self.sheet.add_data_validation(dv)
+                        if self.max_row == 1:
+                            dv.add(f"{col_letter}2")
+                        else:
+                            dv.add(f"{col_letter}2:{col_letter}{self.max_row+1}")
+
+            def create_table(self) -> None:
+                max_col_letter = chr(ord('A') + len(self.cols)-1)
+
+                table = ExcelTable(displayName=self.sheet_name.replace(' ',''), ref=f"A1:{max_col_letter}{self.max_row+1}")
+                table.tableStyleInfo = self.table_style
+                self.sheet.add_table(table)
+                self.workbook.save(filename=self.file_path)
+                info(f'Added data entry sheet with {self.max_row} rows to {self.file_path}')
+
+
+        wb = openpyxl.load_workbook(filename=str(file.path))
+        wb.active.title = "Complete data"
+
+        tabstyle = TableStyleInfo(
+            name=f"TableStyleMedium{self.style_iter}",
+            showRowStripes=True,
+        )
+        self.style_iter = self.style_iter + 1
+
+        sheet = DataEntrySheet(
+            workbook=wb,
+            sheet_name="Data entry",
+            cols = [
+                ColInfo("material_id"),
+                ColInfo("url", is_url=True),
+                ColInfo("workflow_status", is_new=True, is_editable=True, dropdown_options='"ToDo,Done,InProgress"', default_val="ToDo"),
+                ColInfo("manual_classification", is_editable=True, default_val="-", dropdown_options='"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,-"'),
+                ColInfo("remarks", is_editable=True),
+                ColInfo("ml_prediction"),
+                ColInfo("filename"),
+                ColInfo("title"),
+                ColInfo("owner", new_name='uploaded_by'),
+                ColInfo("author", new_name='detected_author'),
+                ColInfo("contact_name"),
+                ColInfo("contact_email"),
+                ColInfo("contact_org"),
+                ColInfo("osiris_catalogue_url", is_url=True),
+                ColInfo("course_name", new_name="course_name_canvas"),
+                ColInfo("department", new_name="programme_canvas"),
+                ColInfo("osiris_programme", new_name="programme_osiris"),
+                ColInfo("osiris_course_codes_found"),
+                ColInfo("osiris_course_code_data_selected"),
+            ],
+            table_style=tabstyle,
+            file_path=str(file.path),
+        )
+
+        sheet.add_data(data)
+        sheet.create_table()
+
+    def deprecated_finalize_sheet(self, file: File) -> None:
+        """
+        DEPRECATED!!!
         Add the data entry sheet to a fresh faculty excel file.
         This sheet will contain a selection of columns, will be styled,
         and contain dropdowns for data entry.
         """
+        warn('finalize_sheet is deprecated, please use new_finalize_sheet!!')
+        input('continue?')
 
         wb = openpyxl.load_workbook(filename=str(file.path))
         wb.active.title = "Complete data"
@@ -1039,47 +1180,6 @@ class EasyAccessTool:
         entry_sheet.add_table(table)
         wb.save(filename=str(file.path))
 
-    def style_region_as_table(self, sheet: openpyxl.worksheet.worksheet.Worksheet, table_name: str, max_row: int, max_col_letter: str, start_row: int = 1, start_col_letter: str = 'A', style: None | str = None) -> openpyxl.worksheet.worksheet.Worksheet:
-        '''
-        NOTE: This function is currently unused because it doesn't work properly during testing.
-        Functions needs fixing :)
-        Add an Excel Table including styling to a given sheet.
-
-        Returns the sheet with the table added.
-        Parameters:
-            sheet: openpyxl.worksheet.worksheet.Worksheet
-                The sheet to add the table to.
-            table_name: str
-                The name of the table.
-            max_row: int
-                The maximum row number of the table.
-            max_col_letter: str
-                The final col of the table
-            start_row: int, default 1
-                The row number to start the table at.
-            start_col_letter: str, default "A"
-                the col to start the table at.
-            style: str | None, default None
-                The number of the table style to use. If None, the next available style will be used (from style_iter).
-        '''
-        info(f'adding table to area {start_col_letter}{start_row}:{max_col_letter}{max_row} with name {table_name}')
-        table = ExcelTable(displayName=table_name, ref=f"{start_col_letter}{start_row}:{max_col_letter}{max_row}")
-
-        if not style:
-            style = self.style_iter
-            self.style_iter = self.style_iter + 1
-
-        style = f"TableStyleMedium{style}"
-        tabstyle = TableStyleInfo(
-            name=style,
-            showRowStripes=True,
-        )
-
-        info(f'adding table style {tabstyle}')
-        table.tableStyleInfo = tabstyle
-        info(f'Table info: {table}')
-        sheet.add_table(table)
-        return sheet
 
     def create_all_items_sheet(self) -> None:
         """
@@ -1789,7 +1889,7 @@ class EasyAccessTool:
             faculty_data = self.get_faculty_data(faculty)
             if faculty_data.is_empty():
                 continue
-            all_faculty_data = pl.concat([all_faculty_data, faculty_data])
+            all_faculty_data = pl.concat([all_faculty_data, faculty_data], how="diagonal_relaxed")
 
         return all_faculty_data.unique()
 
