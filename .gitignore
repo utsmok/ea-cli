@@ -5,6 +5,7 @@
 *.json
 *.ndjson
 *.db
+*.parquet
 
 # documents
 *.doc
