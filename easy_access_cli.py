@@ -2245,29 +2245,17 @@ class EasyAccessTool:
             df_merged=full_df
 
 
-        # First, check if stored_df has the col 'last_sheet_update'. If not, skip.
         if df_merged.is_empty():
             if 'last_sheet_update' not in stored_df.columns:
                 info(f'stored_df has no last_sheet_update data. Overwriting stored data with new data')
                 df_merged = full_df
             else:
 
-                # For each material_id, check for a value in col 'last_sheet_update' in stored_df. If missing, keep full_df row as is.
-                # Otherwise:
-                # for each material_id present in both full_df & stored_df, compare that row on cols:
-                #   'manual_classification', 'remarks', 'workflow_status', 'retrieved_from_copyright_on', 'last_change', and 'status'.
-                #
-                #
-                # if all values in those cols are identical:
-                #   overwrite col 'last_sheet_update' in full_df with the row from stored_df.
-                # if any cell in those cols in full_df is empty but filled in stored_df:
-                #    overwrite entire row in full_df with the row from stored_df
-                # else:
-                #   eep the full_df row as is
-                #
-                # in the end, full_df should contain all the rows we want to save.
                 compare_cols = ['manual_classification', 'remarks', 'workflow_status', 'retrieved_from_copyright_on', 'last_change','status']
                 full_df = full_df.with_columns() #...finish this
+                # This expression should make sure data from full_df is kept if it contains updated info.
+                # Rows that have remained the same or are missing data are not updated; i.e. keep the stored_df row.
+
                 df_merged = (
                     full_df
                     .join(stored_df, on="material_id", how="left", suffix="_stored")
