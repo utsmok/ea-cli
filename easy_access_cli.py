@@ -109,14 +109,17 @@ class Directory:
     If the dir does not yet exist, it will be created. Disable this by setting the 'create_dir' parameter to False.
     """
     full: pathlib.Path
-    def __init__(self, path: str, create_dir: bool = True):
-
-        self.input_path_str = path
+    def __init__(self, path: str | pathlib.Path, create_dir: bool = True):
+        if isinstance(path, pathlib.Path):
+            self.input_path_str = str(path)
+        else:
+            self.input_path_str = path
+            path = pathlib.Path(path)
         self.create_dir = create_dir
 
         # check if the path is absolute
-        if pathlib.Path(path).is_absolute():
-            self.full = pathlib.Path(path)
+        if path.is_absolute():
+            self.full = path
         else:
             self.full = pathlib.Path.cwd() / path
 
@@ -282,8 +285,19 @@ class File:
         shutil.copy(self._path, new_path)
         return File(new_path)
 
-    def move(self, new_path: str) -> "File":
-        shutil.move(self._path, new_path)
+    def move(self, new_path: str | pathlib.Path) -> "File":
+        '''
+        Moves the file to the indicated new path.
+        If the
+        '''
+        if isinstance(new_path, str):
+            new_path = pathlib.Path(new_path)
+        if new_path.exists():
+            if '.' in new_path:
+                new_path = new_path.split(".")[0]+"_" +str(int(time.time()))+new_path.split(".")[1]
+            else:
+                new_path = new_path+"_" +str(int(time.time()))
+        shutil.move(self._path, str(new_path.absolute()))
         return File(new_path)
 
     def rename(self, new_name: str) -> "File":
@@ -362,6 +376,12 @@ def cli(
             rich_help_panel="Read in data from alternate source",
         ),
     ] = None,
+    retrieve_all: Annotated[
+        bool,
+        typer.Option(
+        help="If enabled, will retrieve all data from folders where users can enter data, and store it as a parquet file.",
+        rich_help_panel='Functions'
+        )] = False,
 ):
     """
     Runs the Easy Access toolkit with the specified settings.\n
@@ -436,14 +456,13 @@ def cli(
     }
 
     tool = EasyAccessTool(
-        functions=do, only_changes=changes, dirs=dirs, other_sheet=other_sheet, save_files=save, refresh_osiris_data=osiris_update
+        functions=do, only_changes=changes, dirs=dirs, other_sheet=other_sheet, save_files=save, refresh_osiris_data=osiris_update, retrieve_all=retrieve_all
     )
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
 
 class EasyAccessTool:
-
 
     """
     This class contains all the actual functionality of the script.
@@ -461,6 +480,7 @@ class EasyAccessTool:
         "copyright_import": Directory(os.getenv("COPYRIGHT_IMPORT_DIR")),
         "all_items": Directory(os.getenv("ALL_ITEMS_DIR")),
         "faculties": Directory(os.getenv("FACULTIES_DIR")),
+        "overviews_backup": Directory(os.getenv("OVERVIEWS_BACKUP_DIR")),
     }
 
 
@@ -553,7 +573,8 @@ class EasyAccessTool:
         only_changes: bool = True,
         other_sheet: str | None = None,
         save_files: bool = True,
-        refresh_osiris_data: bool = False
+        refresh_osiris_data: bool = False,
+        retrieve_all: bool = False,
     ) -> None:
         """
         Parameters:
@@ -578,6 +599,10 @@ class EasyAccessTool:
         self.enrich_with_osiris_data = True # set to False to disable enriching the data with OSIRIS data
         self.refresh_osiris_data = refresh_osiris_data # set to False to disable pulling in new data from osiris / people page
         # determine which functions to run
+
+        if retrieve_all:
+            self.retrieve_all_data()
+
         # first check if we need to read in copyRight data (default), or other sheets
 
         if other_sheet:
@@ -1091,105 +1116,6 @@ class EasyAccessTool:
         sheet.add_data(data)
         sheet.create_table()
 
-    def deprecated_finalize_sheet(self, file: File) -> None:
-        """
-        DEPRECATED!!!
-        Add the data entry sheet to a fresh faculty excel file.
-        This sheet will contain a selection of columns, will be styled,
-        and contain dropdowns for data entry.
-        """
-        warn('finalize_sheet is deprecated, please use new_finalize_sheet!!')
-        input('continue?')
-
-        wb = openpyxl.load_workbook(filename=str(file.path))
-        wb.active.title = "Complete data"
-
-        # Create the Data Entry sheet
-        # -----------------------------
-
-        entry_sheet: openpyxl.worksheet.worksheet.Worksheet = wb.create_sheet(
-            "Data entry", index=1
-        )
-
-        keep_cols = [6, 34, 14, 16, 17, 13, 1, 7, 8, 9, 28, 3, 5, ""]
-        col_names = [
-            "url",
-            "workflow_status",
-            "manual_classification",
-            "scope",
-            "remarks",
-            "ml_prediction",
-            "material_id",
-            "filename",
-            "title",
-            "owner",
-            "author",
-            "department",
-            "course_name",
-        ]
-        max_row = 0
-        url = False
-        max_col_letter = None
-        for new_col, old in enumerate(keep_cols, start=1):
-            if isinstance(old, str):
-                break
-            else:
-                if not max_col_letter:
-                    max_col_letter = "A"
-                else:
-                    max_col_letter = chr(ord(max_col_letter) + 1)
-            for row, cell in enumerate(
-                wb.active.iter_rows(min_col=old, max_col=old, values_only=True), start=1
-            ):
-                if row == 1 and cell[0] == "url":
-                    url = True
-                elif row == 1:
-                    url = False
-
-                if not url:
-                    entry_sheet.cell(row=row, column=new_col).value = cell[0]
-                else:
-                    entry_sheet.cell(row=row, column=new_col).hyperlink = cell[0]
-                if row > max_row:
-                    max_row = row
-
-        for col, name in enumerate(col_names, start=1):
-            entry_sheet.cell(row=1, column=col, value=name)
-
-        # Dropdown items for certain cells
-        # -----------------------------------
-        dropdowndata = [
-            (2, "B", '"ToDo,Done,InProgress"'),  # workflow status
-            (
-                3,
-                "C",
-                '"open access, eigen materiaal - powerpoint, eigen materiaal - overig, lange overname, eigen materiaal - titelindicatie"',
-            ),  # manual classification
-        ]
-        for colnum, col_letter, itemlist in dropdowndata:
-            dv = openpyxl.worksheet.datavalidation.DataValidation(
-                type="list", formula1=itemlist, allow_blank=False
-            )
-            dv.error = "Please select a valid option from the list"
-            dv.errorTitle = "Invalid option"
-            dv.prompt = "Please select from the list"
-            dv.promptTitle = "List selection"
-            entry_sheet.add_data_validation(dv)
-            dv.add(f"{col_letter}2:{col_letter}{max_row}")
-
-        # Style as table
-        # -----------------
-        table = ExcelTable(displayName="DataEntry", ref=f"A1:{max_col_letter}{max_row}")
-        tabstyle = TableStyleInfo(
-            name=f"TableStyleMedium{self.style_iter}",
-            showRowStripes=True,
-        )
-        self.style_iter = self.style_iter + 1
-        table.tableStyleInfo = tabstyle
-        entry_sheet.add_table(table)
-        wb.save(filename=str(file.path))
-
-
     def create_all_items_sheet(self) -> None:
         """
         Add all items in the current Copyright data to a single sheet.
@@ -1203,13 +1129,6 @@ class EasyAccessTool:
             if not self.disable_writes:
                 self.copyright_data.write_excel(self.dirs["all_items"].full / filename)
                 info(f"Created sheet: {self.dirs['all_items'].full / filename}")
-
-    def read_faculty_sheets(self, include_overview: bool = True) -> None:
-        """
-        Reads in all data from all sheets in the faculties dir
-        and stores it in self.faculty_sheet_data as a single concatted dataframe.
-        """
-        self.faculty_sheet_data = self.get_all_faculty_data(include_overview=include_overview)
 
     def read_all_items_sheets(self) -> None:
         """
@@ -1226,7 +1145,6 @@ class EasyAccessTool:
         file_data = []
         for file in files:
             if file.extension not in [".xls", ".xlsx"]:
-                warn(f"{file.path} is not an excel file, skipping.")
                 continue
             if 'overview' in file.name:
                 info(f'skipping {file.path}')
@@ -1320,6 +1238,348 @@ class EasyAccessTool:
                 warn(f'Error in determine_course_code: {e}')
                 return tempresults
 
+    def read_faculty_sheets(self, include_overview: bool = True) -> None:
+        """
+        Reads in all data from all sheets in the faculties dir
+        and stores it in self.faculty_sheet_data as a single concatted dataframe.
+        """
+        self.faculty_sheet_data = self.get_all_faculty_data(include_overview=include_overview)
+
+    def get_all_faculty_data(self, include_overview: bool = True) -> pl.DataFrame:
+        """
+        Read in all available faculty sheets
+        and merge the 'complete data' and 'data entry' sheets for each one.
+        concat all the data into a single dataframe and return it.
+        """
+        all_faculty_data = pl.DataFrame()
+        for faculty in self.faculties:
+            info(f'getting data for faculty {faculty}')
+            faculty_data = self.get_faculty_data(faculty, include_overview=include_overview)
+            if faculty_data.is_empty():
+                continue
+            all_faculty_data = pl.concat([all_faculty_data, faculty_data], how="diagonal_relaxed")
+
+        return all_faculty_data.unique()
+
+    def get_faculty_data(self, faculty: str, del_overview: bool = False, include_overview: bool = True) -> pl.DataFrame:
+        """
+        for a given faculty, read in all available faculty sheets
+        and merge the 'complete data' and 'data entry' sheets for each one.
+        concat all the data into a single dataframe and return it.
+
+        Parameters:
+            faculty: str
+                the faculty to get the data for. Will scan through all sheets in path self.dirs['faculties'].full / faculty.
+            del_overview: bool
+                if True, delete the existing overview sheets for this faculty.
+        """
+        def join_coalesce_all(df1: pl.DataFrame, df2: pl.DataFrame, on: str, prefer_right=set()) -> pl.DataFrame:
+            to_coalesce = set(df1.columns) & set(df2.columns) - set([on])
+            coalesced = {c: pl.coalesce(pl.col(c + "_right"), pl.col(c))
+                            if c in prefer_right else
+                            pl.coalesce(pl.col(c), pl.col(c + "_right"))
+                        for c in to_coalesce}
+            return (
+                df1.join(df2, on=on, how="full", suffix="_right")
+                    .with_columns(**coalesced)
+                    .drop([c + "_right" for c in to_coalesce])
+                    .drop(['material_id_right'])
+            )
+
+        if faculty is None or faculty == "":
+            return pl.DataFrame()
+
+        faculty_dir = Directory(self.dirs["faculties"].full / faculty)
+        faculty_files = faculty_dir.files_r
+
+        all_faculty_data = pl.DataFrame()
+
+        prefer_overview_cols = False # set to True to give edits in total_overview file higher priority than edits in each weekly faculty excel
+
+        total_overview = pl.DataFrame()
+        overview_file: File = None
+        latest_mod_date = None
+        if include_overview:
+            for file in faculty_files:
+                if 'total_overview' in file.name and faculty in file.name:
+                    try:
+                        total_overview_complete = pl.read_excel(file.path, sheet_name="Complete data")
+                        total_overview_data_entry = pl.read_excel(file.path, sheet_name="Data entry")
+                        total_overview = join_coalesce_all(total_overview_complete, total_overview_data_entry, on="material_id", prefer_right=set(total_overview_data_entry.columns) - {"material_id"})
+                    except ValueError:
+                        total_overview = pl.read_excel(file.path)
+
+                    overview_file = file
+        for file in faculty_files:
+            if file.extension not in [".xls", ".xlsx"]:
+                continue
+            elif 'overview' in file.name:
+                continue
+            else:
+                latest_mod_date = file.modified if latest_mod_date is None else max(latest_mod_date, file.modified)
+                full_data = pl.read_excel(file.path, sheet_name="Complete data")
+                data_entry = pl.read_excel(file.path, sheet_name="Data entry")
+
+                full_data = self.validate_ea_sheet(full_data, file)
+                data_entry = self.validate_ea_sheet(data_entry, file)
+
+
+                # merge data_entry into full_data on column material_id.
+                # data from data_entry will overwrite data from full_data
+                # if a col is present in data_entry, but not in full_data, it will be added
+                # keep the columns in full_data that are not in data_entry
+
+                merged_data = join_coalesce_all(full_data, data_entry, on="material_id", prefer_right=set(data_entry.columns) - {"material_id"})
+                merged_data = merged_data.unique(subset="material_id")
+                all_faculty_data = pl.concat([all_faculty_data, merged_data], how="diagonal_relaxed")
+                all_faculty_data = all_faculty_data.unique(subset="material_id")
+
+        if not total_overview.is_empty():
+            if (latest_mod_date < overview_file.modified) and (not prefer_overview_cols):
+                info(f'Latest mod date for overview is newer than latest mod date for any other sheet for {faculty}.')
+                all_overview_man_class = total_overview.select(pl.col("manual_classification")).to_series().to_list()
+                all_overview_man_class = [i for i in all_overview_man_class if i not in [None, '', '-',' ']]
+                all_faculty_data_man_class = all_faculty_data.select(pl.col("manual_classification")).to_series().to_list()
+                all_faculty_data_man_class = [i for i in all_faculty_data_man_class if i not in [None, '', '-',' ']]
+                print(f'{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data.')
+                if len(all_faculty_data_man_class) < len(all_overview_man_class):
+                    print(f'all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}.')
+                    prefer_overview_cols = True
+            if prefer_overview_cols:
+                preffered_cols = set(total_overview.columns) - {"material_id"}
+                all_faculty_data = join_coalesce_all(all_faculty_data, total_overview, on="material_id", prefer_right=preffered_cols)
+            else:
+                preffered_cols = set(all_faculty_data.columns) - {"material_id"}
+                all_faculty_data = join_coalesce_all(total_overview, all_faculty_data, on="material_id", prefer_right=preffered_cols)
+            all_faculty_data = all_faculty_data.unique(subset="material_id")
+
+        overview_fac_dir = Directory(self.dirs['overviews_backup'].full / faculty)
+
+        if del_overview:
+            if overview_file:
+                overview_file.move( overview_fac_dir.full / overview_file.name)
+            else:
+                for file in faculty_files:
+                    if 'total_overview' in file.name and faculty in file.name:
+                        file.move(overview_fac_dir.full / file.name)
+                        break
+        return all_faculty_data
+
+    def create_faculty_overview(self) -> None:
+        """
+        per faculty:
+        Read in all available faculty sheets
+        use this data to generate a single sheet with 'complete data' for all items in the faculty,
+        PLUS create an overview (a pdf maybe?) with calculated data, e.g.:
+            - number of items per classification
+            - expected fine
+            - ...
+        """
+
+        def create_programme_overviews(faculty: str) -> None:
+            """
+            also create an overview sheet for each programme
+            if applicable
+            """
+            all_faculty_data = self.get_faculty_data(faculty)
+            course_to_group: dict[str,str] = self.COURSE_MAPPING[faculty]
+            data: list[dict[str,pl.DataFrame]] = []
+
+            for course, group in course_to_group.items():
+                programme_data = all_faculty_data.filter(pl.col("department") == course)
+                if programme_data.is_empty():
+                    continue
+                else:
+                    programme_data = programme_data.with_columns(
+                        pl.col('pages_x_students').cast(pl.Int32).mul(self.fine_amount).alias('possible_fine')
+                    )
+                    programme_data = programme_data.with_columns(
+                        infringement=pl.when(pl.col("manual_classification").is_null() |
+                                            (pl.col("manual_classification") == "") |
+                                            (pl.col("manual_classification") == "-"))
+                                        .then(pl.lit("undetermined"))
+                                        .when(pl.col("manual_classification").str.to_lowercase().str.contains("open|eigen|overig|deleted"))
+                                        .then(pl.lit("no"))
+                                        .when(pl.col("manual_classification").str.to_lowercase().str.contains("lange"))
+                                        .then(pl.lit("yes"))
+                                        .otherwise(pl.lit("maybe"))
+                    )
+                    data.append({'group':group, 'data': programme_data})
+
+
+            final_data: dict[str,pl.DataFrame] = {}
+            for item in data:
+                info(f'group: {item.get("group")} --> + {item.get("data").shape[0]} items')
+                if item.get('group') in final_data:
+                    final_data[item.get('group')] = pl.concat([final_data[item.get('group')], item['data']])
+                else:
+                    final_data[item.get('group')] = item['data']
+            # add columns:
+            # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount
+
+            # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
+            # based on the value in 'manual_classification'
+            # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
+            # if the str in 'manual_classification' contains 'open' or 'eigen': set no 'no'
+            # if 'lange overname' is in 'manual_classification': set 'yes'
+            # else set to 'maybe'
+
+
+            # calculate the total possible fine by adding up all values in the 'possible_fine' column
+            # for all items that do not have 'no' in the 'infringement' column
+            overview_fac_programme_dir = Directory(self.dirs['overviews_backup'].full / faculty / "per_programme")
+            for groupname, df in final_data.items():
+                if not self.disable_writes:
+                    for file in Directory(self.dirs['faculties'].full / faculty / "per_programme").files:
+                        if file.extension not in [".xls", ".xlsx"]:
+                            continue
+                        if 'overview' in file.name and groupname in file.name:
+                            file.move( overview_fac_programme_dir.full / file.name)
+                            continue
+                print(f'{groupname} has {df.shape[0]} items')
+                programme_file = File(self.dirs['faculties'].full / faculty / "per_programme" / f'{groupname}_total_overview_updated_{today}.xlsx')
+                if not self.disable_writes:
+                    info(f'saving file with {df.shape[0]} rows to {programme_file.path}')
+                    programme_data.write_excel(programme_file.path)
+                else:
+                    info(f'writing is disabled')
+
+        # loop over the faculties
+        # for each, read in all data and store
+        overview_data: list[dict] = []
+        today = datetime.now().strftime("%Y-%m-%d_%H_%M")
+        self.faculties.sort()
+        for faculty in self.faculties:
+            if faculty in self.COURSE_MAPPING:
+                create_programme_overviews(faculty)
+            fac_data = {'faculty': faculty}
+            all_faculty_data = self.get_faculty_data(faculty, del_overview=True)
+
+            # add columns:
+            # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount
+            if all_faculty_data.is_empty():
+                continue
+
+            all_faculty_data = all_faculty_data.with_columns(
+                pl.col('pages_x_students').cast(pl.Int32).mul(self.fine_amount).alias('possible_fine')
+            )
+
+            # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
+            # based on the value in 'manual_classification'
+            # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
+            # if the str in 'manual_classification' contains 'open' or 'eigen': set no 'no'
+            # if 'lange overname' is in 'manual_classification': set 'yes'
+            # else set to 'maybe'
+
+            all_faculty_data = all_faculty_data.with_columns(
+                infringement=pl.when(pl.col("manual_classification").is_null() |
+                                    (pl.col("manual_classification") == "") |
+                                    (pl.col("manual_classification") == "-"))
+                                .then(pl.lit("undetermined"))
+                                .when(pl.col("manual_classification").str.to_lowercase().str.contains("open|eigen|overig|deleted"))
+                                .then(pl.lit("no"))
+                                .when(pl.col("manual_classification").str.to_lowercase().str.contains("lange"))
+                                .then(pl.lit("yes"))
+                                .otherwise(pl.lit("maybe"))
+            )
+
+            # calculate the total possible fine by adding up all values in the 'possible_fine' column
+            # for all items that do not have 'no' in the 'infringement' column
+
+            total_possible_fine = all_faculty_data.filter(pl.col("infringement") != "no").select(pl.sum('possible_fine')).to_series().to_list()[0]
+            definitive_fine = all_faculty_data.filter(pl.col("infringement") == "yes").select(pl.sum('possible_fine')).to_series().to_list()[0]
+            locale.setlocale(locale.LC_ALL, 'nl_NL.utf8')
+            fac_data['total_possible_fine'] = str(locale.currency(total_possible_fine, grouping=True, symbol=True))
+            fac_data['definitive_fine']= str(locale.currency(definitive_fine, grouping=True, symbol=True))
+            fac_data['items_total'] = str(all_faculty_data.shape[0])
+            fac_data['possible_infringements'] = str(all_faculty_data.filter(pl.col("infringement") != "no").shape[0])
+            fac_data['definitive_infringements'] = str(all_faculty_data.filter(pl.col("infringement") == "yes").shape[0])
+            fac_data['definitive_non_infringements'] = str(all_faculty_data.filter(pl.col("infringement") == "no").shape[0])
+            fac_data['items_without_man_cl'] = str(all_faculty_data.filter(pl.col("infringement") == "undetermined").shape[0])
+            fac_data['items_to_do'] = str(all_faculty_data.filter(pl.col("workflow_status") == "ToDo").shape[0])
+            overview_data.append(fac_data)
+            fac_file = File(self.dirs['faculties'].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
+            info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
+            if not self.disable_writes:
+                all_faculty_data.write_excel(fac_file.path)
+                self.finalize_sheet(fac_file, all_faculty_data)
+            locale.setlocale(locale.LC_ALL, '')
+
+        # now we have the data for all faculties, and written the excel files to disk.
+        # print the overview table to the console, and export it as an html file to the faculties/overviews dir.
+        cons = Console(record=True)
+
+        datatable = Table(title=f'Faculty Overview {today}')
+        datatable.add_column('Faculty', justify='right', style='yellow bold')
+        datatable.add_column('Probable fine', justify='left', style='red bold')
+        datatable.add_column('Max fine', justify='left')
+        datatable.add_column('Items total', justify='center', style='cyan bold')
+        datatable.add_column('Infringements', justify='center')
+        datatable.add_column('Non-infringements', justify='center')
+        datatable.add_column('To be classified', justify='center', style='magenta bold')
+        datatable.add_column('To do', justify='center', style='magenta bold')
+        factable = copy.deepcopy(datatable)
+        for fac in overview_data:
+            # save html overview for each faculty in their dir
+            # also add that data to the overview html
+            cur_fac_table = copy.deepcopy(factable)
+            cur_fac_table.add_row(fac['faculty'],
+                            fac['definitive_fine'],
+                            fac['total_possible_fine'],
+                            fac['items_total'],
+                            fac['definitive_infringements']+f" ({int(fac['definitive_infringements'])/int(fac['items_total'])*100:.0f}%)",
+                            fac['definitive_non_infringements']+f" ({int(fac['definitive_non_infringements'])/int(fac['items_total'])*100:.0f}%)",
+                            fac['items_without_man_cl']+f" ({int(fac['items_without_man_cl'])/int(fac['items_total'])*100:.0f}%)",
+                            fac['items_to_do'] + f" ({int(fac['items_to_do'])/int(fac['items_total'])*100:.0f}%)"
+            )
+            cons.print(cur_fac_table)
+            cons.print('''Explanation of columns:
+
+                - [yellow bold]Faculty[/yellow bold]: the abbreviation of the faculty -- all data is per faculty
+                - [red bold]Probable fine[/red bold]: the sum of all fines for items that are manually classified as 'lange overname'
+                - [bold]Max fine[/bold]: the sum of all fines for all items except those manually classified as 'eigen materiaal' or 'open access'
+                - [cyan bold]Items total[/cyan bold]: the total number of items selected by the 'CopyRight tool' (i.e. all pdfs with 40+ pages)
+                - [bold]Infringements[/bold]: the number of items that are manually classified as 'lange overname' -- plus as a percentage of total number of items
+                - [bold]Non-infringements[/bold]: the number of items manually classified as 'eigen materiaal' or 'open access' -- plus as a percentage of total number of items
+                - [magenta bold]To be classified[/magenta bold]: the number of items that are not yet manually classified -- plus as a percentage of total number of items
+                ''')
+            facdir = Directory(self.dirs['faculties'].full / fac['faculty'])
+            # delete any old html files
+            if not self.disable_writes:
+
+                for file in facdir.files:
+                    if file.name.endswith('.html'):
+                        file.delete()
+
+                cons.save_html(facdir.full / f'summary_{today}.html', theme=SVG_EXPORT_THEME)
+
+            datatable.add_row(fac['faculty'],
+                            fac['definitive_fine'],
+                            fac['total_possible_fine'],
+                            fac['items_total'],
+                            fac['definitive_infringements']+f" ({int(fac['definitive_infringements'])/int(fac['items_total'])*100:.0f}%)",
+                            fac['definitive_non_infringements']+f" ({int(fac['definitive_non_infringements'])/int(fac['items_total'])*100:.0f}%)",
+                            fac['items_without_man_cl']+f" ({int(fac['items_without_man_cl'])/int(fac['items_total'])*100:.0f}%)",
+                            fac['items_to_do'] + f" ({int(fac['items_to_do'])/int(fac['items_total'])*100:.0f}%)"
+
+                        )
+
+        # now save the complete table to all_items
+
+        cons.print(datatable)
+        cons.print('''Explanation of columns:
+
+                - [yellow bold]Faculty[/yellow bold]: Faculty abbreviation
+                - [red bold]Probable fine[/red bold]: Total fine for items that have 'lange overname' as manual classification
+                - [bold]Max fine[/bold]: Total fine for all items excluding items manually classified as 'eigen materiaal' or 'open access'
+                - [cyan bold]Items total[/cyan bold]: Total amount of 'lange overnames' found by the 'CopyRight tool' (all pdfs with 40+ pages)
+                - [bold]Infringements[/bold]: Items manually classified as 'lange overname', (% of total)
+                - [bold]Non-infringements[/bold]: Items manually classified as 'eigen materiaal' or 'open access', (% of total)
+                - [magenta bold]To be classified[/magenta bold]: Items not yet manually classified, (% of total)
+                - [magenta bold]To do[/magenta bold]: Items in need of action by faculty, (% of total)
+                ''')
+        if not self.disable_writes:
+            cons.save_html(self.dirs['all_items'].full / f'faculty_overview_{today}.html', theme=SVG_EXPORT_THEME)
 
     async def update_osiris_data(self, df: pl.DataFrame) -> None:
         """
@@ -1879,339 +2139,178 @@ class EasyAccessTool:
         info('Enriched df with OSIRIS data.')
         return df
 
-    def get_all_faculty_data(self, include_overview: bool = True) -> pl.DataFrame:
+    def retrieve_all_data(self) -> pl.DataFrame:
         """
-        Read in all available faculty sheets
-        and merge the 'complete data' and 'data entry' sheets for each one.
-        concat all the data into a single dataframe and return it.
+        Goes through all files to retrieve all available data.
+        Then, for each material_id, grab only unique rows.
+        Keep track of where the data came from.
+
+        Returns a dataframe with all unique rows including provenance.
         """
-        all_faculty_data = pl.DataFrame()
-        for faculty in self.faculties:
-            info(f'getting data for faculty {faculty}')
-            faculty_data = self.get_faculty_data(faculty, include_overview=include_overview)
-            if faculty_data.is_empty():
-                continue
-            all_faculty_data = pl.concat([all_faculty_data, faculty_data], how="diagonal_relaxed")
+        found_dfs = dict()
+        today = f'{datetime.now().isoformat(sep=' ', timespec='minutes')}'
+        cool("Retrieving all data. Please wait, this can take a while.")
+        numfiles = 0
+        dirs = {
+            'faculties': self.dirs.get('faculties'),
+            'all_items': self.dirs.get('all_items')
+        }
 
-        return all_faculty_data.unique()
+        for name, dir in dirs.items():
 
-    def get_faculty_data(self, faculty: str, del_overview: bool = False, include_overview: bool = True) -> pl.DataFrame:
-        """
-        for a given faculty, read in all available faculty sheets
-        and merge the 'complete data' and 'data entry' sheets for each one.
-        concat all the data into a single dataframe and return it.
-
-        Parameters:
-            faculty: str
-                the faculty to get the data for. Will scan through all sheets in path self.dirs['faculties'].full / faculty.
-            del_overview: bool
-                if True, delete the existing overview sheets for this faculty.
-        """
-        def join_coalesce_all(df1: pl.DataFrame, df2: pl.DataFrame, on: str, prefer_right=set()) -> pl.DataFrame:
-            to_coalesce = set(df1.columns) & set(df2.columns) - set([on])
-            coalesced = {c: pl.coalesce(pl.col(c + "_right"), pl.col(c))
-                            if c in prefer_right else
-                            pl.coalesce(pl.col(c), pl.col(c + "_right"))
-                        for c in to_coalesce}
-            return (
-                df1.join(df2, on=on, how="full", suffix="_right")
-                    .with_columns(**coalesced)
-                    .drop([c + "_right" for c in to_coalesce])
-                    .drop(['material_id_right'])
-            )
-
-        if faculty is None or faculty == "":
-            return pl.DataFrame()
-
-        faculty_dir = Directory(self.dirs["faculties"].full / faculty)
-        faculty_files = faculty_dir.files_r
-
-        all_faculty_data = pl.DataFrame()
-
-        prefer_overview_cols = False # set to True to give edits in total_overview file higher priority than edits in each weekly faculty excel
-
-        total_overview = pl.DataFrame()
-        overview_file: File = None
-        latest_mod_date = None
-        if include_overview:
-            for file in faculty_files:
-                if 'total_overview' in file.name and faculty in file.name:
-                    try:
-                        total_overview_complete = pl.read_excel(file.path, sheet_name="Complete data")
-                        total_overview_data_entry = pl.read_excel(file.path, sheet_name="Data entry")
-                        total_overview = join_coalesce_all(total_overview_complete, total_overview_data_entry, on="material_id", prefer_right=set(total_overview_data_entry.columns) - {"material_id"})
-                    except ValueError:
-                        total_overview = pl.read_excel(file.path)
-
-                    overview_file = file
-        for file in faculty_files:
-            if file.extension not in [".xls", ".xlsx"]:
-                continue
-            elif 'overview' in file.name:
-                continue
-            else:
-                latest_mod_date = file.modified if latest_mod_date is None else max(latest_mod_date, file.modified)
-                full_data = pl.read_excel(file.path, sheet_name="Complete data")
-                data_entry = pl.read_excel(file.path, sheet_name="Data entry")
-
-                full_data = self.validate_ea_sheet(full_data, file)
-                data_entry = self.validate_ea_sheet(data_entry, file)
-
-
-                # merge data_entry into full_data on column material_id.
-                # data from data_entry will overwrite data from full_data
-                # if a col is present in data_entry, but not in full_data, it will be added
-                # keep the columns in full_data that are not in data_entry
-
-                merged_data = join_coalesce_all(full_data, data_entry, on="material_id", prefer_right=set(data_entry.columns) - {"material_id"})
-                merged_data = merged_data.unique(subset="material_id")
-                all_faculty_data = pl.concat([all_faculty_data, merged_data], how="diagonal_relaxed")
-                all_faculty_data = all_faculty_data.unique(subset="material_id")
-
-        if not total_overview.is_empty():
-            if (latest_mod_date < overview_file.modified) and (not prefer_overview_cols):
-                info(f'Latest mod date for overview is newer than latest mod date for any other sheet for {faculty}.')
-                all_overview_man_class = total_overview.select(pl.col("manual_classification")).to_series().to_list()
-                all_overview_man_class = [i for i in all_overview_man_class if i not in [None, '', '-',' ']]
-                all_faculty_data_man_class = all_faculty_data.select(pl.col("manual_classification")).to_series().to_list()
-                all_faculty_data_man_class = [i for i in all_faculty_data_man_class if i not in [None, '', '-',' ']]
-                print(f'{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data.')
-                if len(all_faculty_data_man_class) < len(all_overview_man_class):
-                    print(f'all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}.')
-                    prefer_overview_cols = True
-            if prefer_overview_cols:
-                preffered_cols = set(total_overview.columns) - {"material_id"}
-                all_faculty_data = join_coalesce_all(all_faculty_data, total_overview, on="material_id", prefer_right=preffered_cols)
-            else:
-                preffered_cols = set(all_faculty_data.columns) - {"material_id"}
-                all_faculty_data = join_coalesce_all(total_overview, all_faculty_data, on="material_id", prefer_right=preffered_cols)
-            all_faculty_data = all_faculty_data.unique(subset="material_id")
-
-        if del_overview:
-            if overview_file:
-                overview_file.delete()
-            else:
-                for file in faculty_files:
-                    if 'total_overview' in file.name and faculty in file.name:
-                        file.delete()
-                        break
-        return all_faculty_data
-
-    def create_faculty_overview(self) -> None:
-        """
-        per faculty:
-        Read in all available faculty sheets
-        use this data to generate a single sheet with 'complete data' for all items in the faculty,
-        PLUS create an overview (a pdf maybe?) with calculated data, e.g.:
-            - number of items per classification
-            - expected fine
-            - ...
-        """
-
-        def create_programme_overviews(faculty: str) -> None:
-            """
-            also create an overview sheet for each programme
-            if applicable
-            """
-            all_faculty_data = self.get_faculty_data(faculty)
-            course_to_group: dict[str,str] = self.COURSE_MAPPING[faculty]
-            data: list[dict[str,pl.DataFrame]] = []
-
-            for course, group in course_to_group.items():
-                programme_data = all_faculty_data.filter(pl.col("department") == course)
-                if programme_data.is_empty():
+            cur_df = pl.DataFrame()
+            for file in dir.files_r:
+                if file.extension not in ['.xls', '.xlsx', '.csv']:
                     continue
-                else:
-                    programme_data = programme_data.with_columns(
-                        pl.col('pages_x_students').cast(pl.Int32).mul(self.fine_amount).alias('possible_fine')
-                    )
-                    programme_data = programme_data.with_columns(
-                        infringement=pl.when(pl.col("manual_classification").is_null() |
-                                            (pl.col("manual_classification") == "") |
-                                            (pl.col("manual_classification") == "-"))
-                                        .then(pl.lit("undetermined"))
-                                        .when(pl.col("manual_classification").str.to_lowercase().str.contains("open|eigen|overig|deleted"))
-                                        .then(pl.lit("no"))
-                                        .when(pl.col("manual_classification").str.to_lowercase().str.contains("lange"))
-                                        .then(pl.lit("yes"))
-                                        .otherwise(pl.lit("maybe"))
-                    )
-                    data.append({'group':group, 'data': programme_data})
+                if file.extension in ['.xls', '.xlsx']:
+                    try:
+                        file_content = pl.read_excel(file.path, sheet_id = 0)
+                        numfiles += 1
+                    except Exception as e:
+                        print(f'Couldnt read file {file.path}: {e}')
+                        continue
 
+                    if not isinstance(file_content, dict):
+                        file_content = {'sheet1':file_content}
 
-            final_data: dict[str,pl.DataFrame] = {}
-            for item in data:
-                info(f'group: {item.get("group")} --> + {item.get("data").shape[0]} items')
-                if item.get('group') in final_data:
-                    final_data[item.get('group')] = pl.concat([final_data[item.get('group')], item['data']])
-                else:
-                    final_data[item.get('group')] = item['data']
-            # add columns:
-            # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount
-
-            # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
-            # based on the value in 'manual_classification'
-            # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
-            # if the str in 'manual_classification' contains 'open' or 'eigen': set no 'no'
-            # if 'lange overname' is in 'manual_classification': set 'yes'
-            # else set to 'maybe'
-
-
-            # calculate the total possible fine by adding up all values in the 'possible_fine' column
-            # for all items that do not have 'no' in the 'infringement' column
-
-            for groupname, df in final_data.items():
-                if not self.disable_writes:
-                    for file in Directory(self.dirs['faculties'].full / faculty / "per_programme").files:
-                        if file.extension not in [".xls", ".xlsx"]:
+                    for dataframe in file_content.values():
+                        dataframe = dataframe.with_columns(pl.lit(str(file.name)).alias('from_file'))
+                        if cur_df.is_empty():
+                            cur_df = dataframe
                             continue
-                        if 'overview' in file.name and groupname in file.name:
-                            file.delete()
-                            continue
-                print(f'{groupname} has {df.shape[0]} items')
-                programme_file = File(self.dirs['faculties'].full / faculty / "per_programme" / f'{groupname}_total_overview_updated_{today}.xlsx')
-                if not self.disable_writes:
-                    info(f'saving file with {df.shape[0]} rows to {programme_file.path}')
-                    programme_data.write_excel(programme_file.path)
-                else:
-                    info(f'writing is disabled')
+                        cur_df = pl.concat([cur_df, dataframe], how='diagonal_relaxed')
 
-        # loop over the faculties
-        # for each, read in all data and store
-        overview_data: list[dict] = []
-        today = datetime.now().strftime("%Y-%m-%d_%H_%M")
-        self.faculties.sort()
-        for faculty in self.faculties:
-            if faculty in self.COURSE_MAPPING:
-                create_programme_overviews(faculty)
-            fac_data = {'faculty': faculty}
-            all_faculty_data = self.get_faculty_data(faculty, del_overview=True)
+            info(f'Retrieved {cur_df.shape[0]} rows from dir {name}')
+            cur_df = cur_df.unique()
+            info(f'{cur_df.shape[0]} remaining after removing duplicate rows')
+            if 'material_id' in cur_df.columns:
+                cur_df_mat_ids = cur_df.select('material_id').to_series().to_list()
+                unique_cur_df_mat_ids = set(cur_df_mat_ids)
+                info(f'found {len(cur_df_mat_ids)} rows in dir {name} for {len(unique_cur_df_mat_ids)} unique material ids.')
+            found_dfs[name]=cur_df
 
-            # add columns:
-            # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount
-            if all_faculty_data.is_empty():
+        info(f'Done retrieving data from {numfiles} files. Now merging all.')
+        full_df = pl.DataFrame()
+        for df in found_dfs.values():
+            if full_df.is_empty():
+                full_df = df
                 continue
+            full_df = pl.concat([full_df, df], how='diagonal_relaxed')
 
-            all_faculty_data = all_faculty_data.with_columns(
-                pl.col('pages_x_students').cast(pl.Int32).mul(self.fine_amount).alias('possible_fine')
-            )
+        info(f'after concatting all dfs, full_df has {full_df.shape[0]} rows')
+        select_cols = ['from_file']
+        if 'material_id' in full_df.columns:
+            select_cols.append('material_id')
+        if 'Material id' in full_df.columns:
+            select_cols.append('Material id')
+        material_id_and_file = full_df.select(select_cols).to_dicts()
 
-            # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
-            # based on the value in 'manual_classification'
-            # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
-            # if the str in 'manual_classification' contains 'open' or 'eigen': set no 'no'
-            # if 'lange overname' is in 'manual_classification': set 'yes'
-            # else set to 'maybe'
+        final_dict:dict[int,list] = dict()
+        for row in material_id_and_file:
+            if row.get('material_id'):
+                mat_id = int(row.get('material_id'))
+            elif row.get('Material id'):
+                mat_id = int(row.get('Material id'))
+            if not mat_id:
+                continue
+            if mat_id in final_dict:
+                if row.get('from_file') not in final_dict.get(mat_id):
+                    final_dict[mat_id].append(row.get('from_file'))
+            else:
+                final_dict[mat_id]=list()
+                final_dict[mat_id].append(row.get('from_file'))
 
-            all_faculty_data = all_faculty_data.with_columns(
-                infringement=pl.when(pl.col("manual_classification").is_null() |
-                                    (pl.col("manual_classification") == "") |
-                                    (pl.col("manual_classification") == "-"))
-                                .then(pl.lit("undetermined"))
-                                .when(pl.col("manual_classification").str.to_lowercase().str.contains("open|eigen|overig|deleted"))
-                                .then(pl.lit("no"))
-                                .when(pl.col("manual_classification").str.to_lowercase().str.contains("lange"))
-                                .then(pl.lit("yes"))
-                                .otherwise(pl.lit("maybe"))
-            )
+        update_dict: dict[str,str] = dict()
+        for material_id, filenames in final_dict.items():
+            if len(filenames) > 1:
+                update_dict[str(material_id)]=', '.join(filenames)
+            else:
+                update_dict[str(material_id)] = filenames[0]
 
-            # calculate the total possible fine by adding up all values in the 'possible_fine' column
-            # for all items that do not have 'no' in the 'infringement' column
+        full_df = full_df.drop('from_file')
 
-            total_possible_fine = all_faculty_data.filter(pl.col("infringement") != "no").select(pl.sum('possible_fine')).to_series().to_list()[0]
-            definitive_fine = all_faculty_data.filter(pl.col("infringement") == "yes").select(pl.sum('possible_fine')).to_series().to_list()[0]
-            locale.setlocale(locale.LC_ALL, 'nl_NL.utf8')
-            fac_data['total_possible_fine'] = str(locale.currency(total_possible_fine, grouping=True, symbol=True))
-            fac_data['definitive_fine']= str(locale.currency(definitive_fine, grouping=True, symbol=True))
-            fac_data['items_total'] = str(all_faculty_data.shape[0])
-            fac_data['possible_infringements'] = str(all_faculty_data.filter(pl.col("infringement") != "no").shape[0])
-            fac_data['definitive_infringements'] = str(all_faculty_data.filter(pl.col("infringement") == "yes").shape[0])
-            fac_data['definitive_non_infringements'] = str(all_faculty_data.filter(pl.col("infringement") == "no").shape[0])
-            fac_data['items_without_man_cl'] = str(all_faculty_data.filter(pl.col("infringement") == "undetermined").shape[0])
-            fac_data['items_to_do'] = str(all_faculty_data.filter(pl.col("workflow_status") == "ToDo").shape[0])
-            overview_data.append(fac_data)
-            fac_file = File(self.dirs['faculties'].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
-            info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
-            if not self.disable_writes:
-                all_faculty_data.write_excel(fac_file.path)
-                self.finalize_sheet(fac_file, all_faculty_data)
-            locale.setlocale(locale.LC_ALL, '')
+        full_df = full_df.unique(subset=['material_id', 'manual_classification','remarks','workflow_status'])
+        full_df = full_df.with_columns([
+            pl.col('material_id').replace(update_dict).alias('from_file'),
+            pl.lit(today).alias('last_sheet_update'),
+            ])
 
-        # now we have the data for all faculties, and written the excel files to disk.
-        # print the overview table to the console, and export it as an html file to the faculties/overviews dir.
-        cons = Console(record=True)
+        info(f'{full_df.shape[0]} rows remaining after selecting unique rows based on material_id, manual classification, remarks, and workflow_status.')
+        info(f'Now comparing data with previously stored items.')
+        df_merged = pl.DataFrame()
+        try:
+            stored_df = pl.read_parquet('full_df.parquet')
+        except Exception as e:
+            warn(f'Error reading full_df.parquet: {e}.')
+            df_merged=full_df
 
-        datatable = Table(title=f'Faculty Overview {today}')
-        datatable.add_column('Faculty', justify='right', style='yellow bold')
-        datatable.add_column('Probable fine', justify='left', style='red bold')
-        datatable.add_column('Max fine', justify='left')
-        datatable.add_column('Items total', justify='center', style='cyan bold')
-        datatable.add_column('Infringements', justify='center')
-        datatable.add_column('Non-infringements', justify='center')
-        datatable.add_column('To be classified', justify='center', style='magenta bold')
-        datatable.add_column('To do', justify='center', style='magenta bold')
-        factable = copy.deepcopy(datatable)
-        for fac in overview_data:
-            # save html overview for each faculty in their dir
-            # also add that data to the overview html
-            cur_fac_table = copy.deepcopy(factable)
-            cur_fac_table.add_row(fac['faculty'],
-                            fac['definitive_fine'],
-                            fac['total_possible_fine'],
-                            fac['items_total'],
-                            fac['definitive_infringements']+f" ({int(fac['definitive_infringements'])/int(fac['items_total'])*100:.0f}%)",
-                            fac['definitive_non_infringements']+f" ({int(fac['definitive_non_infringements'])/int(fac['items_total'])*100:.0f}%)",
-                            fac['items_without_man_cl']+f" ({int(fac['items_without_man_cl'])/int(fac['items_total'])*100:.0f}%)",
-                            fac['items_to_do'] + f" ({int(fac['items_to_do'])/int(fac['items_total'])*100:.0f}%)"
-            )
-            cons.print(cur_fac_table)
-            cons.print('''Explanation of columns:
 
-                - [yellow bold]Faculty[/yellow bold]: the abbreviation of the faculty -- all data is per faculty
-                - [red bold]Probable fine[/red bold]: the sum of all fines for items that are manually classified as 'lange overname'
-                - [bold]Max fine[/bold]: the sum of all fines for all items except those manually classified as 'eigen materiaal' or 'open access'
-                - [cyan bold]Items total[/cyan bold]: the total number of items selected by the 'CopyRight tool' (i.e. all pdfs with 40+ pages)
-                - [bold]Infringements[/bold]: the number of items that are manually classified as 'lange overname' -- plus as a percentage of total number of items
-                - [bold]Non-infringements[/bold]: the number of items manually classified as 'eigen materiaal' or 'open access' -- plus as a percentage of total number of items
-                - [magenta bold]To be classified[/magenta bold]: the number of items that are not yet manually classified -- plus as a percentage of total number of items
-                ''')
-            facdir = Directory(self.dirs['faculties'].full / fac['faculty'])
-            # delete any old html files
-            if not self.disable_writes:
+        # First, check if stored_df has the col 'last_sheet_update'. If not, skip.
+        if df_merged.is_empty():
+            if 'last_sheet_update' not in stored_df.columns:
+                info(f'stored_df has no last_sheet_update data. Overwriting stored data with new data')
+                df_merged = full_df
+            else:
 
-                for file in facdir.files:
-                    if file.name.endswith('.html'):
-                        file.delete()
-
-                cons.save_html(facdir.full / f'summary_{today}.html', theme=SVG_EXPORT_THEME)
-
-            datatable.add_row(fac['faculty'],
-                            fac['definitive_fine'],
-                            fac['total_possible_fine'],
-                            fac['items_total'],
-                            fac['definitive_infringements']+f" ({int(fac['definitive_infringements'])/int(fac['items_total'])*100:.0f}%)",
-                            fac['definitive_non_infringements']+f" ({int(fac['definitive_non_infringements'])/int(fac['items_total'])*100:.0f}%)",
-                            fac['items_without_man_cl']+f" ({int(fac['items_without_man_cl'])/int(fac['items_total'])*100:.0f}%)",
-                            fac['items_to_do'] + f" ({int(fac['items_to_do'])/int(fac['items_total'])*100:.0f}%)"
-
+                # For each material_id, check for a value in col 'last_sheet_update' in stored_df. If missing, keep full_df row as is.
+                # Otherwise:
+                # for each material_id present in both full_df & stored_df, compare that row on cols:
+                #   'manual_classification', 'remarks', 'workflow_status', 'retrieved_from_copyright_on', 'last_change', and 'status'.
+                #
+                #
+                # if all values in those cols are identical:
+                #   overwrite col 'last_sheet_update' in full_df with the row from stored_df.
+                # if any cell in those cols in full_df is empty but filled in stored_df:
+                #    overwrite entire row in full_df with the row from stored_df
+                # else:
+                #   eep the full_df row as is
+                #
+                # in the end, full_df should contain all the rows we want to save.
+                compare_cols = ['manual_classification', 'remarks', 'workflow_status', 'retrieved_from_copyright_on', 'last_change','status']
+                full_df = full_df.with_columns() #...finish this
+                df_merged = (
+                    full_df
+                    .join(stored_df, on="material_id", how="left", suffix="_stored")
+                    .with_columns([
+                        pl.fold(
+                            True,
+                            lambda acc, x: acc & x,
+                            [(pl.col(c) == pl.col(f"{c}_stored")) for c in compare_cols],
                         )
+                        .alias("all_match")
+                    ])
+                    .with_columns([
+                        pl.fold(
+                            False,
+                            lambda acc, x: acc | x,
+                            [(pl.col(c).is_null() & pl.col(f"{c}_stored").is_not_null()) for c in compare_cols],
+                        )
+                        .alias("any_missing_in_full_df")
+                    ]).with_columns(
+                        [
+                            pl.when(pl.col("any_missing_in_full_df"))
+                            .then(pl.col(f"{c}_stored"))
+                            .otherwise(pl.col(c))
+                            .alias(c)
+                            for c in compare_cols
+                        ]
+                        + [
+                            pl.when(pl.col("any_missing_in_full_df"))
+                            .then(pl.col("last_sheet_update_stored"))
+                            .otherwise(
+                                pl.when(pl.col("all_match"))
+                                .then(pl.col("last_sheet_update_stored"))
+                                .otherwise(pl.col("last_sheet_update"))
+                            )
+                            .alias("last_sheet_update")
+                        ]
+                        )
+                )
+                dropcols = [c for c in df_merged.columns if '_stored' in c]
+                df_merged = df_merged.drop(dropcols).drop(["all_match", "any_missing_in_full_df"])
 
-        # now save the complete table to all_items
-
-        cons.print(datatable)
-        cons.print('''Explanation of columns:
-
-                - [yellow bold]Faculty[/yellow bold]: Faculty abbreviation
-                - [red bold]Probable fine[/red bold]: Total fine for items that have 'lange overname' as manual classification
-                - [bold]Max fine[/bold]: Total fine for all items excluding items manually classified as 'eigen materiaal' or 'open access'
-                - [cyan bold]Items total[/cyan bold]: Total amount of 'lange overnames' found by the 'CopyRight tool' (all pdfs with 40+ pages)
-                - [bold]Infringements[/bold]: Items manually classified as 'lange overname', (% of total)
-                - [bold]Non-infringements[/bold]: Items manually classified as 'eigen materiaal' or 'open access', (% of total)
-                - [magenta bold]To be classified[/magenta bold]: Items not yet manually classified, (% of total)
-                - [magenta bold]To do[/magenta bold]: Items in need of action by faculty, (% of total)
-                ''')
-        if not self.disable_writes:
-            cons.save_html(self.dirs['all_items'].full / f'faculty_overview_{today}.html', theme=SVG_EXPORT_THEME)
+        df_merged.write_parquet('full_df.parquet')
+        df_merged.write_csv('full_data.csv')
 
 if __name__ == "__main__":
     typer.run(cli)
