@@ -22,43 +22,13 @@ homepage: https://github.com/utsmok/easyaccesscli/
 Note: only tested on windows systems
 
 see readme.md for more info
-
-Q U I C K    S T A R T
-    Run with standard settings:
-        > uv run easy_access_cli.py
-    View cli instructions:
-        > uv run easy_access_cli.py --help
-
-    if you don't have uv installed yet:
-
-I N S T A L L   U V
-    UV is an all-in-one python manager.
-    Install by opening Powershell (press windows key, type 'powershell', enter) and pasting the following lines:
-
-        > powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-    and press enter to install. For more info, see the uv docs: https://docs.astral.sh/uv/getting-started/installation/
-    Once uv is installed, close PowerShell, start it again, and type
-
-        > uv python install
-
-    and the setup is all done! Now you can run the cli help with:
-
-        > uv run easy_access_cli.py --help
-
-This python file contains the following:
-    - class EasyAccessToolkit with core functionality to ingest & process data from SURF's copyRight tool for easy access, and export various sheets for end-users
-    - typer function cli provides a command line interface
-    - helper classes File and Directory for handling... files and directories.
 """
 
 from dataclasses import dataclass, field
-import json
 import asyncio
 import os
 from datetime import datetime, timedelta
 from enum import Enum
-import locale
 import dotenv
 import openpyxl
 import openpyxl.worksheet
@@ -69,16 +39,21 @@ import polars as pl
 import typer
 from openpyxl.worksheet.table import Table as ExcelTable
 from openpyxl.worksheet.table import TableStyleInfo
-from rich.console import Console
 from typing_extensions import Annotated
+import logging
+from pathlib import Path
+import locale
+from rich.console import Console
 from rich.table import Table
 from rich.terminal_theme import SVG_EXPORT_THEME
 import copy
-import logging
+from openpyxl.styles import Alignment, NamedStyle
 
 from utils import Directory, File, info, cool, warn, print
-from enrichment import enrich_sheets, update_osiris_data
-
+from enrichment import enrich_df_with_osiris_data, update_osiris_data
+from constants import COURSE_MAPPING, DEPARTMENT_MAPPING, FINE_AMOUNT, DIRS
+from sheet import finalize_sheet
+from analysis import create_faculty_overviews
 cli_app = typer.Typer()
 # suppress some annoying warnings when reading excel files
 logging.getLogger("fastexcel.types.dtype").setLevel(logging.ERROR)
@@ -96,6 +71,24 @@ class Functions(str, Enum):
     read = "read"
     export = "export"
 
+@dataclass
+class EasyAccessSettings:
+    """Configuration settings for the Easy Access Tool."""
+    functions: Functions
+    only_changes: bool = True
+    save_files: bool = True
+    refresh_osiris_data: bool = False
+    retrieve_all: bool = True
+    other_sheet: Path | None = None
+    enrich_with_osiris_data: bool = True
+    dirs: dict[str, str | None] = field(default_factory=dict)
+    disable_writes: bool = False
+
+    @classmethod
+    def from_env(cls, **kwargs) -> "EasyAccessSettings":
+        """Create settings from environment variables and override with kwargs."""
+        dirs = DIRS
+        return cls(dirs=dirs, **kwargs)
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Main functions
@@ -117,13 +110,6 @@ def cli(
             rich_help_panel="Functions",
         ),
     ] = True,
-    remove_previous: Annotated[
-        bool,
-        typer.Option(
-            help="First remove the latest excel sheet for each faculty/programme, then run the rest of the tool.",
-            rich_help_panel="Functions",
-        ),
-    ] = False,
     save: Annotated[
         bool,
         typer.Option(
@@ -139,106 +125,42 @@ def cli(
         ),
     ] = False,
     other_sheet: Annotated[
-        str | None,
+        Path | None,
         typer.Option(
-            help="(relative) path to a xlsx sheet to read in instead of CopyRight Data.",
+            help="Path to a xlsx sheet to read instead of CopyRight Data.",
             rich_help_panel="Read in data from alternate source",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
         ),
     ] = None,
     retrieve_all: Annotated[
         bool,
         typer.Option(
-            help="If enabled, will retrieve all data from folders where users can enter data, and store it as a parquet file.",
+            help="Retrieve all data from data entry folders and store as parquet file.",
             rich_help_panel="Functions",
         ),
-    ] = False,
-):
-    """
-    Runs the Easy Access toolkit with the specified settings. Add --help for details.\n
-    Make sure that these files are present in the current working dir and contain the required info:\n\n
-        'settings.env': The directories to use\n
-        'department_mapping.json': The mapping between department names and faculty names\n
-    \n
-    Optional files:\n\n
-        'course_mapping.json': The mapping between course names and programmes -- to create sheets per programme\n
-    \n
-    Visit the repo for more instructions & the latest version: https://github.com/utsmok/ea-cli. (<- you can click this in your terminal!)\n
-    \n\n
-    Example usage\n
-    --------------\n
-    ea-cli\n
-    ea-cli --do export\n
-    ea-cli --no-changes\n
-    ea-cli --do read --changes\n
-    """
+    ] = True,
+) -> None:
+    """Easy Access toolkit for managing faculty sheet data."""
 
-    def delete_latest_file(subdir: Directory) -> None:
-        """
-        This function will be called if remove_previous is set to true.
-        """
-        # only if it's been created in the last 3 days
-        newest_file: File = subdir.newest_file([".xlsx", ".xls"])
-        if not newest_file:
-            return None
-        if newest_file.created > datetime.now() - timedelta(days=3):
-            print(f"Current latest file in subdir:\n {newest_file.name}")
-            conf = input("Remove this file? [y/N] ")
-            if conf.lower() == "y":
-                newest_file.delete()
-                print(f"[red]Deleted[/red] {newest_file.name}.")
-            else:
-                print(f"[cyan]Keeping[/cyan] {newest_file.name} and moving on.\n\n")
-            return conf
-
-    if remove_previous:
-        sheet_dir = Directory(os.getenv("FACULTIES_DIR"))
-        all_items_dir = Directory(os.getenv("ALL_ITEMS_DIR"))
-        dirlist = sheet_dir.dirs
-        dirlist.append(all_items_dir)
-
-        for subdir in dirlist:
-            print(f"[green]subdir {subdir}[/green]\n------------------")
-            conf = delete_latest_file(subdir)
-            if not conf:
-                continue
-            while conf.lower() == "y":
-                conf = delete_latest_file(subdir)
-                if not conf:
-                    break
-            if subdir.dirs:
-                print(f"[magenta]sub-subdir {subdir}[/magenta]\n")
-                for subsubdir in subdir.dirs:
-                    conf = delete_latest_file(subsubdir)
-                    if not conf:
-                        continue
-                    while conf.lower() == "y":
-                        conf = delete_latest_file(subsubdir)
-                        if not conf:
-                            break
-
-    if do not in [Functions.both, Functions.read, Functions.export]:
-        warn(
-            "No functions selected! Aborting the script. Next time, enable at least one of 'Function' options; for details run ea-cli --help."
-        )
-        cool("Thank you for using the Easy Access tool!")
-        raise typer.Exit(code=1)
-
-    dirs = {
-        "copyright_export": None,
-        "copyright_import": None,
-        "faculties": None,
-        "all_items": None,
-    }
-
-    tool = EasyAccessTool(
+    # Load settings from env and CLI params
+    settings = EasyAccessSettings.from_env(
         functions=do,
         only_changes=changes,
-        dirs=dirs,
-        other_sheet=other_sheet,
         save_files=save,
         refresh_osiris_data=osiris_update,
         retrieve_all=retrieve_all,
+        other_sheet=other_sheet,
     )
+
+    if do not in [Functions.both, Functions.read, Functions.export]:
+        warn("No functions selected! Aborting. Run ea-cli --help for details.")
+        cool("Thank you for using the Easy Access tool!")
+        raise typer.Exit(code=1)
+
+    # Initialize and run tool with settings
+    tool = EasyAccessTool(settings)
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
@@ -250,66 +172,14 @@ class EasyAccessTool:
     For an overview see the comments & docstrings per function, plus readme.md.
     """
 
-    # which functions to run when self.run() is called
-    settings: list[callable] = []
-
-    # keep track of relevant files and directories
-    files: dict[str, File]
-    dirs: dict[str, Directory] = {
-        "root": Directory(os.getcwd()),
-        "copyright_export": Directory(os.getenv("COPYRIGHT_EXPORT_DIR")),
-        "copyright_import": Directory(os.getenv("COPYRIGHT_IMPORT_DIR")),
-        "all_items": Directory(os.getenv("ALL_ITEMS_DIR")),
-        "faculties": Directory(os.getenv("FACULTIES_DIR")),
-        "overviews_backup": Directory(os.getenv("OVERVIEWS_BACKUP_DIR")),
-    }
-
-    # initialize the various dataframes used to get data from / write to .xlsx files
-    raw_copyright_data: pl.DataFrame = (
-        pl.DataFrame()
-    )  # data directly from copyright tool
-    copyright_data: pl.DataFrame = (
-        pl.DataFrame()
-    )  # data with normalized column names & some cleanup
-    faculty_sheet_data: pl.DataFrame = pl.DataFrame()  # data from the faculty sheets
-    all_items_sheet_data: pl.DataFrame = (
-        pl.DataFrame()
-    )  # data from the 'all_items' sheet
-
-    # this mapping is used to get the corresponding faculty from the copyright data column 'departments'
-    # it should be present in the file 'department_mapping.json' in the same directory as easy_access.cli.py
-    # a department_mapping.json file for the University of Twente is included in the repo
-    dept_mapping_path = File("department_mapping.json")
-    DEPARTMENT_MAPPING = json.load(open(dept_mapping_path.path, encoding="utf-8"))
-
-    # this mapping is used to map courses to programmes
-    # to be used in combination with the faculty / department
-    course_mapping_path = File("course_mapping.json")
-    COURSE_MAPPING = json.load(open(course_mapping_path.path, encoding="utf-8"))
-
-    # list of all found/used faculties
-    faculties: list[str]
-
+    files: dict[str, File] = {} # keep track of relevant files and directories
+    faculties: list[str] = [] # list of all found/used faculties
     # latest copyright export file & when it was created
     latest_file: File
     latest_file_date: str
 
-    # starting excel style number for the data entry tables
-    # simple hack to ensure repeatable styles
-    style_iter: int = 2
-
-    # the amount to multiply pages_x_students by to calculate the fine
-    # this is roughly the average fine per student per page as defined by UvO
-    fine_amount: float = 0.3
-
-    # path to another sheet to read in instead of CopyRight data
-    other_sheet: File | None = None
-
-    # flag to indicate if there are no new items to add
-    no_new_items: bool = False
-
     # standard basic column order for the complete data sheets
-    column_order = [
+    COLUMN_ORDER = [
         "material_id",
         "period",
         "department",
@@ -350,16 +220,7 @@ class EasyAccessTool:
     # debug option: completely disables all new file writes
     disable_writes = False
 
-    def __init__(
-        self,
-        functions: Functions | None = Functions.both,
-        dirs: dict[str, str] | None = None,
-        only_changes: bool = True,
-        other_sheet: str | None = None,
-        save_files: bool = True,
-        refresh_osiris_data: bool = False,
-        retrieve_all: bool = False,
-    ) -> None:
+    def __init__(self, settings: EasyAccessSettings) -> None:
         """
         Parameters:
             setting:  str | None
@@ -378,23 +239,32 @@ class EasyAccessTool:
                 A list of paths to additional .xlsx files to ingest instead the raw data from CopyRight.
         """
 
-        # init parameters
-        if other_sheet:
-            self.other_sheet = File(other_sheet)
-        self.only_changes = only_changes
-        self.disable_writes = not save_files
-        self.retrieve_all = retrieve_all
-        self.refresh_osiris_data = refresh_osiris_data
-        self.enrich_with_osiris_data = True # debug option -- should probable always be set to True
+        self.settings = settings
+        self.functions:list[callable] = []
 
-        # if dirs is set, add them to the self.dirs dict
-        if dirs:
-            for key, value in dirs.items():
-                if value:
-                    self.dirs[key] = Directory(value)
 
-        # set the functions to run based on input param 'functions'
-        self.set_functions(functions)
+        self.dirs = {k: Directory(v) for k,v in settings.dirs.items() if isinstance(v, str) and v}
+        if not self.dirs:
+            self.dirs = {k: v for k,v in settings.dirs.items() if isinstance(v, Directory) and v}
+
+        # Initialize data structures
+        self.raw_copyright_data = pl.DataFrame()
+        self.copyright_data = pl.DataFrame()
+        self.faculty_sheet_data = pl.DataFrame()
+        self.all_items_sheet_data = pl.DataFrame()
+
+        # Initialize other attributes
+        self.other_sheet = File(settings.other_sheet) if settings.other_sheet else None
+        self.only_changes = settings.only_changes
+        self.disable_writes = not settings.save_files
+        self.retrieve_all = settings.retrieve_all
+        self.refresh_osiris_data = settings.refresh_osiris_data
+        self.enrich_with_osiris_data = settings.enrich_with_osiris_data
+        self.no_new_items = False
+        self.style_iter = 2
+
+        # Set functions to run
+        self.set_functions(settings.functions)
 
     def set_functions(self, functions: Functions | None) -> None:
         """
@@ -403,49 +273,49 @@ class EasyAccessTool:
         Returns None.
         """
         if functions is None:
-            self.settings = []
+            return
 
-        elif functions == Functions.both:
+        if functions == Functions.both:
             if not self.other_sheet:
-                self.settings = [
+                self.functions = [
                     self.read_copyright_export,
                     self.process_copyright_export,  # read in new data
                     self.read_all_items_sheets,
                     self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
                     self.create_faculty_sheets,
                     self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_faculty_overview,
+                    self.create_overviews,
                 ]
             else:
-                self.settings = [
+                self.functions = [
                     self.read_other_sheet,  # read in new data
                     self.read_all_items_sheets,
                     self.read_faculty_sheets,  # read in data manually added to sheets
                     self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
                     self.create_faculty_sheets,
                     self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_faculty_overview,
+                    self.create_overviews,
                 ]
 
         elif functions == Functions.read:
             if not self.other_sheet:
-                self.settings = [
+                self.functions = [
                     self.read_copyright_export,
                     self.process_copyright_export,  # read in new data
                     self.create_faculty_sheets,
                     self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_faculty_overview,
+                    self.create_overviews,
                 ]
             else:
-                self.settings = [
+                self.functions = [
                     self.read_other_sheet,
                     self.process_copyright_export,  # read in new data
                     self.create_faculty_sheets,
                     self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_faculty_overview,
+                    self.create_overviews,
                 ]
         elif functions == Functions.export:
-            self.settings = [
+            self.functions = [
                 self.read_faculty_sheets,  # read in data manually added to sheets
                 self.create_import_sheet,  # from the current manually added data, create a sheet to import into CopyRight
             ]
@@ -462,7 +332,7 @@ class EasyAccessTool:
             # will retrieve all data from the directories where users can enter data
             # and store it as a parquet file and csv file in the root dir
             self.retrieve_all_data()
-        for func in self.settings:
+        for func in self.functions:
             func()
 
     def read_other_sheet(self) -> None:
@@ -502,7 +372,7 @@ class EasyAccessTool:
             .to_series()
             .to_list()
         )
-        self.copyright_data = self.copyright_data.select(self.column_order)
+        self.copyright_data = self.copyright_data.select(self.COLUMN_ORDER)
 
     def read_copyright_export(self) -> None:
         """
@@ -561,19 +431,21 @@ class EasyAccessTool:
                 .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
                 .dt.strftime("%Y-%m-%d"),
                 faculty=pl.col("department").replace_strict(
-                    self.DEPARTMENT_MAPPING, default="Unmapped"
+                    DEPARTMENT_MAPPING, default="Unmapped"
                 ),
             )
         self.faculties = (
-            self.copyright_data.select(pl.col("faculty").unique()).to_series().to_list()
+            self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
         )
+
         # refresh OSIRIS data if bool is set
         if self.refresh_osiris_data:
+            info("Refreshing OSIRIS data. This will take a while!")
             asyncio.run(update_osiris_data(self.copyright_data))
 
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
-            self.copyright_data = enrich_sheets(self.copyright_data)
+            self.copyright_data = enrich_df_with_osiris_data(self.copyright_data,'full data')
             # set dtype of all columns to str
             self.copyright_data = self.copyright_data.with_columns(
                 pl.exclude(pl.Utf8).cast(str)
@@ -619,150 +491,8 @@ class EasyAccessTool:
                 else:
                     self.copyright_data = not_in_faculty
 
-                # read in all items sheets
                 self.read_all_items_sheets()
-                if not self.all_items_sheet_data.is_empty() and False:
-                    """
-                    Here we will do the following:
-                    - select rows from self.all_items_sheet_data with a manual classification
-                    - find matching row in self.faculty_data
-                    - if a match is found:
-                        - check if faculty_data has a manual classification
-                        - if not, overwrite the row in faculty_data with the row from all_items_sheet_data
-                        - if yes, don't do anything
-                    - if no match is found:
-                        - this should be a new item, so should automatically be added through the normal process above
-                    """
-                    all_items_rows_with_classification = (
-                        self.all_items_sheet_data.filter(
-                            pl.col("manual_classification").is_not_null()
-                            & (pl.col("manual_classification") != "-")
-                            & (pl.col("manual_classification") != "")
-                        )
-                    )
-                    copyright_data_rows_without_classifications = (
-                        self.faculty_sheet_data.filter(
-                            pl.col("manual_classification").is_null()
-                            | (pl.col("manual_classification") == "")
-                            | (pl.col("manual_classification") == "-")
-                        )
-                    )
-                    rows_to_be_updated = (
-                        copyright_data_rows_without_classifications.join(
-                            all_items_rows_with_classification,
-                            on="material_id",
-                            how="inner",
-                        )
-                    )
-                    material_ids_with_new_cip_classification = (
-                        rows_to_be_updated.select(pl.col("material_id"))
-                        .to_series()
-                        .to_list()
-                    )
 
-                    if not material_ids_with_new_cip_classification:
-                        info("No new CIP classifications found.")
-                    else:
-                        manual_classification_updates = (
-                            self.all_items_sheet_data.filter(
-                                pl.col("material_id").is_in(
-                                    material_ids_with_new_cip_classification
-                                )
-                            )
-                        )
-
-                        manual_classification_updates = (
-                            manual_classification_updates.with_columns(
-                                [
-                                    pl.col(col).replace("-", None)
-                                    for col in manual_classification_updates.columns
-                                ]
-                            ).drop_nulls("manual_classification")
-                        )
-                        manual_classification_updates.write_excel("cip_updates.xlsx")
-                        manual_classification_updates = (
-                            manual_classification_updates.select(
-                                pl.col("material_id"),
-                                pl.col("manual_classification"),
-                                pl.col("scope"),
-                                pl.col("remarks"),
-                            )
-                        )
-
-                        info(
-                            f"Updating copyright data with {manual_classification_updates.shape[0]} new CIP classifications."
-                        )
-
-                        joined_df = self.faculty_sheet_data.join(
-                            manual_classification_updates, on="material_id", how="inner"
-                        )
-                        update_columns = manual_classification_updates.columns[1:]
-
-                        updated_df = joined_df.with_columns(
-                            [
-                                pl.when(pl.col(f"{col}_right").is_not_null())
-                                .then(pl.col(f"{col}_right"))
-                                .otherwise(pl.col(col))
-                                .alias(col)
-                                for col in update_columns
-                            ]
-                        )
-
-                        updated_df = updated_df.drop(
-                            [f"{col}_right" for col in update_columns]
-                        )
-
-                        # add new rows to self.copyright_data
-                        already_present_ids = (
-                            self.copyright_data.select(pl.col("material_id"))
-                            .to_series()
-                            .to_list()
-                        )
-                        new_ids = set(material_ids_with_new_cip_classification) - set(
-                            already_present_ids
-                        )
-                        new_ids = list(new_ids)
-                        present_in_both = set(already_present_ids) & set(
-                            material_ids_with_new_cip_classification
-                        )
-                        present_in_both = list(present_in_both)
-                        rows_to_add = updated_df.filter(
-                            pl.col("material_id").is_in(new_ids)
-                        )
-                        if self.copyright_data.is_empty():
-                            self.copyright_data = rows_to_add
-                        else:
-                            self.copyright_data = pl.concat(
-                                [self.copyright_data, rows_to_add]
-                            )
-                        print(
-                            f"added {(rows_to_add.shape[0])} rows with updated cip classifications to self.copyright_data"
-                        )
-                        if len(present_in_both) > 0:
-                            # for each material id in present_in_both,
-                            # find the row in self.copyright_data
-                            # replace that entire row with the corresponding row from updated_df
-                            for material_id in present_in_both:
-                                row_to_replace = (
-                                    self.copyright_data.filter(
-                                        pl.col("material_id") == material_id
-                                    )
-                                    .to_series()
-                                    .to_list()[0]
-                                )
-                                new_row = (
-                                    updated_df.filter(
-                                        pl.col("material_id") == material_id
-                                    )
-                                    .to_series()
-                                    .to_list()[0]
-                                )
-                                self.copyright_data = self.copyright_data.with_columns(
-                                    pl.when(pl.col("material_id") == material_id)
-                                    .then(new_row)
-                                    .otherwise(row_to_replace)
-                                )
-                                print(f"replaced row with material_id {material_id}")
 
     def create_faculty_sheets(self) -> None:
         """
@@ -773,7 +503,7 @@ class EasyAccessTool:
         if self.faculties:
             self.faculties.sort()
         for faculty in self.faculties:
-            if faculty in self.COURSE_MAPPING:
+            if faculty in COURSE_MAPPING:
                 self.create_programme_sheets(faculty)
 
             faculty_dir = Directory(self.dirs["faculties"].full / faculty)
@@ -793,11 +523,10 @@ class EasyAccessTool:
                 continue
             else:
                 info(f"{faculty}:{gap}{faculty_data.shape[0]}")
-            if not self.disable_writes:
-                faculty_data.write_excel(faculty_dir.full / filename)
-                self.finalize_sheet(
-                    File(str(faculty_dir.full / filename)), faculty_data
-                )
+            faculty_data.write_excel(faculty_dir.full / filename)
+            self.style_iter = finalize_sheet(
+                File(str(faculty_dir.full / filename)), faculty_data, self.style_iter
+            )
 
     def create_programme_sheets(self, faculty: str) -> None:
         """
@@ -808,7 +537,7 @@ class EasyAccessTool:
         programme_dir = Directory(
             self.dirs["faculties"].full / faculty / "per_programme"
         )
-        course_to_sheet: dict[str, str] = self.COURSE_MAPPING[faculty]
+        course_to_sheet: dict[str, str] = COURSE_MAPPING[faculty]
         data: list[dict[str, pl.DataFrame]] = []
         info(f"creating programme sheets for {faculty}")
         for course, group in course_to_sheet.items():
@@ -830,225 +559,16 @@ class EasyAccessTool:
             else:
                 final_data[item.get("sheet")] = item["data"]
 
-        if not self.disable_writes:
-            for groupname, df in final_data.items():
-                filename = (
-                    programme_dir.full / f"{groupname}_{self.latest_file_date}.xlsx"
-                )
-                df.write_excel(filename)
-                self.finalize_sheet(File(str(filename)), df)
-                info(
-                    f"created programme sheet {groupname}_{self.latest_file_date}.xlsx"
-                )
-
-    def finalize_sheet(self, file: File, data: pl.DataFrame) -> None:
-        """
-        New implementation of finalize_sheet
-        this function mainly build the second sheet for data entry.
-        Input: an excel file with the complete data, and a dataframe with that same data to be processed for the data entry sheet
-
-        Adds the sheet to the workbook and saves it, doesnt return any data.
-        """
-        from openpyxl.worksheet.filters import (
-            FilterColumn,
-            Filters,
-        )
-        from openpyxl.styles import Alignment, NamedStyle
-
-        @dataclass
-        class ColInfo:
-            """
-            contains the info for a single col used in a DataEntrySheet
-            """
-
-            name: str  # the colname as included in the sheet (e.g. 'manual_classification')
-            dropdown_options: str = (
-                ""  # the options for the dropdown; if not applicable, an empty str
-            )
-            is_url: bool = False  # format as url or not?
-            is_new: bool = (
-                False  # if True, this col is not present in the original data
-            )
-            is_editable: bool = False  # if True, this col can be edited
-            new_name: str = ""  # if not empty, this col will be renamed to this name
-            default_val: str = (
-                ""  # if 'is_new' is True, use this as the default value for the new col
-            )
-            max_width: int = 8  # the max length of any value present in this col, to be set while processing. Min width is this initial number.
-            count_max_width_over_40: int = 0  # the number of items in this col that are longer than 40 chars, to be set while processing
-
-            @property
-            def has_dropdown(self) -> bool:
-                return len(self.dropdown_options) > 0
-
-        @dataclass
-        class DataEntrySheet:
-            """
-            Use to add a dateentry sheet to an excel file.
-            Has functions to add data from dataframe, format as table, add datavalidation, and save
-            """
-
-            sheet_name: str
-            cols: list[
-                ColInfo
-            ]  # a list with the cols in order of appearance from left to right
-            table_style: TableStyleInfo
-            workbook: openpyxl.Workbook
-            sheet: openpyxl.worksheet.worksheet.Worksheet = field(init=False)
-            file_path: str
-            max_row: int = 0
-            word_wrap_style: Alignment = NamedStyle(
-                name="wordwrap", alignment=Alignment(wrapText=True)
+        for groupname, df in final_data.items():
+            filename = (
+                programme_dir.full / f"{groupname}_{self.latest_file_date}.xlsx"
             )
 
-            def __post_init__(self):
-                self.sheet = wb.create_sheet(self.sheet_name, index=1)
-
-            def add_data(self, data: pl.DataFrame) -> None:
-                self.max_row = data.shape[0]
-                colnum = 0
-
-                for col in self.cols:
-                    colnum += 1
-                    if col.new_name:
-                        col_name = col.new_name
-                    else:
-                        col_name = col.name
-                    if col.is_new:
-                        # create new coldata
-                        col_data = [col.default_val] * self.max_row
-                    else:
-                        # retrieve coldata from dataframe
-                        col_data = data.select(pl.col(col.name)).to_series().to_list()
-                        if col.default_val != "":
-                            for item_num, item in enumerate(col_data):
-                                if item == "" or not item:
-                                    col_data[item_num] = col.default_val
-
-                    self.sheet.cell(1, colnum).value = col_name
-                    for row, cell_data in enumerate(col_data, start=2):
-                        if not cell_data:
-                            self.sheet.cell(row, colnum).value = cell_data
-                            continue
-
-                        if col.is_url:
-                            if "/" not in cell_data:
-                                self.sheet.cell(row, colnum).value = cell_data
-                            else:
-                                self.sheet.cell(row, colnum).value = (
-                                    ".../" + cell_data.split("/")[-1]
-                                )
-                            self.sheet.cell(row, colnum).hyperlink = cell_data
-                            if len(self.sheet.cell(row, colnum).value) > col.max_width:
-                                col.max_width = len(self.sheet.cell(row, colnum).value)
-                            if len(self.sheet.cell(row, colnum).value) > 40:
-                                col.count_max_width_over_40 += 1
-
-                        else:
-                            self.sheet.cell(row, colnum).value = cell_data
-                            if len(cell_data) > col.max_width:
-                                col.max_width = len(cell_data)
-                            if len(cell_data) > 40:
-                                col.count_max_width_over_40 += 1
-
-                for colnum, col in enumerate(self.cols):
-                    col_letter = chr(ord("A") + colnum)
-                    colnum += 1
-                    if col.has_dropdown:
-                        dv = openpyxl.worksheet.datavalidation.DataValidation(
-                            type="list", formula1=col.dropdown_options, allowBlank=True
-                        )
-                        dv.error = "Please select a valid option from the list"
-                        dv.errorTitle = "Invalid option"
-                        dv.prompt = "Please select from the list"
-                        dv.promptTitle = "List selection"
-                        self.sheet.add_data_validation(dv)
-                        if self.max_row == 1:
-                            dv.add(f"{col_letter}2")
-                        else:
-                            dv.add(f"{col_letter}2:{col_letter}{self.max_row + 1}")
-                    if col.max_width > 40 and (
-                        (col.count_max_width_over_40 > 5)
-                        or (col.count_max_width_over_40 > self.max_row - 2)
-                    ):
-                        # Too much long items: cap width to 40 & enable word wrap for this col
-                        for row in range(2, self.max_row + 1):
-                            self.sheet.cell(row, colnum).style = self.word_wrap_style
-                        self.sheet.column_dimensions[col_letter].bestFit = False
-                        self.sheet.column_dimensions[col_letter].width = 40
-                    else:
-                        # Acceptable width, don't enable word wrap but fit width to contents
-                        self.sheet.column_dimensions[col_letter].width = col.max_width
-
-                info(f"Added data to {self.sheet_name} in file {self.file_path}.")
-                self.create_table()
-                self.save()
-
-            def create_table(self) -> None:
-                max_col_letter = chr(ord("A") + len(self.cols) - 1)
-                table = ExcelTable(
-                    displayName=self.sheet_name.replace(" ", ""),
-                    ref=f"A1:{max_col_letter}{self.max_row + 1}",
-                )
-                table.tableStyleInfo = self.table_style
-                self.sheet.add_table(table)
-                info(
-                    f"Created table with {self.max_row} rows and {len(self.cols)} cols in sheet {self.sheet_name} of file {self.file_path}"
-                )
-
-            def save(self) -> None:
-                self.workbook.save(filename=self.file_path)
-                info(f"Saved .xlsx file with DataEntrySheet to {self.file_path}")
-
-        wb = openpyxl.load_workbook(filename=str(file.path))
-        wb.active.title = "Complete data"
-
-        tabstyle = TableStyleInfo(
-            name=f"TableStyleMedium{self.style_iter}",
-            showRowStripes=True,
-        )
-        self.style_iter = self.style_iter + 1
-
-        sheet = DataEntrySheet(
-            workbook=wb,
-            sheet_name="Data entry",
-            cols=[
-                ColInfo("material_id"),
-                ColInfo("url", is_url=True),
-                ColInfo(
-                    "workflow_status",
-                    is_new=True,
-                    is_editable=True,
-                    dropdown_options='"ToDo,Done,InProgress"',
-                    default_val="ToDo",
-                ),
-                ColInfo(
-                    "manual_classification",
-                    is_editable=True,
-                    default_val="-",
-                    dropdown_options='"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,-"',
-                ),
-                ColInfo("remarks", is_editable=True),
-                ColInfo("ml_prediction"),
-                ColInfo("filename"),
-                ColInfo("title"),
-                ColInfo("owner", new_name="uploaded_by"),
-                ColInfo("author", new_name="detected_author"),
-                ColInfo("contact_name"),
-                ColInfo("contact_email"),
-                ColInfo("contact_org"),
-                ColInfo("osiris_catalogue_url", is_url=True),
-                ColInfo("course_name", new_name="course_name_canvas"),
-                ColInfo("department", new_name="programme_canvas"),
-                ColInfo("osiris_programme", new_name="programme_osiris"),
-                ColInfo("osiris_course_codes_found"),
-                ColInfo("osiris_course_code_data_selected"),
-            ],
-            table_style=tabstyle,
-            file_path=str(file.path),
-        )
-
-        sheet.add_data(data)
+            df.write_excel(filename)
+            self.style_iter = finalize_sheet(File(str(filename)), df, self.style_iter)
+            info(
+                f"created programme sheet {groupname}_{self.latest_file_date}.xlsx"
+            )
 
     def create_all_items_sheet(self) -> None:
         """
@@ -1343,305 +863,27 @@ class EasyAccessTool:
                         break
         return all_faculty_data
 
-    def create_faculty_overview(self) -> None:
+    def create_overviews(self) -> None:
         """
-        per faculty:
-        Read in all available faculty sheets
-        use this data to generate a single sheet with 'complete data' for all items in the faculty,
-        PLUS create an overview (a pdf maybe?) with calculated data, e.g.:
-            - number of items per classification
-            - expected fine
-            - ...
+        1. Creates overview sheets with data per faculty (and per programme if found in COURSE_MAPPING)
+        2. Creates tables with summary data and prints them to the console + stores them as .html files
+
+        No parameters, will pull the data from disk for each faculty in self.faculties.
         """
-
-        def create_programme_overviews(faculty: str) -> None:
-            """
-            also create an overview sheet for each programme
-            if applicable
-            """
-            all_faculty_data = self.get_faculty_data(faculty)
-            course_to_group: dict[str, str] = self.COURSE_MAPPING[faculty]
-            data: list[dict[str, pl.DataFrame]] = []
-
-            for course, group in course_to_group.items():
-                programme_data = all_faculty_data.filter(pl.col("department") == course)
-                if programme_data.is_empty():
-                    continue
-                else:
-                    programme_data = programme_data.with_columns(
-                        pl.col("pages_x_students")
-                        .cast(pl.Int32)
-                        .mul(self.fine_amount)
-                        .alias("possible_fine")
-                    )
-                    programme_data = programme_data.with_columns(
-                        infringement=pl.when(
-                            pl.col("manual_classification").is_null()
-                            | (pl.col("manual_classification") == "")
-                            | (pl.col("manual_classification") == "-")
-                        )
-                        .then(pl.lit("undetermined"))
-                        .when(
-                            pl.col("manual_classification")
-                            .str.to_lowercase()
-                            .str.contains("open|eigen|overig|deleted")
-                        )
-                        .then(pl.lit("no"))
-                        .when(
-                            pl.col("manual_classification")
-                            .str.to_lowercase()
-                            .str.contains("lange")
-                        )
-                        .then(pl.lit("yes"))
-                        .otherwise(pl.lit("maybe"))
-                    )
-                    data.append({"group": group, "data": programme_data})
-
-            final_data: dict[str, pl.DataFrame] = {}
-            for item in data:
-                info(
-                    f"group: {item.get('group')} --> + {item.get('data').shape[0]} items"
-                )
-                if item.get("group") in final_data:
-                    final_data[item.get("group")] = pl.concat(
-                        [final_data[item.get("group")], item["data"]]
-                    )
-                else:
-                    final_data[item.get("group")] = item["data"]
-            # add columns:
-            # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount
-
-            # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
-            # based on the value in 'manual_classification'
-            # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
-            # if the str in 'manual_classification' contains 'open' or 'eigen': set no 'no'
-            # if 'lange overname' is in 'manual_classification': set 'yes'
-            # else set to 'maybe'
-
-            # calculate the total possible fine by adding up all values in the 'possible_fine' column
-            # for all items that do not have 'no' in the 'infringement' column
-            overview_fac_programme_dir = Directory(
-                self.dirs["overviews_backup"].full / faculty / "per_programme"
-            )
-            for groupname, df in final_data.items():
-                if not self.disable_writes:
-                    for file in Directory(
-                        self.dirs["faculties"].full / faculty / "per_programme"
-                    ).files:
-                        if file.extension not in [".xls", ".xlsx"]:
-                            continue
-                        if "overview" in file.name and groupname in file.name:
-                            file.move(overview_fac_programme_dir.full / file.name)
-                            continue
-                print(f"{groupname} has {df.shape[0]} items")
-                programme_file = File(
-                    self.dirs["faculties"].full
-                    / faculty
-                    / "per_programme"
-                    / f"{groupname}_total_overview_updated_{today}.xlsx"
-                )
-                if not self.disable_writes:
-                    info(
-                        f"saving file with {df.shape[0]} rows to {programme_file.path}"
-                    )
-                    programme_data.write_excel(programme_file.path)
-                else:
-                    info(f"writing is disabled")
-
-        # loop over the faculties
-        # for each, read in all data and store
-        overview_data: list[dict] = []
-        today = datetime.now().strftime("%Y-%m-%d_%H_%M")
-        self.faculties.sort()
+        faculty_dict: dict[str, pl.DataFrame] = {}
+        if not self.faculties:
+            self.process_copyright_export()
+            if not self.faculties:
+                warn(f'No faculties detected in current data. Cannot produce overviews.')
+                return
         for faculty in self.faculties:
-            if faculty in self.COURSE_MAPPING:
-                create_programme_overviews(faculty)
-            fac_data = {"faculty": faculty}
-            all_faculty_data = self.get_faculty_data(faculty, del_overview=True)
-
-            # add columns:
-            # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount
-            if all_faculty_data.is_empty():
+            if not faculty:
                 continue
-
-            all_faculty_data = all_faculty_data.with_columns(
-                pl.col("pages_x_students")
-                .cast(pl.Int32)
-                .mul(self.fine_amount)
-                .alias("possible_fine")
-            )
-
-            # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
-            # based on the value in 'manual_classification'
-            # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
-            # if the str in 'manual_classification' contains 'open' or 'eigen': set no 'no'
-            # if 'lange overname' is in 'manual_classification': set 'yes'
-            # else set to 'maybe'
-
-            all_faculty_data = all_faculty_data.with_columns(
-                infringement=pl.when(
-                    pl.col("manual_classification").is_null()
-                    | (pl.col("manual_classification") == "")
-                    | (pl.col("manual_classification") == "-")
-                )
-                .then(pl.lit("undetermined"))
-                .when(
-                    pl.col("manual_classification")
-                    .str.to_lowercase()
-                    .str.contains("open|eigen|overig|deleted")
-                )
-                .then(pl.lit("no"))
-                .when(
-                    pl.col("manual_classification")
-                    .str.to_lowercase()
-                    .str.contains("lange")
-                )
-                .then(pl.lit("yes"))
-                .otherwise(pl.lit("maybe"))
-            )
-
-            # calculate the total possible fine by adding up all values in the 'possible_fine' column
-            # for all items that do not have 'no' in the 'infringement' column
-
-            total_possible_fine = (
-                all_faculty_data.filter(pl.col("infringement") != "no")
-                .select(pl.sum("possible_fine"))
-                .to_series()
-                .to_list()[0]
-            )
-            definitive_fine = (
-                all_faculty_data.filter(pl.col("infringement") == "yes")
-                .select(pl.sum("possible_fine"))
-                .to_series()
-                .to_list()[0]
-            )
-            locale.setlocale(locale.LC_ALL, "nl_NL.utf8")
-            fac_data["total_possible_fine"] = str(
-                locale.currency(total_possible_fine, grouping=True, symbol=True)
-            )
-            fac_data["definitive_fine"] = str(
-                locale.currency(definitive_fine, grouping=True, symbol=True)
-            )
-            fac_data["items_total"] = str(all_faculty_data.shape[0])
-            fac_data["possible_infringements"] = str(
-                all_faculty_data.filter(pl.col("infringement") != "no").shape[0]
-            )
-            fac_data["definitive_infringements"] = str(
-                all_faculty_data.filter(pl.col("infringement") == "yes").shape[0]
-            )
-            fac_data["definitive_non_infringements"] = str(
-                all_faculty_data.filter(pl.col("infringement") == "no").shape[0]
-            )
-            fac_data["items_without_man_cl"] = str(
-                all_faculty_data.filter(pl.col("infringement") == "undetermined").shape[
-                    0
-                ]
-            )
-            fac_data["items_to_do"] = str(
-                all_faculty_data.filter(pl.col("workflow_status") == "ToDo").shape[0]
-            )
-            overview_data.append(fac_data)
-            fac_file = File(
-                self.dirs["faculties"].full
-                / faculty
-                / f"{faculty}_total_overview_updated_{today}.xlsx"
-            )
-            info(
-                f"saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}"
-            )
-            if not self.disable_writes:
-                all_faculty_data.write_excel(fac_file.path)
-                self.finalize_sheet(fac_file, all_faculty_data)
-            locale.setlocale(locale.LC_ALL, "")
-
-        # now we have the data for all faculties, and written the excel files to disk.
-        # print the overview table to the console, and export it as an html file to the faculties/overviews dir.
-        cons = Console(record=True)
-
-        datatable = Table(title=f"Faculty Overview {today}")
-        datatable.add_column("Faculty", justify="right", style="yellow bold")
-        datatable.add_column("Probable fine", justify="left", style="red bold")
-        datatable.add_column("Max fine", justify="left")
-        datatable.add_column("Items total", justify="center", style="cyan bold")
-        datatable.add_column("Infringements", justify="center")
-        datatable.add_column("Non-infringements", justify="center")
-        datatable.add_column("To be classified", justify="center", style="magenta bold")
-        datatable.add_column("To do", justify="center", style="magenta bold")
-        factable = copy.deepcopy(datatable)
-        for fac in overview_data:
-            # save html overview for each faculty in their dir
-            # also add that data to the overview html
-            cur_fac_table = copy.deepcopy(factable)
-            cur_fac_table.add_row(
-                fac["faculty"],
-                fac["definitive_fine"],
-                fac["total_possible_fine"],
-                fac["items_total"],
-                fac["definitive_infringements"]
-                + f" ({int(fac['definitive_infringements']) / int(fac['items_total']) * 100:.0f}%)",
-                fac["definitive_non_infringements"]
-                + f" ({int(fac['definitive_non_infringements']) / int(fac['items_total']) * 100:.0f}%)",
-                fac["items_without_man_cl"]
-                + f" ({int(fac['items_without_man_cl']) / int(fac['items_total']) * 100:.0f}%)",
-                fac["items_to_do"]
-                + f" ({int(fac['items_to_do']) / int(fac['items_total']) * 100:.0f}%)",
-            )
-            cons.print(cur_fac_table)
-            cons.print("""Explanation of columns:
-
-                - [yellow bold]Faculty[/yellow bold]: the abbreviation of the faculty -- all data is per faculty
-                - [red bold]Probable fine[/red bold]: the sum of all fines for items that are manually classified as 'lange overname'
-                - [bold]Max fine[/bold]: the sum of all fines for all items except those manually classified as 'eigen materiaal' or 'open access'
-                - [cyan bold]Items total[/cyan bold]: the total number of items selected by the 'CopyRight tool' (i.e. all pdfs with 40+ pages)
-                - [bold]Infringements[/bold]: the number of items that are manually classified as 'lange overname' -- plus as a percentage of total number of items
-                - [bold]Non-infringements[/bold]: the number of items manually classified as 'eigen materiaal' or 'open access' -- plus as a percentage of total number of items
-                - [magenta bold]To be classified[/magenta bold]: the number of items that are not yet manually classified -- plus as a percentage of total number of items
-                """)
-            facdir = Directory(self.dirs["faculties"].full / fac["faculty"])
-            # delete any old html files
-            if not self.disable_writes:
-                for file in facdir.files:
-                    if file.name.endswith(".html"):
-                        file.delete()
-
-                cons.save_html(
-                    facdir.full / f"summary_{today}.html", theme=SVG_EXPORT_THEME
-                )
-
-            datatable.add_row(
-                fac["faculty"],
-                fac["definitive_fine"],
-                fac["total_possible_fine"],
-                fac["items_total"],
-                fac["definitive_infringements"]
-                + f" ({int(fac['definitive_infringements']) / int(fac['items_total']) * 100:.0f}%)",
-                fac["definitive_non_infringements"]
-                + f" ({int(fac['definitive_non_infringements']) / int(fac['items_total']) * 100:.0f}%)",
-                fac["items_without_man_cl"]
-                + f" ({int(fac['items_without_man_cl']) / int(fac['items_total']) * 100:.0f}%)",
-                fac["items_to_do"]
-                + f" ({int(fac['items_to_do']) / int(fac['items_total']) * 100:.0f}%)",
-            )
-
-        # now save the complete table to all_items
-
-        cons.print(datatable)
-        cons.print("""Explanation of columns:
-
-                - [yellow bold]Faculty[/yellow bold]: Faculty abbreviation
-                - [red bold]Probable fine[/red bold]: Total fine for items that have 'lange overname' as manual classification
-                - [bold]Max fine[/bold]: Total fine for all items excluding items manually classified as 'eigen materiaal' or 'open access'
-                - [cyan bold]Items total[/cyan bold]: Total amount of 'lange overnames' found by the 'CopyRight tool' (all pdfs with 40+ pages)
-                - [bold]Infringements[/bold]: Items manually classified as 'lange overname', (% of total)
-                - [bold]Non-infringements[/bold]: Items manually classified as 'eigen materiaal' or 'open access', (% of total)
-                - [magenta bold]To be classified[/magenta bold]: Items not yet manually classified, (% of total)
-                - [magenta bold]To do[/magenta bold]: Items in need of action by faculty, (% of total)
-                """)
-        if not self.disable_writes:
-            cons.save_html(
-                self.dirs["all_items"].full / f"faculty_overview_{today}.html",
-                theme=SVG_EXPORT_THEME,
-            )
+            data = self.get_faculty_data(faculty, del_overview=True)
+            if data.is_empty():
+                continue
+            faculty_dict[faculty] = data
+        self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter)
 
     def retrieve_all_data(self) -> pl.DataFrame:
         """
@@ -1652,7 +894,8 @@ class EasyAccessTool:
         Returns a dataframe with all unique rows including provenance.
         """
         found_dfs = dict()
-        today = f"{datetime.now().isoformat(sep=' ', timespec='minutes')}"
+        overview_data: list[dict] = []
+        today = datetime.now().strftime("%Y-%m-%d")
         cool("Retrieving all data. Please wait, this can take a while.")
         numfiles = 0
         dirs = {
@@ -1751,6 +994,34 @@ class EasyAccessTool:
             ]
         )
 
+        # now go select rows with duplicate material_ids
+        # rows should be identical. If so, drop all except one.
+        # If not, drop rows that are missing 'manual_classification'.
+        # If there are still duplicates, compare 'manual_classification'.
+        #   If the same: keep rows with less empty cells. If the same, keep any.
+        #   If different: merge the manual_classifications into single str, separated by ' | ' and print warning.
+        def fix_duplicate_mat_id(mat_id:str, keep_row:dict|None, full_df:pl.DataFrame) -> pl.DataFrame:
+            # remove all rows with material_id == mat_id from full_df
+            # then add keep_row to full_df
+            if not keep_row:
+                # keep any of the rows
+                return pl.concat([full_df.filter(pl.col("material_id") != mat_id), full_df.filter(pl.col("material_id") == mat_id).unique(subset=['material_id'])])
+            else:
+                # keep the row given by keep_row
+                return pl.concat([full_df.filter(pl.col("material_id") != mat_id), pl.DataFrame(keep_row)])
+
+        duplicate_material_ids = full_df.select('material_id').group_by("material_id").len().filter(pl.col("count") > 1).select('material_id').to_series().to_list()
+        for mat_id in duplicate_material_ids:
+            rows = full_df.filter(pl.col("material_id") == mat_id).sort(by=["manual_classification","last_sheet_update"], nulls_last=True).unique(subset=["material_id","manual_classification"], keep='first').to_dicts()
+            if len(rows) < 1:
+                full_df = fix_duplicate_mat_id(mat_id, None, full_df)
+                continue
+            elif len(rows) == 1:
+                full_df = fix_duplicate_mat_id(mat_id, rows[0], full_df)
+                continue
+            else:
+                continue
+
         info(
             f"{full_df.shape[0]} rows remaining after selecting unique rows based on material_id, manual classification, remarks, and workflow_status."
         )
@@ -1777,9 +1048,11 @@ class EasyAccessTool:
                     "last_change",
                     "status",
                 ]
-                full_df = full_df.with_columns()  # ...finish this
-                # This expression should make sure data from full_df is kept if it contains updated info.
-                # Rows that have remained the same or are missing data are not updated; i.e. keep the stored_df row.
+
+                # Compare stored_df and full_df.
+                # stored_df is the data currently on disk in full_df.parquet ('old'), full_df is the data we just retrieved ('new')
+                # Compare rows with the same material_id.
+                #
 
                 df_merged = (
                     full_df.join(
@@ -1836,9 +1109,12 @@ class EasyAccessTool:
                 df_merged = df_merged.drop(dropcols).drop(
                     ["all_match", "any_missing_in_full_df"]
                 )
+                df_merged = df_merged.unique('material_id')
 
         df_merged.write_parquet("full_df.parquet")
         df_merged.write_csv("full_data.csv")
 
 if __name__ == "__main__":
     cli_app()
+
+

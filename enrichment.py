@@ -5,6 +5,7 @@ import bs4
 import re
 import httpx
 import asyncio
+from constants import OSIRIS_DATA
 
 def determine_course_code(code: str, name: str) -> set | None:
     """
@@ -35,38 +36,58 @@ def determine_course_code(code: str, name: str) -> set | None:
         warn(f"Error in determine_course_code: {e}")
         return tempresults
 
-def enrich_sheets(df: pl.DataFrame) -> pl.DataFrame:
+def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.DataFrame:
     """
-    Read in OSIRIS/people page data from jsons in the current dir.
+    Read in OSIRIS/people page data.
     Enrich the supplied df with the information contained in the jsons.
     Return the enriched dataframe.
     """
-    try:
-        osiris_data_w_contacts = json.load(open("osiris_data_w_contacts.json"))
-    except Exception as e:
-        print(e)
-        info(
-            "No OSIRIS data found or unreadable. Skipping OSIRIS data enrichment. Please run the cli again with the refresh_osiris_data flag set to True."
-        )
-        return
+
 
     item_data = df.select(
         pl.col("course_code"), pl.col("course_name"), pl.col("material_id")
     ).to_dicts()
     enriched_item_data = []
     osiris_cat_link = "https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursus/zoek?trefwoord="
-    info("now determining course codes and enriching rows with OSIRIS data")
+    info(f"Enriching {len(item_data)} items for {group} with OSIRIS data.")
+    total = len(item_data)
+    updated = 0
+    already_enriched = 0
+    not_found = 0
     for item in item_data:
+        already_found_codes = []
+        if item.get('osiris_course_codes_found'):
+            if isinstance(item['osiris_course_codes_found'], str):
+                if ' | ' in item['osiris_course_codes_found']:
+                    already_found_codes = item['osiris_course_codes_found'].split(" | ")
+                else:
+                    already_found_codes = already_found_codes.append(item['osiris_course_codes_found'])
+                already_found_codes = [i.strip() for i in already_found_codes]
+
         course_codes = determine_course_code(
             item["course_code"], item["course_name"]
         )
 
         if not course_codes:
+            not_found += 1
             continue
 
         course_codes = list(course_codes)
 
         if len(course_codes) < 1:
+            not_found += 1
+            continue
+
+        course_codes = [i.strip() for i in course_codes]
+
+        proceed = False
+        for cur_code in course_codes:
+            if cur_code not in already_found_codes:
+                proceed = True
+                break
+
+        if not proceed:
+            already_enriched += 1
             continue
 
         new_item = dict()
@@ -75,16 +96,17 @@ def enrich_sheets(df: pl.DataFrame) -> pl.DataFrame:
             new_item["osiris_course_codes_found"] = course_codes[0]
         if len(course_codes) > 1:
             new_item["osiris_course_codes_found"] = " | ".join(course_codes)
-        found_osiris_data = osiris_data_w_contacts.get(course_codes[0], None)
+        found_osiris_data = OSIRIS_DATA.get(course_codes[0], None)
 
         if not found_osiris_data:
+            not_found += 1
             continue
 
         new_item["osiris_course_code_data_selected"] = course_codes[0]
         new_item["osiris_catalogue_url"] = osiris_cat_link + course_codes[0]
         new_item["osiris_programme"] = found_osiris_data.get("programme")
         if found_osiris_data.get("contacts"):
-            contacts = found_osiris_data.get("contacts")
+            contacts: dict[str,dict[str, str|list[dict[str,str]]]] = found_osiris_data.get("contacts")
             if len(contacts) == 1:
                 new_item["contact_name"] = list(contacts.keys())[0]
                 new_item["contact_email"] = list(contacts.values())[0].get("email")
@@ -100,11 +122,33 @@ def enrich_sheets(df: pl.DataFrame) -> pl.DataFrame:
                             curabbr = org.get("abbr")
                     if maxlen > 0:
                         new_item["contact_org"] = curabbr
+        updated += 1
         enriched_item_data.append(new_item)
 
     enriched_items_df = pl.DataFrame(enriched_item_data)
     df = df.join(enriched_items_df, on="material_id", how="left")
-    info("Enriched df with OSIRIS data.")
+
+    for col in df.columns:
+        if col.endswith("_left") or col.endswith("_right"):
+            base = col.replace("_left","").replace("_right","")
+            # Drop if suffix column is all null
+            if df.select(pl.col(col).is_null().all()).item(0,0):
+                df = df.drop(col)
+                continue
+            # If base column exists, compare
+            if base in df.columns:
+                same_vals = df.select((pl.col(base).fill_null(value='') == pl.col(col).fill_null(value='')).all()).item(0,0)
+                if same_vals:
+                    df = df.drop(col)
+                else:
+                    # If base is all null, replace it
+                    if df.select(pl.col(base).is_null().all()).item(0,0):
+                        df = df.drop(base)
+                        df = df.rename({col: base})
+            else:
+                # Rename suffix column to base
+                df = df.rename({col: base})
+    info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot found:        {not_found}/{total}")
     return df
 
 async def update_osiris_data(df: pl.DataFrame) -> None:
