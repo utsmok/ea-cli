@@ -23,7 +23,7 @@ Note: only tested on windows systems
 
 see readme.md for more info
 """
-
+from collections import defaultdict
 from dataclasses import dataclass, field
 import asyncio
 import os
@@ -801,38 +801,39 @@ class EasyAccessTool:
                 all_faculty_data = all_faculty_data.unique(subset="material_id")
 
         if not total_overview.is_empty():
-            if (latest_mod_date < overview_file.modified) and (
-                not prefer_overview_cols
-            ):
-                info(
-                    f"Latest mod date for overview is newer than latest mod date for any other sheet for {faculty}."
-                )
-                all_overview_man_class = (
-                    total_overview.select(pl.col("manual_classification"))
-                    .to_series()
-                    .to_list()
-                )
-                all_overview_man_class = [
-                    i for i in all_overview_man_class if i not in [None, "", "-", " "]
-                ]
-                all_faculty_data_man_class = (
-                    all_faculty_data.select(pl.col("manual_classification"))
-                    .to_series()
-                    .to_list()
-                )
-                all_faculty_data_man_class = [
-                    i
-                    for i in all_faculty_data_man_class
-                    if i not in [None, "", "-", " "]
-                ]
-                print(
-                    f"{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data."
-                )
-                if len(all_faculty_data_man_class) < len(all_overview_man_class):
-                    print(
-                        f"all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}."
+            if latest_mod_date:
+                if (latest_mod_date < overview_file.modified) and (
+                    not prefer_overview_cols
+                ):
+                    info(
+                        f"Latest mod date for overview is newer than latest mod date for any other sheet for {faculty}."
                     )
-                    prefer_overview_cols = True
+                    all_overview_man_class = (
+                        total_overview.select(pl.col("manual_classification"))
+                        .to_series()
+                        .to_list()
+                    )
+                    all_overview_man_class = [
+                        i for i in all_overview_man_class if i not in [None, "", "-", " "]
+                    ]
+                    all_faculty_data_man_class = (
+                        all_faculty_data.select(pl.col("manual_classification"))
+                        .to_series()
+                        .to_list()
+                    )
+                    all_faculty_data_man_class = [
+                        i
+                        for i in all_faculty_data_man_class
+                        if i not in [None, "", "-", " "]
+                    ]
+                    print(
+                        f"{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data."
+                    )
+                    if len(all_faculty_data_man_class) < len(all_overview_man_class):
+                        print(
+                            f"all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}."
+                        )
+                        prefer_overview_cols = True
             if prefer_overview_cols:
                 preffered_cols = set(total_overview.columns) - {"material_id"}
                 all_faculty_data = join_coalesce_all(
@@ -877,7 +878,7 @@ class EasyAccessTool:
                 warn(f'No faculties detected in current data. Cannot produce overviews.')
                 return
         for faculty in self.faculties:
-            if not faculty:
+            if not faculty or faculty == "" or faculty == "Unmapped":
                 continue
             data = self.get_faculty_data(faculty, del_overview=True)
             if data.is_empty():
@@ -894,15 +895,13 @@ class EasyAccessTool:
         Returns a dataframe with all unique rows including provenance.
         """
         found_dfs = dict()
-        overview_data: list[dict] = []
         today = datetime.now().strftime("%Y-%m-%d")
         cool("Retrieving all data. Please wait, this can take a while.")
         numfiles = 0
         dirs = {
             "faculties": self.dirs.get("faculties"),
-            "all_items": self.dirs.get("all_items"),
         }
-
+        data_entry_info = defaultdict(list)
         for name, dir in dirs.items():
             cur_df = pl.DataFrame()
             for file in dir.files_r:
@@ -910,23 +909,42 @@ class EasyAccessTool:
                     continue
                 if file.extension in [".xls", ".xlsx"]:
                     try:
-                        file_content = pl.read_excel(file.path, sheet_id=0)
+                        file_content:dict[str,pl.DataFrame] = {}
+                        file_content['complete_data'] = pl.read_excel(file.path, sheet_id=1)
+                        try:
+                            file_content['data_entry'] = pl.read_excel(file.path, sheet_id=2)
+                        except Exception as e:
+                            ...
                         numfiles += 1
                     except Exception as e:
                         print(f"Couldnt read file {file.path}: {e}")
                         continue
 
                     if not isinstance(file_content, dict):
-                        file_content = {"sheet1": file_content}
+                        file_content = {"Sheet1": file_content}
 
-                    for dataframe in file_content.values():
-                        dataframe = dataframe.with_columns(
-                            pl.lit(str(file.name)).alias("from_file")
-                        )
-                        if cur_df.is_empty():
-                            cur_df = dataframe
-                            continue
-                        cur_df = pl.concat([cur_df, dataframe], how="diagonal_relaxed")
+                    for sheetname, dataframe in file_content.items():
+                        if sheetname == 'complete_data' or sheetname == 'Sheet1':
+                            dataframe = dataframe.with_columns(
+                                pl.lit(str(file.name)).alias("from_file")
+                            )
+                            if cur_df.is_empty():
+                                cur_df = dataframe
+                                continue
+                            cur_df = pl.concat([cur_df, dataframe], how="diagonal_relaxed")
+                        else:
+                            df_as_dict = dataframe.to_dicts()
+                            for row in df_as_dict:
+                                if row.get("material_id"):
+                                    data_entry_info[row.get("material_id")].append(
+                                        {
+                                            "from_file": file.name,
+                                            "manual_classification": row.get("manual_classification"),
+                                            "remarks": row.get("remarks"),
+                                            "workflow_status": row.get("workflow_status"),
+                                        }
+                                    )
+
 
             info(f"Retrieved {cur_df.shape[0]} rows from dir {name}")
             cur_df = cur_df.unique()
@@ -953,29 +971,57 @@ class EasyAccessTool:
             select_cols.append("material_id")
         if "Material id" in full_df.columns:
             select_cols.append("Material id")
-        material_id_and_file = full_df.select(select_cols).to_dicts()
+        if "manual_classification" in full_df.columns:
+            select_cols.append("manual_classification")
+        if "remarks" in full_df.columns:
+            select_cols.append("remarks")
+        if "workflow_status" in full_df.columns:
+            select_cols.append("workflow_status")
+        df_subset = full_df.select(select_cols).to_dicts()
 
-        final_dict: dict[int, list] = dict()
-        for row in material_id_and_file:
+        files_final_dict: dict[int, list] = dict()
+        man_class_final_dict: dict[str, str] = dict()
+        remarks_final_dict: dict[str, str] = dict()
+        workflow_status_final_dict: dict[str, str] = dict()
+
+        for row in df_subset:
             if row.get("material_id"):
                 mat_id = int(row.get("material_id"))
             elif row.get("Material id"):
                 mat_id = int(row.get("Material id"))
             if not mat_id:
                 continue
-            if mat_id in final_dict:
-                if row.get("from_file") not in final_dict.get(mat_id):
-                    final_dict[mat_id].append(row.get("from_file"))
+            if mat_id in files_final_dict:
+                if row.get("from_file") not in files_final_dict.get(mat_id):
+                    files_final_dict[mat_id].append(row.get("from_file"))
             else:
-                final_dict[mat_id] = list()
-                final_dict[mat_id].append(row.get("from_file"))
+                files_final_dict[mat_id] = list()
+                files_final_dict[mat_id].append(row.get("from_file"))
+            mat_id = str(mat_id)
+            if mat_id  in data_entry_info:
+                for entry in data_entry_info.get(mat_id):
+                    man_class = entry.get("manual_classification")
+                    remark = entry.get("remarks")
+                    workflow_status = entry.get("workflow_status")
+                    man_class_final_dict[mat_id] = row.get("manual_classification")
+                    remarks_final_dict[mat_id] = row.get("remarks")
+                    workflow_status_final_dict[mat_id] = row.get("workflow_status")
+                    if man_class:
+                        if man_class != "-" and man_class != row.get("manual_classification"):
+                            man_class_final_dict[mat_id] = man_class
+                    if remark:
+                        if remark != "-" and remark != row.get("remarks"):
+                            remarks_final_dict[mat_id] = remark
+                    if workflow_status:
+                        if workflow_status != row.get("workflow_status") and workflow_status != "ToDo":
+                            workflow_status_final_dict[mat_id] = workflow_status
 
-        update_dict: dict[str, str] = dict()
-        for material_id, filenames in final_dict.items():
+        from_file_update_dict: dict[str, str] = dict()
+        for material_id, filenames in files_final_dict.items():
             if len(filenames) > 1:
-                update_dict[str(material_id)] = ", ".join(filenames)
+                from_file_update_dict[str(material_id)] = ", ".join(filenames)
             else:
-                update_dict[str(material_id)] = filenames[0]
+                from_file_update_dict[str(material_id)] = filenames[0]
 
         full_df = full_df.drop("from_file")
 
@@ -987,45 +1033,62 @@ class EasyAccessTool:
                 "workflow_status",
             ]
         )
+        full_df = full_df.drop(["manual_classification", "remarks", "workflow_status"])
         full_df = full_df.with_columns(
             [
-                pl.col("material_id").replace(update_dict).alias("from_file"),
+                pl.col("material_id").replace(from_file_update_dict).alias("from_file"),
+                pl.col("material_id").replace(man_class_final_dict).alias("manual_classification"),
+                pl.col("material_id").replace(remarks_final_dict).alias("remarks"),
+                pl.col("material_id").replace(workflow_status_final_dict).alias("workflow_status"),
                 pl.lit(today).alias("last_sheet_update"),
             ]
         )
 
-        # now go select rows with duplicate material_ids
-        # rows should be identical. If so, drop all except one.
-        # If not, drop rows that are missing 'manual_classification'.
-        # If there are still duplicates, compare 'manual_classification'.
-        #   If the same: keep rows with less empty cells. If the same, keep any.
-        #   If different: merge the manual_classifications into single str, separated by ' | ' and print warning.
-        def fix_duplicate_mat_id(mat_id:str, keep_row:dict|None, full_df:pl.DataFrame) -> pl.DataFrame:
-            # remove all rows with material_id == mat_id from full_df
-            # then add keep_row to full_df
-            if not keep_row:
-                # keep any of the rows
-                return pl.concat([full_df.filter(pl.col("material_id") != mat_id), full_df.filter(pl.col("material_id") == mat_id).unique(subset=['material_id'])])
-            else:
-                # keep the row given by keep_row
-                return pl.concat([full_df.filter(pl.col("material_id") != mat_id), pl.DataFrame(keep_row)])
+        def merge_rows(df: pl.DataFrame, unique_col: str) -> pl.DataFrame:
+            # Cast all columns to string and preprocess
+            df = df.with_columns(pl.exclude(pl.Utf8).cast(str))
 
-        duplicate_material_ids = full_df.select('material_id').group_by("material_id").len().filter(pl.col("count") > 1).select('material_id').to_series().to_list()
-        for mat_id in duplicate_material_ids:
-            rows = full_df.filter(pl.col("material_id") == mat_id).sort(by=["manual_classification","last_sheet_update"], nulls_last=True).unique(subset=["material_id","manual_classification"], keep='first').to_dicts()
-            if len(rows) < 1:
-                full_df = fix_duplicate_mat_id(mat_id, None, full_df)
-                continue
-            elif len(rows) == 1:
-                full_df = fix_duplicate_mat_id(mat_id, rows[0], full_df)
-                continue
-            else:
-                continue
+            # Replace empty-like values with null
+            preprocessed_exprs = [
+                pl.when(
+                    pl.col(col).is_null() |
+                    (pl.col(col) == "") |
+                    (pl.col(col) == "-")
+                )
+                .then(None)
+                .otherwise(pl.col(col))
+                .alias(col)
+                for col in df.columns
+            ]
+            df_preprocessed = df.select(preprocessed_exprs)
 
+            # Generate aggregation expressions
+            agg_exprs = []
+            for col in df_preprocessed.columns:
+                if col == unique_col:
+                    continue
+
+                # Build single expression with null handling
+                expr = (
+                    pl.when(pl.col(col).is_null().all())
+                    .then(None)  # All null case
+                    .when(pl.col(col).drop_nulls().unique().len() == 1)
+                    .then(pl.col(col).drop_nulls().unique().first())  # Single unique value
+                    .otherwise(pl.col(col).drop_nulls().first())  # Multiple unique values
+                    .alias(col)
+                )
+                agg_exprs.append(expr)
+
+            # Group and aggregate with proper null handling
+            return df_preprocessed.group_by(unique_col).agg(agg_exprs)
+
+
+
+        #full_df = merge_rows(full_df, unique_col="material_id")
         info(
             f"{full_df.shape[0]} rows remaining after selecting unique rows based on material_id, manual classification, remarks, and workflow_status."
         )
-        info(f"Now comparing data with previously stored items.")
+        info("Now comparing data with previously stored items.")
         df_merged = pl.DataFrame()
         try:
             stored_df = pl.read_parquet("full_df.parquet")
@@ -1116,5 +1179,3 @@ class EasyAccessTool:
 
 if __name__ == "__main__":
     cli_app()
-
-

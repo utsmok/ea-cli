@@ -222,10 +222,10 @@ class File:
         if isinstance(new_path, str):
             new_path = pathlib.Path(new_path)
         if new_path.exists():
-            if '.' in new_path:
-                new_path = new_path.split(".")[0]+"_" +str(int(time.time()))+new_path.split(".")[1]
+            if '.' in str(new_path):
+                new_path = pathlib.Path(str(new_path).split(".")[0]+"_" +str(int(time.time()))+'.'+str(new_path).split(".")[1])
             else:
-                new_path = new_path+"_" +str(int(time.time()))
+                new_path = pathlib.Path(str(new_path)+"_" +str(int(time.time())))
         shutil.move(self._path, str(new_path.absolute()))
         return File(new_path)
 
