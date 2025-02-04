@@ -1,12 +1,12 @@
 import yaml
 from dataclasses import dataclass, field
-from utils import File, Directory, print
+from easy_access.utils import File, Directory, print
 from enum import Enum
 from typing import Literal
-from rich.console import Console
-
-console = Console()
-
+import logging
+import os
+from pathlib import Path
+import json
 
 """
 This script reads settings from settings.yaml and parses all containg info into a Settings dataclass,
@@ -14,6 +14,8 @@ with nested dataclasses for the different settings.
 
 Used throughout the app to access settings (file/dirnames, university data, mappings, etc) in a structured way.
 """
+
+
 @dataclass
 class ColInfo:
     """
@@ -68,6 +70,36 @@ class SheetSetting(Enum):
     DATA_ENTRY_COLS = "data_entry_cols"
     NEW_FIELDS = "new_fields"
 
+
+class Functions(str, Enum):
+    """
+    CLI option for picking which functions to run, see easy_access_cli.cli()
+    """
+
+    both = "both"
+    read = "read"
+    export = "export"
+
+@dataclass
+class EasyAccessSettings:
+    """Configuration settings for the Easy Access Tool."""
+    functions: Functions
+    only_changes: bool = True
+    save_files: bool = True
+    refresh_osiris_data: bool = False
+    retrieve_all: bool = True
+    other_sheet: Path | None = None
+    enrich_with_osiris_data: bool = True
+    dirs: dict[DirSetting, Directory] = field(default_factory=dict)
+    disable_writes: bool = False
+
+    @classmethod
+    def from_env(cls, **kwargs) -> "EasyAccessSettings":
+        """Create settings from environment variables and override with kwargs."""
+        dirs = SETTINGS.dirs
+        return cls(dirs=dirs, **kwargs)
+
+
 @dataclass(frozen=True)
 class Programme:
     name: str | None = None
@@ -84,62 +116,61 @@ class Faculty:
     abbreviation: str = ""
     programmes: list[Programme] = field(default_factory=list)
 
+
+@dataclass
+class DataSettings:
+    data_entry_cols: list[ColInfo] = field(default_factory=list, init=False)
+    complete_data_cols: list[ColInfo] = field(default_factory=list, init=False)
+    complete_data_name: str = field(default="Complete Data", init=False)
+    data_entry_name: str = field(default="Data Entry", init=False)
+    raw_data_col_order: list[str] = field(default_factory=list, init=False)
+    new_fields: dict[str, dict[str, str|list]] = field(default_factory=list, init=False)
+
+@dataclass
+class UniversitySettings:
+    name: str = field(default="", init=False)
+    abbreviation: str = field(default="", init=False)
+    lms: dict[str, str] = field(default_factory=dict, init=False)
+    course_catalogue: dict[str, str] = field(default_factory=dict, init=False)
+    employee_catalogue: dict[str, str] = field(default_factory=dict, init=False)
+    faculties: list[Faculty] = field(default_factory=list, init=False)
+    programmes: set[Programme] = field(default_factory=set, init=False)
+
+    def make_programme_set(self):
+        if self.faculties:
+            for faculty in self.faculties:
+                programmes = faculty.programmes
+                if not programmes:
+                    continue
+                for programme in programmes:
+                    prog_dict = programme.__dict__
+                    prog_dict['faculty_name'] = faculty.name
+                    prog_dict['faculty_abbreviation'] = faculty.abbreviation
+                    self.programmes.add(Programme(**prog_dict))
+    @property
+    def department_mapping(self):
+        if not self.programmes:
+            self.make_programme_set()
+        return {f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}": programme.faculty_abbreviation if programme.faculty_abbreviation else "" for programme in self.programmes}
+
+    @property
+    def course_mapping(self):
+        if not self.programmes:
+            self.make_programme_set()
+        course_mapping_dict = {}
+        for faculty in self.faculties:
+            faculty_name = faculty.abbreviation
+            data = dict()
+            for programme in faculty.programmes:
+                if programme.cluster:
+                    data[f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}"] = programme.cluster
+            if data:
+                course_mapping_dict[faculty_name] = data
+        return course_mapping_dict
+
 @dataclass
 class Settings:
     """Dataclass holding the app settings"""
-
-    @dataclass
-    class DataSettings:
-        data_entry_cols: list[ColInfo] = field(default_factory=list, init=False)
-        complete_data_cols: list[ColInfo] = field(default_factory=list, init=False)
-        complete_data_name: str = field(default="Complete Data", init=False)
-        data_entry_name: str = field(default="Data Entry", init=False)
-        raw_data_col_order: list[str] = field(default_factory=list, init=False)
-        new_fields: dict[str, dict[str, str|list]] = field(default_factory=list, init=False)
-
-    @dataclass
-    class UniversitySettings:
-        name: str = field(default="", init=False)
-        abbreviation: str = field(default="", init=False)
-        lms: dict[str, str] = field(default_factory=dict, init=False)
-        course_catalogue: dict[str, str] = field(default_factory=dict, init=False)
-        employee_catalogue: dict[str, str] = field(default_factory=dict, init=False)
-        faculties: list[Faculty] = field(default_factory=list, init=False)
-        programmes: set[Programme] = field(default_factory=set, init=False)
-
-        def make_programme_set(self):
-            if self.faculties:
-                for faculty in self.faculties:
-                    programmes = faculty.programmes
-                    if not programmes:
-                        continue
-                    for programme in programmes:
-                        prog_dict = programme.__dict__
-                        prog_dict['faculty_name'] = faculty.name
-                        prog_dict['faculty_abbreviation'] = faculty.abbreviation
-                        self.programmes.add(Programme(**prog_dict))
-        @property
-        def department_mapping(self):
-            if not self.programmes:
-                self.make_programme_set()
-            return {f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}": programme.faculty_abbreviation if programme.faculty_abbreviation else "" for programme in self.programmes}
-
-        @property
-        def course_mapping(self):
-            if not self.programmes:
-                self.make_programme_set()
-            course_mapping_dict = {}
-            for faculty in self.faculties:
-                faculty_name = faculty.abbreviation
-                data = dict()
-                for programme in faculty.programmes:
-                    if programme.cluster:
-                        data[f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}"] = programme.cluster
-                if data:
-                    course_mapping_dict[faculty_name] = data
-            return course_mapping_dict
-
-
 
     input_file_path: str = "settings.yaml"
     settings_file: File = field(init=False)
@@ -187,8 +218,7 @@ class Settings:
             self.university_settings.faculties.append(Faculty(name, abbreviation, programmes))
 
         self.university_settings.make_programme_set()
-        console.print(self.university_settings.department_mapping)
-        console.print(self.university_settings.course_mapping)
+
     def parse_data_settings(self, data_settings: dict[str, str|list|dict]):
         for key, value in data_settings.items():
             try:
@@ -238,14 +268,22 @@ class Settings:
                 print(f"Error while creating directory {key} with path {path}: {e}")
 
     def parse_files(self, raw_file_strs:dict[str,str]):
+        if 'file_folder' in raw_file_strs:
+            self.dirs[DirSetting.SCRIPT_DATA] = Directory(raw_file_strs['file_folder'])
+        else:
+            self.dirs[DirSetting.SCRIPT_DATA] = Directory(os.getcwd())
+
+        file_dir_path = self.dirs[DirSetting.SCRIPT_DATA].full
         for key, path in raw_file_strs.items():
+            if key == 'file_folder':
+                continue
             try:
                 key = FileSetting(key)
             except ValueError:
                 print(f"Unrecognized file type {key} (with path: {path}). Skipping.")
                 continue
             try:
-                self.files[key] = File(path)
+                self.files[key] = File(file_dir_path / path)
             except Exception as e:
                 print(f"Error while adding file {key} with path {path}: {e}")
 
@@ -265,4 +303,20 @@ class Settings:
         'unsorted': parse_unsorted
     }
 
+# suppress some annoying warnings when reading excel files
+logging.getLogger("fastexcel.types.dtype").setLevel(logging.ERROR)
+
 SETTINGS = Settings()
+
+DEPARTMENT_MAPPING = SETTINGS.university_settings.department_mapping
+COURSE_MAPPING = SETTINGS.university_settings.course_mapping
+FINE_AMOUNT = SETTINGS.fine_amount
+
+try:
+    print(SETTINGS.files)
+    OSIRIS_DATA:dict[str,dict] = json.load(open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path))
+except Exception as e:
+    print(e)
+    warn(
+        f"{SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path} not found or unreadable. OSIRIS data enrichment will not be possible.\nPlease run the cli again with the refresh_osiris_data flag set to True to retrieve the required data."
+    )

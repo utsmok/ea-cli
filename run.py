@@ -1,0 +1,117 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "bs4",
+#     "python-dotenv",
+#     "httpx",
+#     "lxml",
+#     "openpyxl",
+#     "polars",
+#     "rich",
+#     "typer",
+#     "fastexcel",
+#     "xlsxwriter",
+#     "pyyaml",
+# ]
+# ///
+
+"""
+Easy Access Sheet Toolkit
+Feb 2025
+Samuel Mok / s.mok@utwente.nl / cip@utwente.nl
+homepage: https://github.com/utsmok/ea-cli
+Note: only tested on windows systems
+
+This script runs the Easy Access tool for you.
+All code can be found in folder 'easy_access', with easy_access_cli.py containing the main functionality.
+See readme.md for more info, and the settings.yaml example file for specific parameters.
+
+quickstart:
+1. install uv (https://docs.astral.sh/uv/getting-started/installation/)
+2. make sure settings.yaml is present in the same dir as run.py and the contents are correct
+3. > uv run run.py --help
+"""
+
+import typer
+from typing import Annotated
+from easy_access.utils import cool, warn
+from easy_access.settings import Functions, EasyAccessSettings
+from pathlib import Path
+from easy_access.easy_access_cli import EasyAccessTool
+cli_app = typer.Typer()
+
+
+@cli_app.command()
+def cli(
+    do: Annotated[
+        Functions,
+        typer.Option(
+            case_sensitive=False,
+            help="Which tool to run: read in new data, export current data, or both.",
+            rich_help_panel="Functions",
+        ),
+    ] = "read",
+    changes: Annotated[
+        bool,
+        typer.Option(
+            help="Only add items that have been changed to new faculty sheets.",
+            rich_help_panel="Functions",
+        ),
+    ] = True,
+    save: Annotated[
+        bool,
+        typer.Option(
+            help="If enabled, will store results in excel files. If disabled will only print to console.",
+            rich_help_panel="Functions",
+        ),
+    ] = True,
+    osiris_update: Annotated[
+        bool,
+        typer.Option(
+            help="If enabled, will retrieve fresh osiris data for all course + people page data.",
+            rich_help_panel="Functions",
+        ),
+    ] = False,
+    other_sheet: Annotated[
+        Path | None,
+        typer.Option(
+            help="Path to a xlsx sheet to read instead of CopyRight Data.",
+            rich_help_panel="Read in data from alternate source",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+        ),
+    ] = None,
+    retrieve_all: Annotated[
+        bool,
+        typer.Option(
+            help="Retrieve all data from data entry folders and store as parquet file.",
+            rich_help_panel="Functions",
+        ),
+    ] = True,
+) -> None:
+    """Easy Access toolkit for managing faculty sheet data."""
+
+    # Load settings from env and CLI params
+    ea_settings = EasyAccessSettings.from_env(
+        functions=do,
+        only_changes=changes,
+        save_files=save,
+        refresh_osiris_data=osiris_update,
+        retrieve_all=retrieve_all,
+        other_sheet=other_sheet,
+    )
+
+    if do not in [Functions.both, Functions.read, Functions.export]:
+        warn("No functions selected! Aborting. Run ea-cli --help for details.")
+        cool("Thank you for using the Easy Access tool!")
+        raise typer.Exit(code=1)
+
+    # Initialize and run tool with settings
+    tool = EasyAccessTool(ea_settings)
+    tool.run()
+
+    cool("All done! Thank you for using the Easy Access tool!")
+
+if __name__ == "__main__":
+    cli_app()

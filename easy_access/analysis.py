@@ -1,11 +1,11 @@
 import polars as pl
-from constants import COURSE_MAPPING, FINE_AMOUNT
-from settings import SETTINGS, DirSetting
-from enrichment import enrich_df_with_osiris_data
-from utils import info, warn, cool, Directory, File
+from easy_access.settings import SETTINGS, DirSetting, COURSE_MAPPING, FINE_AMOUNT
+from easy_access.enrichment import enrich_df_with_osiris_data
+from easy_access.utils import info, Directory, File
+from easy_access.sheet import finalize_sheet
 from datetime import datetime
 import locale
-from sheet import finalize_sheet
+
 from rich.console import Console
 from rich.table import Table
 from rich.terminal_theme import SVG_EXPORT_THEME

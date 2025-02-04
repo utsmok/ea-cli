@@ -1,13 +1,17 @@
-from utils import info, warn, print
+from easy_access.utils import info, warn, print
+from easy_access.settings import SETTINGS, FileSetting, OSIRIS_DATA
+
 import polars as pl
 import json
 import bs4
 import re
 import httpx
 import asyncio
-from constants import OSIRIS_DATA
-from settings import SETTINGS, FileSetting
 from dataclasses import dataclass, field
+
+# TODO:
+# Fix parsing of group/faculty/dept for contacts
+
 @dataclass(frozen=True)
 class Faculty:
     abbreviation: str = ""
