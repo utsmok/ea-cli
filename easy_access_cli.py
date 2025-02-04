@@ -30,7 +30,6 @@ import asyncio
 import os
 from datetime import datetime
 from enum import Enum
-import dotenv
 import polars as pl
 import typer
 from typing_extensions import Annotated
@@ -46,7 +45,6 @@ cli_app = typer.Typer()
 # suppress some annoying warnings when reading excel files
 logging.getLogger("fastexcel.types.dtype").setLevel(logging.ERROR)
 # load settings.env to local environment
-dotenv.load_dotenv("settings.env")
 
 
 
@@ -544,10 +542,10 @@ class EasyAccessTool:
         )
 
     def read_complete_data_from_sheets(
-        self, files: list[File], sheetname: str = "Complete data"
+        self, files: list[File], sheetname: str = SETTINGS.data_settings.complete_data_name
     ) -> pl.DataFrame:
         """
-        Reads the data from sheet 'Complete data' for each file in 'files'.
+        Reads the data from the Complete data sheet for each file in 'files'.
         """
         file_data = []
         for file in files:
@@ -858,29 +856,50 @@ class EasyAccessTool:
                     continue
                 if file.extension in [".xls", ".xlsx"]:
                     try:
-                        file_content:dict[str,pl.DataFrame] = {}
-                        file_content['complete_data'] = pl.read_excel(file.path, sheet_id=1)
+                        file_content:dict[str,pl.DataFrame|list[pl.DataFrame]] = {'other':list()}
                         try:
-                            file_content['data_entry'] = pl.read_excel(file.path, sheet_id=2)
-                        except Exception as e:
+                            file_content[SETTINGS.data_settings.complete_data_name] = pl.read_excel(file.path, sheet_name=SETTINGS.data_settings.complete_data_name)
+                        except Exception:
                             ...
+                        try:
+                            file_content[SETTINGS.data_settings.data_entry_name] = pl.read_excel(file.path, sheet_name=SETTINGS.data_settings.data_entry_name)
+                        except Exception:
+                            ...
+                        if SETTINGS.data_settings.complete_data_name not in file_content:
+                            try:
+                                file_content['other'].append(pl.read_excel(file.path, sheet_id=1))
+                            except Exception:
+                                ...
+                        if SETTINGS.data_settings.data_entry_name not in file_content:
+                            try:
+                                file_content['other'].append(pl.read_excel(file.path, sheet_id=2))
+                            except Exception:
+                                ...
                         numfiles += 1
                     except Exception as e:
                         print(f"Couldnt read file {file.path}: {e}")
                         continue
 
-                    if not isinstance(file_content, dict):
-                        file_content = {"Sheet1": file_content}
 
                     for sheetname, dataframe in file_content.items():
-                        if sheetname == 'complete_data' or sheetname == 'Sheet1':
-                            dataframe = dataframe.with_columns(
-                                pl.lit(str(file.name)).alias("from_file")
-                            )
-                            if cur_df.is_empty():
-                                cur_df = dataframe
+                        if isinstance(dataframe, pl.DataFrame):
+                            if dataframe.is_empty():
                                 continue
-                            cur_df = pl.concat([cur_df, dataframe], how="diagonal_relaxed")
+                        if sheetname is not SETTINGS.data_settings.data_entry_name:
+                            if not isinstance(dataframe, list):
+                                dataframe = [dataframe]
+                            elif len(dataframe) == 0:
+                                continue
+                            for df in dataframe:
+                                if df.is_empty():
+                                    continue
+                                df = df.with_columns(
+                                    pl.lit(str(file.name)).alias("from_file")
+                                )
+                                if cur_df.is_empty():
+                                    cur_df = df
+                                    continue
+                                cur_df = pl.concat([cur_df, df], how="diagonal_relaxed")
                         else:
                             df_as_dict = dataframe.to_dicts()
                             for row in df_as_dict:
@@ -952,9 +971,6 @@ class EasyAccessTool:
                     man_class = entry.get("manual_classification")
                     remark = entry.get("remarks")
                     workflow_status = entry.get("workflow_status")
-                    man_class_final_dict[mat_id] = row.get("manual_classification")
-                    remarks_final_dict[mat_id] = row.get("remarks")
-                    workflow_status_final_dict[mat_id] = row.get("workflow_status")
                     if man_class:
                         if man_class != "-" and man_class != row.get("manual_classification"):
                             man_class_final_dict[mat_id] = man_class
