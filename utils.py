@@ -236,14 +236,11 @@ class File:
     def delete(self) -> None:
         os.remove(self._path)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: "File") -> bool:
         return self._path == other.path
 
     def __str__(self):
         return str(self._path)
 
     def __repr__(self):
-        if self._path_init_str != str(self._path):
-            return f"FilePath('{self._path_init_str}') -> {self._path}"
-        else:
-            return f"FilePath('{self._path}')"
+        return str(self._path.absolute())
