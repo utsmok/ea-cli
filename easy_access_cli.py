@@ -11,6 +11,7 @@
 #     "typer",
 #     "fastexcel",
 #     "xlsxwriter",
+#     "pyyaml",
 # ]
 # ///
 """
@@ -27,33 +28,20 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 import dotenv
-import openpyxl
-import openpyxl.worksheet
-import openpyxl.worksheet.datavalidation
-import openpyxl.worksheet.table
-import openpyxl.worksheet.worksheet
 import polars as pl
 import typer
-from openpyxl.worksheet.table import Table as ExcelTable
-from openpyxl.worksheet.table import TableStyleInfo
 from typing_extensions import Annotated
 import logging
 from pathlib import Path
-import locale
-from rich.console import Console
-from rich.table import Table
-from rich.terminal_theme import SVG_EXPORT_THEME
-import copy
-from openpyxl.styles import Alignment, NamedStyle
-
 from utils import Directory, File, info, cool, warn, print
 from enrichment import enrich_df_with_osiris_data, update_osiris_data
-from constants import COURSE_MAPPING, DEPARTMENT_MAPPING, FINE_AMOUNT, DIRS
+from constants import COURSE_MAPPING, DEPARTMENT_MAPPING
 from sheet import finalize_sheet
 from analysis import create_faculty_overviews
+from settings import SETTINGS, FileSetting, DirSetting
 cli_app = typer.Typer()
 # suppress some annoying warnings when reading excel files
 logging.getLogger("fastexcel.types.dtype").setLevel(logging.ERROR)
@@ -81,13 +69,13 @@ class EasyAccessSettings:
     retrieve_all: bool = True
     other_sheet: Path | None = None
     enrich_with_osiris_data: bool = True
-    dirs: dict[str, str | None] = field(default_factory=dict)
+    dirs: dict[DirSetting, Directory] = field(default_factory=dict)
     disable_writes: bool = False
 
     @classmethod
     def from_env(cls, **kwargs) -> "EasyAccessSettings":
         """Create settings from environment variables and override with kwargs."""
-        dirs = DIRS
+        dirs = SETTINGS.dirs
         return cls(dirs=dirs, **kwargs)
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -145,7 +133,7 @@ def cli(
     """Easy Access toolkit for managing faculty sheet data."""
 
     # Load settings from env and CLI params
-    settings = EasyAccessSettings.from_env(
+    ea_settings = EasyAccessSettings.from_env(
         functions=do,
         only_changes=changes,
         save_files=save,
@@ -160,7 +148,7 @@ def cli(
         raise typer.Exit(code=1)
 
     # Initialize and run tool with settings
-    tool = EasyAccessTool(settings)
+    tool = EasyAccessTool(ea_settings)
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
@@ -172,51 +160,14 @@ class EasyAccessTool:
     For an overview see the comments & docstrings per function, plus readme.md.
     """
 
-    files: dict[str, File] = {} # keep track of relevant files and directories
+    files: dict[FileSetting, File] = SETTINGS.files
     faculties: list[str] = [] # list of all found/used faculties
     # latest copyright export file & when it was created
     latest_file: File
     latest_file_date: str
 
     # standard basic column order for the complete data sheets
-    COLUMN_ORDER = [
-        "material_id",
-        "period",
-        "department",
-        "course_code",
-        "course_name",
-        "url",
-        "filename",
-        "title",
-        "owner",
-        "filetype",
-        "classification",
-        "type",
-        "ml_prediction",
-        "manual_classification",
-        "manual_identifier",
-        "scope",
-        "remarks",
-        "auditor",
-        "last_change",
-        "status",
-        "google_search_file",
-        "isbn",
-        "doi",
-        "in_collection",
-        "pagecount",
-        "wordcount",
-        "picturecount",
-        "author",
-        "publisher",
-        "reliability",
-        "pages_x_students",
-        "count_students_registered",
-        "retrieved_from_copyright_on",
-        "workflow_status",
-        "faculty",
-    ]
-
+    COLUMN_ORDER = SETTINGS.data_settings.raw_data_col_order
     # debug option: completely disables all new file writes
     disable_writes = False
 
@@ -241,11 +192,9 @@ class EasyAccessTool:
 
         self.settings = settings
         self.functions:list[callable] = []
-
-
-        self.dirs = {k: Directory(v) for k,v in settings.dirs.items() if isinstance(v, str) and v}
-        if not self.dirs:
-            self.dirs = {k: v for k,v in settings.dirs.items() if isinstance(v, Directory) and v}
+        print(settings)
+        print(settings.dirs)
+        self.dirs = settings.dirs
 
         # Initialize data structures
         self.raw_copyright_data = pl.DataFrame()
@@ -380,10 +329,10 @@ class EasyAccessTool:
 
         """
         info(
-            f"Reading in newest Copyright Data from directory: {self.dirs['copyright_export']}"
+            f"Reading in newest Copyright Data from directory: {self.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
         )
         try:
-            all_files = self.dirs["copyright_export"].files
+            all_files = self.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
             self.latest_file = max(all_files, key=lambda x: x.created)
             self.latest_file_date = self.latest_file.created.strftime("%Y-%m-%d")
             info(
@@ -396,13 +345,13 @@ class EasyAccessTool:
             )
 
         except FileNotFoundError:
-            warn(f"No files found in {self.dirs['copyright_export']}")
+            warn(f"No files found in {self.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
             raise typer.Exit(code=1)
         except PermissionError:
             warn(f"Permission denied to read {self.latest_file.name}")
             raise typer.Exit(code=1)
         except ValueError:
-            warn("No files found in {self.dirs['copyright_export']}")
+            warn(f"No files found in {self.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
             raise typer.Exit(code=1)
 
     def process_copyright_export(self) -> None:
@@ -506,7 +455,7 @@ class EasyAccessTool:
             if faculty in COURSE_MAPPING:
                 self.create_programme_sheets(faculty)
 
-            faculty_dir = Directory(self.dirs["faculties"].full / faculty)
+            faculty_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
             if faculty is None or faculty == "":
                 faculty = "no_faculty_found"
 
@@ -535,7 +484,7 @@ class EasyAccessTool:
         """
 
         programme_dir = Directory(
-            self.dirs["faculties"].full / faculty / "per_programme"
+            self.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme"
         )
         course_to_sheet: dict[str, str] = COURSE_MAPPING[faculty]
         data: list[dict[str, pl.DataFrame]] = []
@@ -577,12 +526,12 @@ class EasyAccessTool:
         if not self.no_new_items:
             filename = f"all_items_{self.latest_file_date}.xlsx"
             i = 1
-            while os.path.exists(self.dirs["all_items"].full / filename):
+            while os.path.exists(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename):
                 filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
                 i += 1
             if not self.disable_writes:
-                self.copyright_data.write_excel(self.dirs["all_items"].full / filename)
-                info(f"Created sheet: {self.dirs['all_items'].full / filename}")
+                self.copyright_data.write_excel(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename)
+                info(f"Created sheet: {self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename}")
 
     def read_all_items_sheets(self) -> None:
         """
@@ -591,7 +540,7 @@ class EasyAccessTool:
         """
 
         self.all_items_sheet_data = self.read_complete_data_from_sheets(
-            self.dirs["all_items"].files_r, "Sheet1"
+            self.dirs[DirSetting.ALL_ITEMS_DIR].files_r, "Sheet1"
         )
 
     def read_complete_data_from_sheets(
@@ -735,7 +684,7 @@ class EasyAccessTool:
         if faculty is None or faculty == "":
             return pl.DataFrame()
 
-        faculty_dir = Directory(self.dirs["faculties"].full / faculty)
+        faculty_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
         faculty_files = faculty_dir.files_r
 
         all_faculty_data = pl.DataFrame()
@@ -852,7 +801,7 @@ class EasyAccessTool:
                 )
             all_faculty_data = all_faculty_data.unique(subset="material_id")
 
-        overview_fac_dir = Directory(self.dirs["overviews_backup"].full / faculty)
+        overview_fac_dir = Directory(self.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty)
 
         if del_overview:
             if overview_file:
@@ -899,7 +848,7 @@ class EasyAccessTool:
         cool("Retrieving all data. Please wait, this can take a while.")
         numfiles = 0
         dirs = {
-            "faculties": self.dirs.get("faculties"),
+            "faculties": self.dirs.get(DirSetting.FACULTIES_DIR),
         }
         data_entry_info = defaultdict(list)
         for name, dir in dirs.items():

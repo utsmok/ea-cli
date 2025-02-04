@@ -1,5 +1,6 @@
 import polars as pl
-from constants import COURSE_MAPPING, DEPARTMENT_MAPPING, FINE_AMOUNT, DIRS
+from constants import COURSE_MAPPING, FINE_AMOUNT
+from settings import SETTINGS, DirSetting
 from enrichment import enrich_df_with_osiris_data
 from utils import info, warn, cool, Directory, File
 from datetime import datetime
@@ -47,16 +48,16 @@ def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, sty
         else:
             final_data[item.get('group')] = item['data']
 
-    overview_fac_programme_dir = Directory(DIRS['overviews_backup'].full / faculty / "per_programme")
+    overview_fac_programme_dir = Directory(SETTINGS.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty / "per_programme")
     for groupname, df in final_data.items():
-        for file in Directory(DIRS['faculties'].full / faculty / "per_programme").files:
+        for file in Directory(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme").files:
             if file.extension not in [".xls", ".xlsx"]:
                 continue
             if 'overview' in file.name and groupname in file.name:
                 file.move( overview_fac_programme_dir.full / file.name)
                 continue
         info(f'{groupname} has {df.shape[0]} items')
-        programme_file = File(DIRS['faculties'].full / faculty / "per_programme" / f'{groupname}_total_overview_updated_{today}.xlsx')
+        programme_file = File(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme" / f'{groupname}_total_overview_updated_{today}.xlsx')
         info(f'saving file with {df.shape[0]} rows to {programme_file.path}')
         programme_data.write_excel(programme_file.path)
         style_iter = finalize_sheet(programme_file, programme_data, style_iter)
@@ -126,7 +127,7 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
         fac_data['items_without_man_cl'] = str(all_faculty_data.filter(pl.col("infringement") == "undetermined").shape[0])
         fac_data['items_to_do'] = str(all_faculty_data.filter(pl.col("workflow_status") == "ToDo").shape[0])
         overview_data.append(fac_data)
-        fac_file = File(DIRS['faculties'].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
+        fac_file = File(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
         info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
         all_faculty_data.write_excel(fac_file.path)
         style_iter = finalize_sheet(fac_file, all_faculty_data, style_iter)
@@ -170,7 +171,7 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
             - [bold]Non-infringements[/bold]: the number of items manually classified as 'eigen materiaal' or 'open access' -- plus as a percentage of total number of items
             - [magenta bold]To be classified[/magenta bold]: the number of items that are not yet manually classified -- plus as a percentage of total number of items
             ''')
-        facdir = Directory(DIRS['faculties'].full / fac['faculty'])
+        facdir = Directory(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / fac['faculty'])
         # delete any old html files
 
         for file in facdir.files:
@@ -204,5 +205,5 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
             - [magenta bold]To be classified[/magenta bold]: Items not yet manually classified, (% of total)
             - [magenta bold]To do[/magenta bold]: Items in need of action by faculty, (% of total)
             ''')
-    cons.save_html(DIRS['all_items'].full / f'faculty_overview_{today}.html', theme=SVG_EXPORT_THEME)
+    cons.save_html(SETTINGS.dirs[DirSetting.ALL_ITEMS_DIR].full / f'faculty_overview_{today}.html', theme=SVG_EXPORT_THEME)
     return style_iter

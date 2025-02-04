@@ -6,6 +6,135 @@ import re
 import httpx
 import asyncio
 from constants import OSIRIS_DATA
+from settings import SETTINGS, FileSetting
+from dataclasses import dataclass, field
+@dataclass(frozen=True)
+class Faculty:
+    abbreviation: str = ""
+    name: str = ""
+
+    def __str__(self):
+        return self.abbreviation
+
+@dataclass(frozen=True)
+class Department:
+    abbreviation: str = ""
+    name: str = ""
+    faculty: Faculty = None
+
+    def __str__(self):
+        if self.faculty:
+            return f"{self.faculty.abbreviation}-{self.abbreviation}"
+        else:
+            return self.abbreviation
+
+@dataclass(frozen=True)
+class Group:
+    abbreviation: str = ""
+    name: str = ""
+    department: Department = None
+
+    def __str__(self):
+        if self.department:
+            if self.department.faculty:
+                return f"{self.department.faculty.abbreviation}-{self.department.abbreviation}-{self.abbreviation}"
+            else:
+                return f"{self.department.abbreviation}-{self.abbreviation}"
+        else:
+            return self.abbreviation
+
+@dataclass
+class Contact:
+    name: str = ""
+    email: str = ""
+    groups: list[Group] = field(default_factory=list)
+    departments: list[Department] = field(default_factory=list)
+    faculties: list[Faculty] = field(default_factory=list)
+
+    def update(self) -> None:
+        for group in self.groups:
+            if group.department not in self.departments:
+                self.departments.append(group.department)
+        for dept in self.departments:
+            if dept.faculty not in self.faculties:
+                self.faculties.append(dept.faculty)
+
+    def get_data(self) -> dict[str,str|list[Group]|list[Department]|list[Faculty]]:
+        """
+        Returns a dict with sheet colnames as keys and deduplicated data as values
+        """
+        self.update()
+        loose_departments = set()
+        loose_faculties = set()
+        if self.departments:
+            if not self.groups:
+                loose_departments = self.departments
+            else:
+                loose_departments: set[Department] = {x for x in self.departments}.difference({x.department for x in self.groups})
+
+        if self.faculties:
+            if self.departments:
+                if loose_departments:
+                    compareset = {x.faculty for x in loose_departments}
+                    compareset.update({x.faculty for x in self.departments})
+                    if compareset:
+                        loose_faculties: set[Faculty] = {x for x in self.faculties}.difference(compareset)
+                else:
+                    loose_faculties: set[Faculty] = {x for x in self.faculties}.difference({x.faculty for x in self.departments})
+            else:
+                loose_faculties = self.faculties
+
+        return {
+            "contact_name": self.name,
+            "contact_email": self.email,
+            "contact_groups": self.groups,
+            "contact_departments": list(loose_departments) if loose_departments else [],
+            "contact_faculties": list(loose_faculties) if loose_faculties else []
+            }
+
+
+
+@dataclass
+class CourseContacts:
+    contacts: list[Contact] = field(default_factory=list)
+
+    def get_merged_contact_data(self) -> dict[str,str]:
+        """
+        Returns a dict with sheet colnames as keys with merged unique strings as values
+        """
+        data: dict[str, set[str|Group|Department|Faculty]] = {
+            "contact_name": set(),
+            "contact_email": set(),
+            "contact_groups": set(),
+            "contact_departments": set(),
+            "contact_faculties": set()
+        }
+        for contact in self.contacts:
+            contact_data = contact.get_data()
+            for key, value in contact_data.items():
+                if isinstance(value, list):
+                    data[key].update(value)
+                else:
+                    data[key].add(value)
+
+        for group in data["contact_groups"]:
+            if group.department in data["contact_departments"]:
+                data["contact_departments"].remove(group.department)
+        for dept in data["contact_departments"]:
+            if dept.faculty in data["contact_faculties"]:
+                data["contact_faculties"].remove(dept.faculty)
+
+        final_data: dict[str,str] = dict()
+        for key, value in data.items():
+            if not value:
+                value = ""
+            elif len(value) == 1:
+                value = str(value.pop())
+            else:
+                value = " | ".join([str(x) for x in list(value)])
+            final_data[key] = value
+
+        return final_data
 
 def determine_course_code(code: str, name: str) -> set | None:
     """
@@ -105,23 +234,57 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
         new_item["osiris_course_code_data_selected"] = course_codes[0]
         new_item["osiris_catalogue_url"] = osiris_cat_link + course_codes[0]
         new_item["osiris_programme"] = found_osiris_data.get("programme")
+        default_faculties = {
+            'EEMCS': Faculty(abbreviation='EEMCS', name='Electrical Engineering, Mathematics and Computer Science'),
+            'BMS': Faculty(abbreviation='BMS', name='Behavioural, Management and Social Sciences'),
+            'TNW': Faculty(abbreviation='TNW', name='Science and Technology'),
+            'ET': Faculty(abbreviation='ET', name='Engineering Technology'),
+            'ITC': Faculty(abbreviation='ITC', name='ITC Faculty'),
+        }
         if found_osiris_data.get("contacts"):
             contacts: dict[str,dict[str, str|list[dict[str,str]]]] = found_osiris_data.get("contacts")
-            if len(contacts) == 1:
-                new_item["contact_name"] = list(contacts.keys())[0]
-                new_item["contact_email"] = list(contacts.values())[0].get("email")
-                if list(contacts.values())[0].get("orgs"):
-                    maxlen = 0
-                    curabbr = ""
-                    for org in list(contacts.values())[0].get("orgs"):
-                        if len(org.get("abbr")) > maxlen and any(
-                            org.get("abbr").startswith(x)
-                            for x in ["EEMCS", "BMS", "TNW", "ET", "ITC"]
-                        ):
-                            maxlen = len(org.get("abbr"))
-                            curabbr = org.get("abbr")
-                    if maxlen > 0:
-                        new_item["contact_org"] = curabbr
+            course_contacts = CourseContacts()
+            for contact_name, contact in contacts.items():
+                cur_contact = Contact(name=contact_name, email=contact.get("email"))
+                faculties = set()
+                departments = set()
+                groups = set()
+                for org in contact.get('orgs',[]):
+                    abbr = org.get("abbr")
+                    name = org.get("name")
+                    if abbr in default_faculties:
+                        faculties.add(default_faculties[abbr])
+                        continue
+                    if any(
+                        abbr.startswith(x)
+                        for x in default_faculties.keys()
+                    ) and '-' in abbr:
+                        splitstr = abbr.split("-")
+                        if len(splitstr) == 2:
+                            fac_abbr = splitstr[0]
+                            if fac_abbr not in default_faculties:
+                                warn(f"Unknown faculty abbreviation {fac_abbr} from {org} in {group} enrichment results.")
+                                continue
+                            faculties.add(default_faculties[fac_abbr])
+                            dep_abbr = splitstr[1]
+                            departments.add(Department(abbreviation=dep_abbr, name=name, faculty=default_faculties[fac_abbr]))
+                        if len(splitstr) == 3:
+                            fac_abbr = splitstr[0]
+                            if fac_abbr not in default_faculties:
+                                warn(f"Unknown faculty abbreviation {fac_abbr} from {org} in {group} enrichment results.")
+                                continue
+                            dep_abbr = splitstr[1]
+                            groups.add(Group(abbreviation=splitstr[2], name=name, department=Department(abbreviation=dep_abbr, faculty=default_faculties[fac_abbr])))
+                if len(groups) > 0:
+                    cur_contact.groups = list(groups)
+                if len(departments) > 0:
+                    cur_contact.departments = list(departments)
+                if len(faculties) > 0:
+                    cur_contact.faculties = list(faculties)
+                cur_contact.update()
+                course_contacts.contacts.append(cur_contact)
+
+            new_item.update(course_contacts.get_merged_contact_data())
         updated += 1
         enriched_item_data.append(new_item)
 
@@ -129,6 +292,8 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
     df = df.join(enriched_items_df, on="material_id", how="left")
 
     for col in df.columns:
+        # TODO: improve handling of conflicting values
+
         if col.endswith("_left") or col.endswith("_right"):
             base = col.replace("_left","").replace("_right","")
             # Drop if suffix column is all null
@@ -145,8 +310,13 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
                     if df.select(pl.col(base).is_null().all()).item(0,0):
                         df = df.drop(base)
                         df = df.rename({col: base})
+                    # if not: we have 2 cols that do not match. Merge them in some way.
+                    else:
+                        warn(f"Conflicting values for column {base} in {group} enrichment results. Overwriting with new values.")
+                        df = df.drop(base).rename({col: base})
+
             else:
-                # Rename suffix column to base
+                # base doesn't exist? weird, just rename suffix column to base and done
                 df = df.rename({col: base})
     info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot found:        {not_found}/{total}")
     return df
@@ -694,7 +864,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
         f"Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes."
     )
     # store course_data_dict as a json file
-    with open("osiris_data.json", "w") as f:
+    with open(SETTINGS.files[FileSetting.OSIRIS_DATA], "w") as f:
         json.dump(course_data_dict, f, indent=4)
     if len(not_found) > 0:
         info(f"{len(not_found)} course codes not found: ")
@@ -707,9 +877,9 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
     for data in course_data_dict.values():
         if data.get("contacts"):
             persons_to_retrieve.update(data.get("contacts"))
-        for field in ["docenten", "examinators"]:
-            if data.get(field):
-                extended_persons_to_retrieve.update(data.get(field))
+        for data_field in ["docenten", "examinators"]:
+            if data.get(data_field):
+                extended_persons_to_retrieve.update(data.get(data_field))
 
     info(f"now retrieving person data for {len(persons_to_retrieve)} people.")
     person_data = []
@@ -734,7 +904,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
 
     info(f"got data for {len(person_data)} persons")
     try:
-        json.dump(person_data, open("person_data.json", "w"), indent=4)
+        json.dump(person_data, open(SETTINGS.files[FileSetting.PERSON_DATA], "w"), indent=4)
     except Exception as e:
         print(e)
         pass
@@ -763,7 +933,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
     try:
         json.dump(
             osiris_data_w_contacts,
-            open("osiris_data_w_contacts.json", "w"),
+            open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS], "w"),
             indent=4,
         )
     except Exception as e:
@@ -771,5 +941,5 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
         pass
 
     info(
-        "Done. Stored data in json files:\n    osiris_data.json\n    person_data.json\n    osiris_data_w_contacts.json"
+        f"Done. Stored data in json files:\n    {SETTINGS.files[FileSetting.OSIRIS_DATA]}\n    {SETTINGS.files[FileSetting.PERSON_DATA]}\n    {SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}"
     )
