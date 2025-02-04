@@ -1,6 +1,6 @@
-from settings import SETTINGS, ColInfo
+from easy_access.settings import SETTINGS, ColInfo
 from dataclasses import dataclass, field
-from utils import File, info
+from easy_access.utils import File, info
 import polars as pl
 from openpyxl.styles import NamedStyle, Alignment
 from openpyxl.worksheet.table import TableStyleInfo
