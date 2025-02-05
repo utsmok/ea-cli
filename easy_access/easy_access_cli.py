@@ -921,7 +921,7 @@ class EasyAccessTool:
         info("Now comparing data with previously stored items.")
         df_merged = pl.DataFrame()
         try:
-            stored_df = pl.read_parquet("full_df.parquet")
+            stored_df = pl.read_parquet(SETTINGS.files.get(FileSetting.FULL_DATA_PARQUET).path)
         except Exception as e:
             warn(f"Error reading full_df.parquet: {e}.")
             df_merged = full_df
