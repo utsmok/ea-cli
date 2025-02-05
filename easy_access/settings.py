@@ -124,6 +124,7 @@ class EasyAccessSettings:
     only_changes: bool = True
     save_files: bool = True
     refresh_osiris_data: bool = False
+    only_retrieve_missing_osiris_data: bool = False
     retrieve_all: bool = True
     other_sheet: Path | None = None
     enrich_with_osiris_data: bool = True

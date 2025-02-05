@@ -291,7 +291,7 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
             new_item["osiris_course_codes_found"] = course_codes[0]
         if len(course_codes) > 1:
             new_item["osiris_course_codes_found"] = " | ".join(course_codes)
-        found_osiris_data = OSIRIS_DATA.get(course_codes[0], None)
+        found_osiris_data = OSIRIS_DATA.get(course_codes[0], None) if OSIRIS_DATA else None
 
         if not found_osiris_data:
             not_found += 1
@@ -349,7 +349,7 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
     info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot found:        {not_found}/{total}")
     return df
 
-async def update_osiris_data(df: pl.DataFrame) -> None:
+async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = False) -> None:
     """
     For a given df with copyright items, retrieve all OSIRIS course data + person data from people pages.
 
@@ -364,7 +364,6 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
     ) -> dict[str, dict[str, str | list | set]]:
         print_details = False
         startstring: str = '{"from":0,"size":25,"sort":[{"cursus_lange_naam.raw":{"order":"asc"}},{"cursus":{"order":"asc"}},{"collegejaar":{"order":"desc"}}],"aggs":{"agg_terms_collegejaar":{"filter":{"bool":{"must":[]}},"aggs":{"agg_collegejaar_buckets":{"terms":{"field":"collegejaar","size":2500,"order":{"_term":"desc"}}}}},"agg_terms_blokken_nested.periode_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_blokken_nested.periode_omschrijving":{"terms":{"field":"blokken_nested.periode_omschrijving","size":2500,"order":{"_term":"asc"},"exclude":"Periode: [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]"}},"nested_aggs":{"nested":{"path":"blokken_nested"},"aggs":{"nested_aggs":{"filter":{"bool":{"must":[]}},"aggs":{"agg_blokken_nested.periode_omschrijving_buckets":{"terms":{"field":"blokken_nested.periode_omschrijving","size":2500,"order":{"_term":"asc"},"exclude":"Periode: [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]"},"aggs":{"items":{"reverse_nested":{}}}}}}}}}},"agg_terms_faculteit_naam":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_faculteit_naam_buckets":{"terms":{"field":"faculteit_naam","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_coordinerend_onderdeel_oms":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_coordinerend_onderdeel_oms_buckets":{"terms":{"field":"coordinerend_onderdeel_oms","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_categorie_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_categorie_omschrijving_buckets":{"terms":{"field":"categorie_omschrijving","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_voertalen.voertaal_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_voertalen.voertaal_omschrijving_buckets":{"terms":{"field":"voertalen.voertaal_omschrijving","size":2500,"order":{"_term":"asc"}}}}}},"post_filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"query":{"bool":{"must":[{"multi_match":{"query":'
-        jaar: int = 2024  # startjaar academisch jaar, 2024 = 2024-2025
         if jaar != 2024:
             if isinstance(jaar, int):
                 startstring.replace('"2024-2025"', f'"{jaar}-{jaar + 1}"')
@@ -400,13 +399,22 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
             "accept-encoding": "gzip, deflate, br, zstd",
             "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
         }
+        retry = False
         try:
             async with semaphore:
                 x = await httpx_client.post(url=url, headers=headers, data=body)
                 results = x.json().get("hits", {}).get("hits")
                 datadict = dict()
                 if not results:
-                    return
+                    if not jaar:
+                        warn(f'No data found for code {input_number}.')
+                        return
+                    elif str(jaar) == "2021":
+                        warn(f'No data found for code {input_number} in years 2022-2024. Final retry without year param.')
+                        jaar = ""
+                    else:
+                        jaar = jaar - 1
+                        retry = True
                 else:
                     if len(results) != 1:
                         info(
@@ -573,13 +581,14 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                             print(course_details.status_code)
 
                     print(newdatadict) if print_details else None
-
                     return newdatadict
         except Exception as e:
             print("excption when getting course details")
             logger.exception(e)
             return
-
+        if retry:
+            info(f'retrying data retrieval for input {input_number} with year {jaar}')
+            return await get_data_from_osiris(input_number, httpx_client, semaphore, jaar)
     async def get_data_from_people_page(
         name: str, httpx_client: httpx.AsyncClient, semaphore: asyncio.Semaphore
     ) -> dict:
@@ -604,8 +613,14 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
             # print(r.text)
             data = r.text
             pattern = r'data-link="([^"]+)"'
-            name_parsed = HumanName(name)
-            compare_name = str(name_parsed.initials()+" "+name_parsed.last).replace(" ",".").lower()
+            stripped_name = name.strip()
+            titles = ['ing.', 'dr.', 'prof.', 'ir.', "rer.", 'nat.', ', MSc', ', PhD', ', BSc']
+            for title in titles:
+                stripped_name=stripped_name.removeprefix(title).strip()
+                stripped_name=stripped_name.removesuffix(title).strip()
+            name_parsed = HumanName(stripped_name)
+            name_parsed_str = str(name_parsed)
+            compare_name = str(name_parsed.initials()+name_parsed.last.replace(" ",".")).replace(" ","").lower()
 
             if data:
                 matches = re.findall(pattern, data)
@@ -623,7 +638,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                             ratio = new_ratio
 
                     if ratio < 0.7:
-                        warn(f'Low match confidence: best match for {name} is {best_match} with ratio {ratio}')
+                        warn(f'Low match confidence: best match for {name} is {best_match} (compared with {compare_name}) with ratio {ratio}')
 
 
                     new_url: str = "https://people.utwente.nl/" + best_match
@@ -634,7 +649,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                             return await get_data_from_people_page(name, httpx_client, semaphore)
                         data = r.text
                         page_data = bs4.BeautifulSoup(data, "lxml")
-                        main_name = None
+                        main_name = ""
                         other_names = []
                         email = ""
                         if not page_data:
@@ -654,9 +669,12 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                                         .replace("(", "")
                                         .replace(")", "")
                                     )
-                            if not main_name.strip().lower() == name.strip().lower():
-                                print(f"{main_name} != input name: {name}")
-                                print("still processing")
+                            main_name_parsed_str = str(HumanName(main_name))
+                            final_ratio = Levenshtein.ratio(name_parsed_str, main_name_parsed_str)
+
+                            if final_ratio < 0.7:
+                                print(f"found name {main_name_parsed_str} differs from input name: {name_parsed_str} (ratio {final_ratio})")
+                                print("still processing...")
 
                         try:
                             for link in page_data.find_all("a"):
@@ -751,6 +769,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                         person_data = {
                             "input_name": name,
                             "main_name": main_name,
+                            "match_confidence": final_ratio,
                             "other_names": other_names,
                             "email": email,
                             "orgs": orgs,
@@ -826,99 +845,149 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
         return
     else:
         info(f"Found {len(lookup_values)} course codes to look up in OSIRIS")
+    osiris_data_w_contacts_file = {}
+    try:
+        osiris_data_w_contacts_file = json.load(
+            open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, "r", encoding="utf-8")
+        )
+    except Exception as e:
+        warn(f'couldnt load {SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path}')
+        print(e)
+        pass
 
-    # then retrieve data from OSIRIS for each of the values in lookup_values
-    course_data_dict = {}
-    not_found = set()
-    found_amount = 0
-    max_concurrent = 10
-    semaphore = asyncio.Semaphore(max_concurrent)  # Rate limiting with semaphore
-    async with httpx.AsyncClient(timeout=60) as client:
-        tasks = []
-        for code in lookup_values:
-            if code in course_data_dict:
-                continue
-            task1 = asyncio.create_task(
-                get_data_from_osiris(
-                    httpx_client=client, input_number=code, semaphore=semaphore
-                )
-            )
-            course_data_dict[code] = {}
-            tasks.append((code, task1))
+    course_codes_already_retrieved = set(osiris_data_w_contacts_file.keys())
+    retrieve_course_data = True
+    if only_retrieve_missing:
+        cur_osiris_data = json.load(open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, "r", encoding="utf-8"))
+        cur_osiris_data = {k:v for k,v in cur_osiris_data.items() if v}
+        lookup_values = lookup_values - course_codes_already_retrieved
+        info(f"{len(lookup_values)} remaining course codes to look up in OSIRIS after filtering out already retrieved course codes")
+        if len(lookup_values) == 0:
+            info("All course data already retrieved!")
+            retrieve_course_data = False
+            course_data_dict = cur_osiris_data
 
-        for code, task in tasks:
-            result = await task  # Get the result of the task
-            if result:
-                course_data_dict.update(result)
-                found_amount += 1
-            else:
-                result = await get_data_from_osiris(
-                    httpx_client=client,
-                    input_number=code,
-                    jaar="",
-                    semaphore=semaphore,
+    if retrieve_course_data:
+        # then retrieve data from OSIRIS for each of the values in lookup_values
+        course_data_dict = {}
+        not_found = set()
+        found_amount = 0
+        max_concurrent = 10
+        semaphore = asyncio.Semaphore(max_concurrent)  # Rate limiting with semaphore
+        async with httpx.AsyncClient(timeout=60) as client:
+            tasks = []
+            for code in lookup_values:
+                if code in course_data_dict:
+                    continue
+                task1 = asyncio.create_task(
+                    get_data_from_osiris(
+                        httpx_client=client, input_number=code, semaphore=semaphore
+                    )
                 )
+                course_data_dict[code] = {}
+                tasks.append((code, task1))
+
+            for code, task in tasks:
+                result = await task  # Get the result of the task
                 if result:
                     course_data_dict.update(result)
                     found_amount += 1
                 else:
-                    not_found.add(code)
+                    result = await get_data_from_osiris(
+                        httpx_client=client,
+                        input_number=code,
+                        jaar="",
+                        semaphore=semaphore,
+                    )
+                    if result:
+                        course_data_dict.update(result)
+                        found_amount += 1
+                    else:
+                        not_found.add(code)
 
-    info(
-        f"Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes."
-    )
-    # store course_data_dict as a json file
-    with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, "w") as f:
-        json.dump(course_data_dict, f, indent=4)
-    if len(not_found) > 0:
-        info(f"{len(not_found)} course codes not found: ")
-        for code in not_found:
-            print("            " + str(code))
-
+        info(
+            f"Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes."
+        )
+        # store course_data_dict as a json file
+        if only_retrieve_missing:
+            course_data_dict.update(cur_osiris_data)
+        with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, "w") as f:
+            json.dump(course_data_dict, f, indent=4)
+        if len(not_found) > 0:
+            info(f"{len(not_found)} course codes not found: ")
+            for code in not_found:
+                print("            " + str(code))
     # now look up all the person data
     persons_to_retrieve = set()
     extended_persons_to_retrieve = set()
+    person_data = list()
     for data in course_data_dict.values():
         if data.get("contacts"):
             persons_to_retrieve.update(data.get("contacts"))
         for data_field in ["docenten", "examinators"]:
             if data.get(data_field):
                 extended_persons_to_retrieve.update(data.get(data_field))
+    info(f'{len(persons_to_retrieve)} persons in current osiris data to enrich')
 
-    info(f"now retrieving person data for {len(persons_to_retrieve)} people.")
-    person_data = []
-    persontasks = []
-    async with httpx.AsyncClient(timeout=30) as client:
-        for person in persons_to_retrieve | extended_persons_to_retrieve:
-            persontasks.append(
-                asyncio.create_task(
-                    get_data_from_people_page(
-                        person, httpx_client=client, semaphore=semaphore
+    if only_retrieve_missing:
+        try:
+                cur_person_data = json.load(open(SETTINGS.files[FileSetting.PERSON_DATA].path, "r", encoding="utf-8"))
+                cur_persons = {x.get('input_name') for x in cur_person_data}
+                persons_to_retrieve = persons_to_retrieve - set(cur_persons)
+                extended_persons_to_retrieve = extended_persons_to_retrieve - set(cur_persons)
+                info(f'{len(persons_to_retrieve)} persons remaining after filtering out already retrieved persons')
+        except Exception as e:
+            warn(f'error while loading {SETTINGS.files[FileSetting.PERSON_DATA].path}: {e}')
+            ...
+    if len(persons_to_retrieve) > 0:
+        info(f"now retrieving person data for {len(persons_to_retrieve)} people.")
+        person_data = []
+        persontasks = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            for person in persons_to_retrieve | extended_persons_to_retrieve:
+                persontasks.append(
+                    asyncio.create_task(
+                        get_data_from_people_page(
+                            person, httpx_client=client, semaphore=semaphore
+                        )
                     )
                 )
-            )
-        for task in persontasks:
-            try:
-                parsed_data = await task
-                if parsed_data:
-                    person_data.append(parsed_data)
-            except Exception as e:
-                print(e)
-                pass
+            for task in persontasks:
+                try:
+                    parsed_data = await task
+                    if parsed_data:
+                        person_data.append(parsed_data)
+                except Exception as e:
+                    print(e)
+                    pass
 
-    info(f"got data for {len(person_data)} persons")
-    try:
-        json.dump(person_data, open(SETTINGS.files[FileSetting.PERSON_DATA].path, "w"), indent=4)
-    except Exception as e:
-        print('error while dumping person data')
-        print(e)
-        pass
+        info(f"got data for {len(person_data)} persons")
+        try:
+            if only_retrieve_missing:
+                current_person_data = json.load(open(SETTINGS.files[FileSetting.PERSON_DATA].path, "r", encoding="utf-8"))
+                person_data.extend(current_person_data)
+
+            json.dump(person_data, open(SETTINGS.files[FileSetting.PERSON_DATA].path, "w", encoding="utf-8"), indent=4)
+        except Exception as e:
+            print('error while dumping person data')
+            print(e)
+            pass
+    if len(person_data) == 0:
+        try:
+            person_data = json.load(open(SETTINGS.files[FileSetting.PERSON_DATA].path, "r", encoding="utf-8"))
+        except Exception as e:
+            warn(f'couldnt load {SETTINGS.files[FileSetting.PERSON_DATA].path}: {e}')
+            person_dict = {}
+
     person_dict = {a.get("input_name"): a for a in person_data}
 
     # finally, combine the two by adding the contact details to the course data
     info("Now enriching each osiris course with detailed contact data.")
     osiris_data_w_contacts = dict()
     for code, entry in course_data_dict.items():
+        if not entry:
+            print(f'No osiris data found for course code {code}')
+            continue
         contactdetails = {}
         if entry.get("contacts"):
             for contact in entry.get("contacts"):
@@ -937,22 +1006,25 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                     if not details.get("orgs"):
                         warn(f'No orgs found for contact {contact} with details:')
                         info(details)
-                        input('press enter to continue')
                 else:
                     warn(f'No details found for contact {contact}')
-                    input('press enter to continue')
 
         entry["contacts"] = contactdetails
         osiris_data_w_contacts[code] = entry
         if entry.get("contacts") == {}:
             print(f'No contact details found for course code {code}')
-            print(f'retrieved data:')
+            print(f'osiris course data:')
             print(entry)
-            input('press enter to continue')
+
     try:
+        if only_retrieve_missing:
+            current_osiris_data_w_contacts = json.load(
+                open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, "r", encoding="utf-8")
+            )
+            osiris_data_w_contacts.update(current_osiris_data_w_contacts)
         json.dump(
             osiris_data_w_contacts,
-            open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, "w"),
+            open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, "w", encoding="utf-8"),
             indent=4,
         )
     except Exception as e:
