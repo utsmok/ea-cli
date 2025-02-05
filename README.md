@@ -1,14 +1,15 @@
 # Easy Access Sheet Toolkit
-*September 2024*
+*February 2025*
 
 Note: only tested on windows systems (actually, only tested on my personal computer with very specific data and settings)
 
 The Easy Access Sheet Toolkit is a python script with a built-in CLI developed to automate the process of creating sheets of data per faculty from a university's CopyRight tool.
 
-This script can do the following:
-- Read data from a CopyRight export
-- Process the data into a standard format for usage by people who check the documents on canvas
+This script does the following:
+- Read data exported by the CopyRight tool
+- Process the data into a standard format
 - Add a few extra columns to the data to improve the workflow
+- Enrich each item with data from OSIRIS and People Pages
 - Export various sheets:
     - per faculty
     - all items
@@ -19,35 +20,31 @@ This script can do the following:
 Take a look at the cli help function:
 ![image](https://github.com/user-attachments/assets/c2038652-3e68-4ebf-9bec-e677721e001a)
 
-
 # Setting up things to use the toolkit
 
-Here are some sort instructions on how to get started with the toolkit. For more details, take a look in the easy_access_cli.py file -- it contains a lot of comments. You probably will want to change things in the script to match your own workflows anyway. Feel free to get in touch if you have questions.
+Here are some basic instructions on how to get started with the toolkit. For more details, take a look in the source code -- it contains a lot of comments. You probably will want to change things in the script to match your own workflows anyway. Feel free to get in touch if you have questions.
 
-### Settings: settings.env & department_mapping.json
+### Settings: settings.yaml
 
-In settings.env you can change where the script will look for the CopyRight export, and where it will create the output files. You can just leave this as is without issues.
+settings.yaml contains most settings for the app. 
 
-department_mapping.json is a simple json file that maps the programme names in the column 'Department' to their corresponding faculties. This is necessary because CopyRight does not have information about which faculty a programme belongs to.
-An example file is included, with the mapping for the University of Twente.
+The file should include a hierarchy of the universities faculties' and programmes. This is necessary to split the results per faculty and/or programme because the CopyRight tool does not have information about which faculty a programme belongs to.
+The included settings.yaml file includes all the settings used at the University of Twente. If you do not change the information, the script will not be able to recognize any file, and it will then move all items to the 'Unmapped' faculty.
 
-**You will need to change this to match your universities' programme names to faculty names to get useful output per faculty!!**
-If you do not do so, the script will match all items to the 'Unmapped' faculty.
-
-
-### Export data from CopyRight
+### Adding data from the CopyRight tool
 
 Go to SURF's CopyRight tool, filter the data you want to export, press right click on the sheet -> press download as ... -> select data --> press export --> press 'Click here to download your data file'.
-Make a folder called 'raw_copyright_data' (or whatever name you changed it to in settings.env) in the same directory as the easy_access_cli.py file, and put the downloaded file in it.
+Put it in the folder called 'raw_copyright_data' (or whatever name you changed it to in settings.yaml) in the same directory as the run.py file, and put the downloaded file in it. 
 
 ### Running the cli
 
 Run the cli with standard settings to create the initial sheets:
 
     uv run easy_access_cli.py
+
 If all is well, you'll see something like this:
 ![image](https://github.com/user-attachments/assets/0724f886-f067-45d7-98f3-67e9eff8e25e)
-If something is wrong, you'll either get a short warning/error message with the specific issue; or you'll get a giant list of detailed errors. Probably the last. Sorry!
+If something is wrong, you'll either get a short warning/error message with the specific issue; or you'll get a giant list of detailed errors. Probably the last. 
 
 If you want to check out all available cli options use the --help option (see the screenshot above):
 
@@ -56,12 +53,12 @@ If you want to check out all available cli options use the --help option (see th
 
 # uv? What is that?
 
-uv is an all-in-one python manager. It's a great way to run python scripts and manage dependencies: very easy, very fast, and it runs completely separate from any other python installations on your computer. I -highly- recommend using it in general, but especially for this script.
+[uv](https://docs.astral.sh/uv/getting-started/installation/) is an all-in-one python manager. It's a great way to run python scripts and manage dependencies: very easy, very fast, and it runs completely separate from any other python installations on your computer. I -highly- recommend using it in general, but especially for this script.
 Of course, you can use any python installation you want to run the script, but using uv is definitely the easiest way to get started.
 
 ## Installing uv
 
-Install uv by opening Powershell (press windows key, type 'powershell', enter) and pasting the following line:
+On windows, install uv by opening Powershell (press windows key, type 'powershell', enter) and pasting the following line:
 
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
@@ -74,8 +71,8 @@ Then type in:
 press enter, and you've fully installed uv!
 Run  the help info of the easy access script with the following command:
 
-    uv run easy_access_cli.py --help
+    uv run run.py --help
 
-To run the script using default settings, use the following command:
+To run the script using default settings, don't include --help:
 
-    uv run easy_access_cli.py
+    uv run run.py
