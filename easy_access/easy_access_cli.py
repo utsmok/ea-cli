@@ -59,8 +59,6 @@ class EasyAccessTool:
 
         self.settings = settings
         self.functions:list[callable] = []
-        print(settings)
-        print(settings.dirs)
         self.dirs = settings.dirs
 
         # Initialize data structures
@@ -642,11 +640,11 @@ class EasyAccessTool:
                         for i in all_faculty_data_man_class
                         if i not in [None, "", "-", " "]
                     ]
-                    print(
+                    info(
                         f"{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data."
                     )
                     if len(all_faculty_data_man_class) < len(all_overview_man_class):
-                        print(
+                        warn(
                             f"all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}."
                         )
                         prefer_overview_cols = True
@@ -699,6 +697,11 @@ class EasyAccessTool:
             data = self.get_faculty_data(faculty, del_overview=True)
             if data.is_empty():
                 continue
+            info(f'Enriching {faculty} data with OSIRIS data. input:')
+            print(data)
+            enrich_df_with_osiris_data(data, faculty)
+            info(f'Done enriching {faculty} data with OSIRIS data. Result:')
+            print(data)
             faculty_dict[faculty] = data
         self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter)
 
@@ -1010,4 +1013,3 @@ class EasyAccessTool:
 
         df_merged.write_parquet("full_df.parquet")
         df_merged.write_csv("full_data.csv")
-

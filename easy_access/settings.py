@@ -1,12 +1,15 @@
 import yaml
 from dataclasses import dataclass, field
-from easy_access.utils import File, Directory, print
+from easy_access.utils import File, Directory, print, warn
 from enum import Enum
 from typing import Literal
 import logging
 import os
+import sys
 from pathlib import Path
 import json
+from rich.traceback import install
+from loguru import logger
 
 """
 This script reads settings from settings.yaml and parses all containg info into a Settings dataclass,
@@ -14,6 +17,38 @@ with nested dataclasses for the different settings.
 
 Used throughout the app to access settings (file/dirnames, university data, mappings, etc) in a structured way.
 """
+
+def configure_logger():
+    log_dir = Directory("logs")
+
+    def console_formatter(record):
+        level = record["level"].name
+        if level == "INFO":
+            return "<level>{level} |> </level>{message}\n"
+        elif level == "WARNING":
+            return "<level>{level} |> </level>{message}\n"
+        elif level == "SUCCESS":  # We'll use SUCCESS level for 'cool' messages
+            return "<level>{level} |> </level>{message}\n"
+        else:
+            return "<level>{level}: |> </level>{message}\n"
+
+    logger.add(
+        sys.stderr,
+        colorize=True,
+        format=console_formatter,
+        level="TRACE",
+        enqueue=True,
+    )
+
+    logger.add(
+        log_dir.full / "app_{time}.log",
+        rotation="1 month",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        level="TRACE",
+        enqueue=True,
+        colorize=False,
+    )
+
 
 
 @dataclass
@@ -79,6 +114,8 @@ class Functions(str, Enum):
     both = "both"
     read = "read"
     export = "export"
+
+
 
 @dataclass
 class EasyAccessSettings:
@@ -147,6 +184,10 @@ class UniversitySettings:
                     prog_dict['faculty_name'] = faculty.name
                     prog_dict['faculty_abbreviation'] = faculty.abbreviation
                     self.programmes.add(Programme(**prog_dict))
+
+    @property
+    def faculty_abbreviations(self):
+        return {faculty.abbreviation for faculty in self.faculties}
     @property
     def department_mapping(self):
         if not self.programmes:
@@ -193,7 +234,7 @@ class Settings:
             with open(self.settings_file.path) as f:
                 self.raw_settings = yaml.load(f, Loader=yaml.FullLoader)
         except Exception as e:
-            print(f"Error while loading settings from {self.settings_file}: {e}")
+            logger.error(f"Error while loading settings from {self.settings_file}: {e}")
             self.raw_settings = {}
 
     def parse_settings(self) -> None:
@@ -202,7 +243,7 @@ class Settings:
             if key in self.KEY_TO_PARSER_MAPPING:
                 self.KEY_TO_PARSER_MAPPING[key](self,value)
             else:
-                print(f'Unrecognized key: {key}. Directly setting value as attribute.')
+                logger.error(f'Unrecognized key: {key}. Directly setting value as attribute.')
                 setattr(self, key, value)
 
     def parse_university(self, value):
@@ -224,13 +265,13 @@ class Settings:
             try:
                 key = SheetSetting(key)
             except ValueError:
-                print(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
+                logger.error(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
                 continue
             match key:
                 case SheetSetting.DATA_ENTRY_COLS:
                     self.data_settings.data_entry_cols = [ColInfo(**col_info) for col_info in value]
                 case SheetSetting.COMPLETE_DATA_COLS:
-                    print('complete data cols setting not implemented yet')
+                    warn('complete data cols setting not implemented yet')
                 case SheetSetting.COMPLETE_DATA_NAME:
                     self.data_settings.complete_data_name = value
                 case SheetSetting.DATA_ENTRY_NAME:
@@ -248,8 +289,7 @@ class Settings:
                         new_fields[colname] = new_field_dict
                     self.data_settings.new_fields = new_fields
                 case _:
-                    print(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
-        print(type(self.data_settings))
+                    warn(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
 
 
 
@@ -259,13 +299,13 @@ class Settings:
             try:
                 key = DirSetting(key)
             except ValueError:
-                print(f"Unrecognized directory type {key} (with path: {path}). Skipping.")
+                logger.error(f"Unrecognized directory type {key} (with path: {path}). Skipping.")
                 continue
             try:
                 self.dirs[key] = Directory(path)
 
             except Exception as e:
-                print(f"Error while creating directory {key} with path {path}: {e}")
+                logger.error(f"Error while creating directory {key} with path {path}: {e}")
 
     def parse_files(self, raw_file_strs:dict[str,str]):
         if 'file_folder' in raw_file_strs:
@@ -280,12 +320,12 @@ class Settings:
             try:
                 key = FileSetting(key)
             except ValueError:
-                print(f"Unrecognized file type {key} (with path: {path}). Skipping.")
+                logger.error(f"Unrecognized file type {key} (with path: {path}). Skipping.")
                 continue
             try:
                 self.files[key] = File(file_dir_path / path)
             except Exception as e:
-                print(f"Error while adding file {key} with path {path}: {e}")
+                logger.error(f"Error while adding file {key} with path {path}: {e}")
 
     def parse_unsorted(self, rest_values):
         """
@@ -303,20 +343,33 @@ class Settings:
         'unsorted': parse_unsorted
     }
 
+
+def load_osiris_data() -> dict[str,dict]:
+
+    # load osiris data from JSON if available, else warn user to refresh data
+    try:
+        return json.load(open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path))
+    except Exception as e:
+        print(e)
+        logger.error(
+            f"{SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path} not found or unreadable. OSIRIS data enrichment will not be possible.\nPlease run the cli again with the refresh_osiris_data flag set to True to retrieve the required data."
+        )
+
+# set up logging
+logger.remove()
+configure_logger()
+
+# install rich traceback as default
+install(show_locals=True)
+
 # suppress some annoying warnings when reading excel files
 logging.getLogger("fastexcel.types.dtype").setLevel(logging.ERROR)
 
+# initialize settings from (default: read from 'settings.yaml')
 SETTINGS = Settings()
 
+# create global variables from certain settings
 DEPARTMENT_MAPPING = SETTINGS.university_settings.department_mapping
 COURSE_MAPPING = SETTINGS.university_settings.course_mapping
 FINE_AMOUNT = SETTINGS.fine_amount
-
-try:
-    print(SETTINGS.files)
-    OSIRIS_DATA:dict[str,dict] = json.load(open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path))
-except Exception as e:
-    print(e)
-    warn(
-        f"{SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path} not found or unreadable. OSIRIS data enrichment will not be possible.\nPlease run the cli again with the refresh_osiris_data flag set to True to retrieve the required data."
-    )
+OSIRIS_DATA = load_osiris_data()

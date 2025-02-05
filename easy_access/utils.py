@@ -4,28 +4,20 @@ import shutil
 from datetime import datetime
 import time
 from rich.console import Console
+from loguru import logger
 
 # rich Console + overload the print function
 cons = Console(emoji=True, markup=True)
 print: callable = cons.print
-# shorthands for printing with preset styles
+
 def info(text: str):
-    """
-    Prints an information message.
-    """
-    print(f"[cyan]:information: |> [/cyan] {text}")
+    logger.info(text)
 
 def warn(text: str):
-    """
-    Prints a warning message.
-    """
-    print(f"[bold red]:warning: |>  {text}[/bold red]")
+    logger.warning(text)
 
 def cool(text: str):
-    """
-    Prints a nice message.
-    """
-    print(f"[yellow] :smiling_face_with_sunglasses: |>  {text} [/yellow]")
+    logger.success(text)
 
 
 # ----------------------------------------------------------------------------------------------------------------------

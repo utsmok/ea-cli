@@ -12,6 +12,10 @@
 #     "fastexcel",
 #     "xlsxwriter",
 #     "pyyaml",
+#     "colorama",
+#     "loguru",
+#     "nameparser",
+#     "levenshtein",
 # ]
 # ///
 
