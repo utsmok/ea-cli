@@ -2,15 +2,17 @@ from easy_access.settings import SETTINGS, ColInfo
 from dataclasses import dataclass, field
 from easy_access.utils import File, info
 import polars as pl
-from openpyxl.styles import NamedStyle, Alignment
-from openpyxl.worksheet.table import TableStyleInfo
-from openpyxl.worksheet.table import Table as ExcelTable
+from pathlib import Path
+
 
 import openpyxl
+from openpyxl.styles import NamedStyle, Alignment
 import openpyxl.worksheet
 import openpyxl.worksheet.datavalidation
 import openpyxl.worksheet.table
 import openpyxl.worksheet.worksheet
+from openpyxl.worksheet.table import TableStyleInfo
+from openpyxl.worksheet.table import Table as ExcelTable
 
 @dataclass
 class DataEntrySheet:
@@ -150,7 +152,8 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     """
 
     wb = openpyxl.load_workbook(filename=str(file.path))
-    wb.active.title = SETTINGS.data_settings.complete_data_name
+    if not SETTINGS.data_settings.complete_data_name in wb.sheetnames:
+        wb.active.title = SETTINGS.data_settings.complete_data_name
 
     tabstyle = TableStyleInfo(
         name=f"TableStyleMedium{style_iter}",
@@ -167,3 +170,22 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
 
     sheet.add_data(data)
     return style_iter
+
+def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
+    """
+    Stores the given data in an excel file with 1 sheet named SETTINGS.data_settings.complete_data_name
+    using the col order in SETTINGS.data_settings.final_data_col_order
+    """
+    if isinstance(file, File):
+        file = file.path
+
+    print(f'running store_complete data for {file}')
+    print(SETTINGS.data_settings.final_data_col_order)
+    print(data.columns)
+    selectcols = [col for col in SETTINGS.data_settings.final_data_col_order if col in data.columns]
+    print(data.columns)
+    print(selectcols)
+    print(data.shape[0])
+    data = data.select(selectcols)
+    print(data.shape[0])
+    data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
