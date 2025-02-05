@@ -2,6 +2,7 @@
 # Comments are provided in this file to explain the settings.
 # Note that missing settings will at best result in warnings or errors, at worst silently making errors in the output.
 
+
 # The directories to retrieve / store files. The directories should be folder names in the same directory as the script.
 directories:
   raw_copyright_data: raw_copyright_data # Directory where the raw copyright data is downloaded to (output from qlik)

@@ -1,6 +1,5 @@
 from easy_access.utils import info, warn, print
 from easy_access.settings import SETTINGS, FileSetting, OSIRIS_DATA
-
 import polars as pl
 import json
 import bs4
@@ -8,17 +7,28 @@ import re
 import httpx
 import asyncio
 from dataclasses import dataclass, field
+from loguru import logger
+from nameparser import HumanName
+import Levenshtein
+# Dataclasses for osiris_contact parsing / matching
 
-# TODO:
-# Fix parsing of group/faculty/dept for contacts
+
 
 @dataclass(frozen=True)
 class Faculty:
-    abbreviation: str = ""
-    name: str = ""
+    abbreviation: str = field(default="", compare=True)
+    name: str = field(default="", compare=True)
 
     def __str__(self):
         return self.abbreviation
+
+DEFAULT_FACULTIES = {
+        'EEMCS': Faculty(abbreviation='EEMCS', name='Electrical Engineering, Mathematics and Computer Science'),
+        'BMS': Faculty(abbreviation='BMS', name='Behavioural, Management and Social Sciences'),
+        'TNW': Faculty(abbreviation='TNW', name='Science and Technology'),
+        'ET': Faculty(abbreviation='ET', name='Engineering Technology'),
+        'ITC': Faculty(abbreviation='ITC', name='ITC Faculty'),
+    }
 
 @dataclass(frozen=True)
 class Department:
@@ -49,57 +59,115 @@ class Group:
 
 @dataclass
 class Contact:
+    raw_input_data: list[dict[str,str]] = field(default_factory=list, compare=False)
     name: str = ""
     email: str = ""
-    groups: list[Group] = field(default_factory=list)
-    departments: list[Department] = field(default_factory=list)
-    faculties: list[Faculty] = field(default_factory=list)
+    groups: set[Group] = field(default_factory=set)
+    departments: dict[str, Department] = field(default_factory=dict)
+    faculties: dict[str, Faculty] = field(default_factory=dict)
 
-    def update(self) -> None:
+    def parse_raw_input(self) -> None:
+        # parse all raw_input into Group/Department/Faculty instances
+        # and assign them to the correct list(s)
+
+        def add_faculty(abbr: str, name: str = "") -> Faculty | None:
+            try:
+                if abbr in self.faculties:
+                    return self.faculties[abbr]
+                if abbr in DEFAULT_FACULTIES:
+                    faculty = DEFAULT_FACULTIES[abbr]
+                elif abbr == "Department":
+                    faculty = None
+                else:
+                    faculty = Faculty(abbreviation=abbr, name=name)
+                self.faculties[abbr] = faculty
+                return faculty
+            except Exception as e:
+                warn(f"Error parsing faculty from raw input {abbr}, {name}: {e}")
+                return None
+
+        def add_department(abbr: str, name: str, faculty: Faculty | None, full_abbr: str) -> Department | None:
+            try:
+                if full_abbr in self.departments:
+                    return self.departments[full_abbr]
+                department = Department(abbreviation=abbr, name=name, faculty=faculty)
+                self.departments[full_abbr] = department
+                return department
+            except Exception as e:
+                warn(f"Error parsing department from raw input {abbr}, {name}, {faculty}: {e}")
+                return None
+
+        def add_group(abbr: str, name: str, department: Department) -> Group | None:
+            try:
+                group = Group(abbreviation=abbr, name=name, department=department)
+                self.groups.add(group)
+                return group
+            except Exception as e:
+                warn(f"Error parsing group from raw input {raw_input}: {e}")
+                return None
+
+        for raw_input in self.raw_input_data:
+            abbr = raw_input.get("abbr", "")
+            name = raw_input.get("name", "")
+
+            if '-' not in abbr:
+                # should be a faculty
+                add_faculty(abbr, name)
+            elif abbr.count('-') == 1:
+                # abbr should be FACULTYABBR - DEPARTMENTABBR
+                # name should be department name
+                faculty_abbr, dept_abbr = abbr.split('-')
+                dept_name = name
+                faculty = add_faculty(faculty_abbr)
+                add_department(dept_abbr, dept_name, faculty, abbr)
+            elif abbr.count('-') == 2:
+                # abbr should be FACULTYABBR - DEPARTMENTABBR - GROUPABBR
+                # name should be group name
+                faculty_abbr, dept_abbr, group_abbr = abbr.split('-')
+                full_dept_abbr = f"{faculty_abbr}-{dept_abbr}"
+                group_name = name
+                faculty = add_faculty(faculty_abbr)
+                department = add_department(dept_abbr, "", faculty, full_dept_abbr)
+                add_group(group_abbr, group_name, department)
+
+    def add_raw_input(self, raw_input: dict[str,str]) -> None:
+        if raw_input not in self.raw_input_data:
+            self.raw_input_data.append(raw_input)
+
+    def update(self) -> tuple[list[Group],list[Department],list[Faculty]]:
         for group in self.groups:
-            if group.department not in self.departments:
-                self.departments.append(group.department)
-        for dept in self.departments:
-            if dept.faculty not in self.faculties:
-                self.faculties.append(dept.faculty)
+            if group.department:
+                if str(group.department) not in self.departments:
+                    self.departments[str(group.department)] = group.department
+
+        for dept in self.departments.values():
+            if dept.faculty:
+                if str(dept.faculty) not in self.faculties:
+                    self.faculties[str(dept.faculty)]=dept.faculty
 
     def get_data(self) -> dict[str,str|list[Group]|list[Department]|list[Faculty]]:
         """
         Returns a dict with sheet colnames as keys and deduplicated data as values
         """
+        self.parse_raw_input()
         self.update()
-        loose_departments = set()
-        loose_faculties = set()
-        if self.departments:
-            if not self.groups:
-                loose_departments = self.departments
-            else:
-                loose_departments: set[Department] = {x for x in self.departments}.difference({x.department for x in self.groups})
-
-        if self.faculties:
-            if self.departments:
-                if loose_departments:
-                    compareset = {x.faculty for x in loose_departments}
-                    compareset.update({x.faculty for x in self.departments})
-                    if compareset:
-                        loose_faculties: set[Faculty] = {x for x in self.faculties}.difference(compareset)
-                else:
-                    loose_faculties: set[Faculty] = {x for x in self.faculties}.difference({x.faculty for x in self.departments})
-            else:
-                loose_faculties = self.faculties
 
         return {
             "contact_name": self.name,
             "contact_email": self.email,
-            "contact_groups": self.groups,
-            "contact_departments": list(loose_departments) if loose_departments else [],
-            "contact_faculties": list(loose_faculties) if loose_faculties else []
+            "contact_groups": list(self.groups),
+            "contact_departments": list(self.departments.values()),
+            "contact_faculties": list(self.faculties.values()),
             }
 
 
 
 @dataclass
-class CourseContacts:
+class ItemContacts:
+    """
+    Keeps track of all Contacts for a single item
+    Mainly used to output strs with found unique depts/groups/faculties
+    """
     contacts: list[Contact] = field(default_factory=list)
 
     def get_merged_contact_data(self) -> dict[str,str]:
@@ -121,13 +189,6 @@ class CourseContacts:
                 else:
                     data[key].add(value)
 
-        for group in data["contact_groups"]:
-            if group.department in data["contact_departments"]:
-                data["contact_departments"].remove(group.department)
-        for dept in data["contact_departments"]:
-            if dept.faculty in data["contact_faculties"]:
-                data["contact_faculties"].remove(dept.faculty)
-
         final_data: dict[str,str] = dict()
         for key, value in data.items():
             if not value:
@@ -135,7 +196,7 @@ class CourseContacts:
             elif len(value) == 1:
                 value = str(value.pop())
             else:
-                value = " | ".join([str(x) for x in list(value)])
+                value = " | ".join([str(x) for x in list(value) if x])
             final_data[key] = value
 
         return final_data
@@ -175,6 +236,7 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
     Enrich the supplied df with the information contained in the jsons.
     Return the enriched dataframe.
     """
+
 
 
     item_data = df.select(
@@ -238,56 +300,18 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
         new_item["osiris_course_code_data_selected"] = course_codes[0]
         new_item["osiris_catalogue_url"] = osiris_cat_link + course_codes[0]
         new_item["osiris_programme"] = found_osiris_data.get("programme")
-        default_faculties = {
-            'EEMCS': Faculty(abbreviation='EEMCS', name='Electrical Engineering, Mathematics and Computer Science'),
-            'BMS': Faculty(abbreviation='BMS', name='Behavioural, Management and Social Sciences'),
-            'TNW': Faculty(abbreviation='TNW', name='Science and Technology'),
-            'ET': Faculty(abbreviation='ET', name='Engineering Technology'),
-            'ITC': Faculty(abbreviation='ITC', name='ITC Faculty'),
-        }
         if found_osiris_data.get("contacts"):
             contacts: dict[str,dict[str, str|list[dict[str,str]]]] = found_osiris_data.get("contacts")
-            course_contacts = CourseContacts()
+            course_contacts = ItemContacts()
             for contact_name, contact in contacts.items():
-                cur_contact = Contact(name=contact_name, email=contact.get("email"))
-                faculties = set()
-                departments = set()
-                groups = set()
-                for org in contact.get('orgs',[]):
-                    abbr = org.get("abbr")
-                    name = org.get("name")
-                    if abbr in default_faculties:
-                        faculties.add(default_faculties[abbr])
-                        continue
-                    if any(
-                        abbr.startswith(x)
-                        for x in default_faculties.keys()
-                    ) and '-' in abbr:
-                        splitstr = abbr.split("-")
-                        if len(splitstr) == 2:
-                            fac_abbr = splitstr[0]
-                            if fac_abbr not in default_faculties:
-                                warn(f"Unknown faculty abbreviation {fac_abbr} from {org} in {group} enrichment results.")
-                                continue
-                            faculties.add(default_faculties[fac_abbr])
-                            dep_abbr = splitstr[1]
-                            departments.add(Department(abbreviation=dep_abbr, name=name, faculty=default_faculties[fac_abbr]))
-                        if len(splitstr) == 3:
-                            fac_abbr = splitstr[0]
-                            if fac_abbr not in default_faculties:
-                                warn(f"Unknown faculty abbreviation {fac_abbr} from {org} in {group} enrichment results.")
-                                continue
-                            dep_abbr = splitstr[1]
-                            groups.add(Group(abbreviation=splitstr[2], name=name, department=Department(abbreviation=dep_abbr, faculty=default_faculties[fac_abbr])))
-                if len(groups) > 0:
-                    cur_contact.groups = list(groups)
-                if len(departments) > 0:
-                    cur_contact.departments = list(departments)
-                if len(faculties) > 0:
-                    cur_contact.faculties = list(faculties)
-                cur_contact.update()
+                faculty_dict_start = {}
+                if contact.get('faculty'):
+                    if contact.get('faculty') in DEFAULT_FACULTIES:
+                        faculty_dict_start = {contact.get("faculty"): DEFAULT_FACULTIES.get(contact.get("faculty"))}
+                cur_contact = Contact(name=contact_name, email=contact.get("email"), faculties=faculty_dict_start)
+                if contact.get('orgs'):
+                    [cur_contact.add_raw_input(org) for org in contact.get('orgs')]
                 course_contacts.contacts.append(cur_contact)
-
             new_item.update(course_contacts.get_merged_contact_data())
         updated += 1
         enriched_item_data.append(new_item)
@@ -379,27 +403,31 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
         try:
             async with semaphore:
                 x = await httpx_client.post(url=url, headers=headers, data=body)
-
                 results = x.json().get("hits", {}).get("hits")
                 datadict = dict()
                 if not results:
                     return
                 else:
                     if len(results) != 1:
-                        print(
+                        info(
                             str(len(results))
                             + f" hit(s) for code {input_number} for year {jaar} - {jaar + 1}."
                         )
                         print_details = True
 
-                    for h, result in enumerate(results):
-                        print(
-                            f"------- Result {h} -----------\n"
-                        ) if print_details else None
+                    def process_teacher_items(items: str | list | set) -> set[str]:
+                        """Helper function to process teacher items into a consistent set format"""
+                        if isinstance(items, list):
+                            return set(items)
+                        elif isinstance(items, str):
+                            return {items}
+                        elif isinstance(items, set):
+                            return items
+                        return set()
+
+                    for result in results:
                         rawdata: dict = result.get("_source")
-                        teachers = []
-                        # pretty print the raw data
-                        print(rawdata.keys()) if print_details else None
+                        teachers = set()
                         for key, value in rawdata.items():
                             if (
                                 value == ""
@@ -408,76 +436,14 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                                 or value == {}
                             ):
                                 continue
-                            gaplen = 25 - len(key)
-                            if gaplen <= 0:
-                                gaplen = 1
-                                key = key[:21] + "..."
-                            gap = " " + "─" * (gaplen - 1)
                             if isinstance(value, list):
-                                if len(value) == 0:
+                                if not value:
                                     continue
-                                if len(value) == 1:
-                                    print(
-                                        f"{key}{gap}─ {list(value[0].values())[0]}"
-                                    ) if print_details else None
-                                    items = list(value[0].values())[0]
-                                else:
-                                    gap = f"{key}{gap}┬ "
-                                    i = 0
-                                    items = [
-                                        list(item.values())[0] for item in value
-                                    ]
-                                    itemset = set(items)
-                                    items = list(itemset)
-                                    for item in items:
-                                        i += 1
-                                        if i - (len(items)) == 0:
-                                            gap = " " * (len(key) + gaplen) + "└ "
-                                        elif i == 2:
-                                            gap = " " * (len(key) + gaplen) + "├ "
-                                        if isinstance(item, dict):
-                                            print(
-                                                f"{gap}{list(item.values())[0]}"
-                                            ) if print_details else None
-                                        else:
-                                            print(
-                                                f"{gap}{item}"
-                                            ) if print_details else None
-                                if key == "docenten":
-                                    if isinstance(items, list):
-                                        if len(items) == 1:
-                                            teachers = set()
-                                            teachers.add(items[0])
-                                        else:
-                                            teachers = set(items)
-                                    elif isinstance(items, set):
-                                        teachers = items
-                                    elif isinstance(items, str):
-                                        teachers = set()
-                                        teachers.add(items)
+                                items = (list(value[0].values())[0] if len(value) == 1
+                                        else list({list(item.values())[0] for item in value}))
 
-                            else:
-                                if "\n" not in str(value):
-                                    print(
-                                        f"{key}{gap}─ {value}"
-                                    ) if print_details else None
-                                else:
-                                    lines = value.split("\n")
-                                    printer = f"{key}{gap}┬ "
-                                    i = 0
-                                    for line in lines:
-                                        i = i + 1
-                                        if i - len(lines) == 0:
-                                            printer = (
-                                                " " * (len(key) + gaplen) + "└ "
-                                            )
-                                        elif i > 1:
-                                            printer = (
-                                                f"{' ' * (len(key) + gaplen)}├ "
-                                            )
-                                        print(
-                                            f"{printer}{line}"
-                                        ) if print_details else None
+                                if key == "docenten":
+                                    teachers = process_teacher_items(items)
 
                         datadict[rawdata.get("cursus")] = {
                             "cursuscode": rawdata.get("cursus"),
@@ -611,7 +577,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                     return newdatadict
         except Exception as e:
             print("excption when getting course details")
-            print(e)
+            logger.exception(e)
             return
 
     async def get_data_from_people_page(
@@ -638,39 +604,67 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
             # print(r.text)
             data = r.text
             pattern = r'data-link="([^"]+)"'
+            name_parsed = HumanName(name)
+            compare_name = str(name_parsed.initials()+" "+name_parsed.last).replace(" ",".").lower()
 
             if data:
                 matches = re.findall(pattern, data)
                 if matches:
-                    new_url: str = "https://people.utwente.nl/" + matches[0]
+                    if len(matches) >= 10:
+                        matches = matches[:5]
+                    best_match = matches[0]
+                    ratio = Levenshtein.ratio(compare_name, best_match)
+                    for match in matches:
+                        if 'business' in match or '/' in match:
+                            continue
+                        new_ratio = Levenshtein.ratio(compare_name, match)
+                        if new_ratio > ratio:
+                            best_match = match
+                            ratio = new_ratio
+
+                    if ratio < 0.7:
+                        warn(f'Low match confidence: best match for {name} is {best_match} with ratio {ratio}')
+
+
+                    new_url: str = "https://people.utwente.nl/" + best_match
                     try:
                         r = await httpx_client.get(new_url, headers=headers)
                         page_data = None
-                        r.raise_for_status()
+                        if r.status_code in [500, 502]:
+                            return await get_data_from_people_page(name, httpx_client, semaphore)
                         data = r.text
                         page_data = bs4.BeautifulSoup(data, "lxml")
+                        main_name = None
+                        other_names = []
+                        email = ""
+                        if not page_data:
+                            warn(f'No page data found for {name} at {new_url}')
+                            return
                         found_name = page_data.find(
                             "h1", class_="pageheader__title"
-                        ).strings
-                        main_name = ""
-                        other_names = []
-                        for possible_name in found_name:
-                            if not main_name:
-                                main_name = possible_name
-                            else:
-                                other_names.append(
-                                    str(possible_name)
-                                    .strip()
-                                    .replace("(", "")
-                                    .replace(")", "")
-                                )
+                        )
+                        if found_name:
+                            for possible_name in found_name.strings:
+                                if not main_name:
+                                    main_name = possible_name
+                                else:
+                                    other_names.append(
+                                        str(possible_name)
+                                        .strip()
+                                        .replace("(", "")
+                                        .replace(")", "")
+                                    )
+                            if not main_name.strip().lower() == name.strip().lower():
+                                print(f"{main_name} != input name: {name}")
+                                print("still processing")
 
-                        if not main_name.strip().lower() == name.strip().lower():
-                            print(f"{main_name} != input name: {name}")
-                            print("still processing")
-                        for link in page_data.find_all("a"):
-                            if "mailto:" in link.get("href"):
-                                email = link.get("href").replace("mailto:", "")
+                        try:
+                            for link in page_data.find_all("a"):
+                                if "mailto:" in link.get("href"):
+                                    email = link.get("href").replace("mailto:", "")
+                        except Exception as e:
+                            logger.exception(e)
+                            email = ""
 
                         orgs = []
                         found_orgs = []
@@ -679,6 +673,8 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                         org_data = page_data.find_all(
                             class_="widget-linklist--smallicons"
                         )
+                        if not org_data:
+                            org_data = []
                         if len(org_data) >= 1:
                             org_data = org_data[0].find_all(
                                 class_="widget-linklist__text"
@@ -705,7 +701,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                                             {"name": orgname, "abbr": orgabbr}
                                         )
                                 except Exception as e:
-                                    pass
+                                    logger.exception(f'error while processing org {text}: {e}')
 
                         if faculty and facultyabbr and found_orgs:
                             orgs.append({"name": faculty, "abbr": facultyabbr})
@@ -733,21 +729,24 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                         )
                         courses = []
                         programmes = []
-                        for link in education_tab.find_all("a"):
-                            if "https://utwente.osiris-student.nl" in link.get(
-                                "href"
-                            ):
-                                # course
-                                linktext = link.string
-                                code, coursename = linktext.split(" - ", 1)
-                                courses.append(
-                                    {"course_code": code, "course_name": coursename}
-                                )
-                            if "https://www.utwente.nl/" in link.get("href"):
-                                # programme
-                                url = link.get("href")
-                                programme = link.string
-                                programmes.append({"name": programme, "url": url})
+                        if education_tab:
+                            for link in education_tab.find_all("a"):
+                                if "https://utwente.osiris-student.nl" in link.get(
+                                    "href"
+                                ):
+                                    # course
+                                    linktext = link.string if link.string else ""
+                                    if " - " in linktext:
+                                        code, coursename = linktext.split(" - ", 1)
+                                        courses.append(
+                                            {"course_code": code, "course_name": coursename}
+                                        )
+                                if "https://www.utwente.nl/" in link.get("href"):
+                                    # programme
+                                    url = link.get("href")
+                                    programme = link.string
+                                    if url and programme:
+                                        programmes.append({"name": programme, "url": url})
 
                         person_data = {
                             "input_name": name,
@@ -766,6 +765,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
                         print(
                             f"error while retrieving / processing {new_url} for person {name}"
                         )
+                        logger.exception(e)
                         raise e
 
     # step 1: determine list of courseids to search for
@@ -868,7 +868,7 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
         f"Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes."
     )
     # store course_data_dict as a json file
-    with open(SETTINGS.files[FileSetting.OSIRIS_DATA], "w") as f:
+    with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, "w") as f:
         json.dump(course_data_dict, f, indent=4)
     if len(not_found) > 0:
         info(f"{len(not_found)} course codes not found: ")
@@ -908,36 +908,51 @@ async def update_osiris_data(df: pl.DataFrame) -> None:
 
     info(f"got data for {len(person_data)} persons")
     try:
-        json.dump(person_data, open(SETTINGS.files[FileSetting.PERSON_DATA], "w"), indent=4)
+        json.dump(person_data, open(SETTINGS.files[FileSetting.PERSON_DATA].path, "w"), indent=4)
     except Exception as e:
+        print('error while dumping person data')
         print(e)
         pass
     person_dict = {a.get("input_name"): a for a in person_data}
 
     # finally, combine the two by adding the contact details to the course data
-    info(f"Now enriching each osiris course with detailed contact data.")
+    info("Now enriching each osiris course with detailed contact data.")
     osiris_data_w_contacts = dict()
     for code, entry in course_data_dict.items():
         contactdetails = {}
         if entry.get("contacts"):
             for contact in entry.get("contacts"):
                 details = person_dict.get(contact)
+
                 if details:
                     contactdetails[contact] = {
                         "name": details.get("main_name"),
-                        "first_name": details.get("other_names")[0],
+                        "first_name": details.get("other_names",[""])[0],
                         "email": details.get("email"),
                         "faculty": details.get("faculty"),
                         "orgs": details.get("orgs"),
                         "programmes": details.get("programmes"),
                         "people_page": details.get("people_page_url"),
                     }
+                    if not details.get("orgs"):
+                        warn(f'No orgs found for contact {contact} with details:')
+                        info(details)
+                        input('press enter to continue')
+                else:
+                    warn(f'No details found for contact {contact}')
+                    input('press enter to continue')
+
         entry["contacts"] = contactdetails
         osiris_data_w_contacts[code] = entry
+        if entry.get("contacts") == {}:
+            print(f'No contact details found for course code {code}')
+            print(f'retrieved data:')
+            print(entry)
+            input('press enter to continue')
     try:
         json.dump(
             osiris_data_w_contacts,
-            open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS], "w"),
+            open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, "w"),
             indent=4,
         )
     except Exception as e:
