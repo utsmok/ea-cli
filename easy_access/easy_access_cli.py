@@ -7,7 +7,7 @@ import typer
 
 from easy_access.utils import Directory, File, info, cool, warn, print
 from easy_access.enrichment import enrich_df_with_osiris_data, update_osiris_data
-from easy_access.sheet import finalize_sheet
+from easy_access.sheet import finalize_sheet, store_complete_data
 from easy_access.analysis import create_faculty_overviews
 from easy_access.settings import (
     SETTINGS,
@@ -334,7 +334,7 @@ class EasyAccessTool:
                 continue
             else:
                 info(f"{faculty}:{gap}{faculty_data.shape[0]}")
-            faculty_data.write_excel(faculty_dir.full / filename)
+            store_complete_data(faculty_dir.full / filename, faculty_data)
             self.style_iter = finalize_sheet(
                 File(str(faculty_dir.full / filename)), faculty_data, self.style_iter
             )
@@ -375,7 +375,7 @@ class EasyAccessTool:
                 programme_dir.full / f"{groupname}_{self.latest_file_date}.xlsx"
             )
 
-            df.write_excel(filename)
+            store_complete_data(filename,df)
             self.style_iter = finalize_sheet(File(str(filename)), df, self.style_iter)
             info(
                 f"created programme sheet {groupname}_{self.latest_file_date}.xlsx"
@@ -392,7 +392,7 @@ class EasyAccessTool:
                 filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
                 i += 1
             if not self.disable_writes:
-                self.copyright_data.write_excel(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename)
+                store_complete_data(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename, self.copyright_data)
                 info(f"Created sheet: {self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename}")
 
     def read_all_items_sheets(self) -> None:
@@ -694,11 +694,7 @@ class EasyAccessTool:
             data = self.get_faculty_data(faculty, del_overview=True)
             if data.is_empty():
                 continue
-            info(f'Enriching {faculty} data with OSIRIS data. input:')
-            print(data)
             enrich_df_with_osiris_data(data, faculty)
-            info(f'Done enriching {faculty} data with OSIRIS data. Result:')
-            print(data)
             faculty_dict[faculty] = data
         self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter)
 
@@ -1008,10 +1004,10 @@ class EasyAccessTool:
                 )
                 df_merged = df_merged.unique('material_id')
 
-                # refresh OSIRIS data if bool is set
+        # refresh OSIRIS data if bool is set
         if self.refresh_osiris_data:
             info("Refreshing OSIRIS data. This will take a while!")
             asyncio.run(update_osiris_data(df_merged, self.only_retrieve_missing_osiris_data))
 
-        df_merged.write_parquet("full_df.parquet")
-        df_merged.write_csv("full_data.csv")
+        df_merged.write_parquet(SETTINGS.files.get(FileSetting.FULL_DATA_PARQUET).path)
+        df_merged.write_csv(SETTINGS.files.get(FileSetting.FULL_DATA_CSV).path)

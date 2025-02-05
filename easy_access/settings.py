@@ -99,11 +99,13 @@ class FileSetting(Enum):
 class SheetSetting(Enum):
     """Enum for sheet settings expected by the script"""
     RAW_DATA_COL_ORDER = "raw_data_col_order"
+    FINAL_DATA_COL_ORDER = "final_data_col_order"
     COMPLETE_DATA_NAME = "complete_data_name"
     COMPLETE_DATA_COLS = "complete_data_cols"
     DATA_ENTRY_NAME = "data_entry_name"
     DATA_ENTRY_COLS = "data_entry_cols"
     NEW_FIELDS = "new_fields"
+
 
 
 class Functions(str, Enum):
@@ -162,6 +164,7 @@ class DataSettings:
     complete_data_name: str = field(default="Complete Data", init=False)
     data_entry_name: str = field(default="Data Entry", init=False)
     raw_data_col_order: list[str] = field(default_factory=list, init=False)
+    final_data_col_order: list[str] = field(default_factory=list, init=False)
     new_fields: dict[str, dict[str, str|list]] = field(default_factory=list, init=False)
 
 @dataclass
@@ -279,6 +282,8 @@ class Settings:
                     self.data_settings.data_entry_name = value
                 case SheetSetting.RAW_DATA_COL_ORDER:
                     self.data_settings.raw_data_col_order = value
+                case SheetSetting.FINAL_DATA_COL_ORDER:
+                    self.data_settings.final_data_col_order = value
                 case SheetSetting.NEW_FIELDS:
                     new_fields = {}
                     for colname, settings in value.items():

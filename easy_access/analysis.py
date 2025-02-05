@@ -2,7 +2,7 @@ import polars as pl
 from easy_access.settings import SETTINGS, DirSetting, COURSE_MAPPING, FINE_AMOUNT
 from easy_access.enrichment import enrich_df_with_osiris_data
 from easy_access.utils import info, Directory, File
-from easy_access.sheet import finalize_sheet
+from easy_access.sheet import finalize_sheet, store_complete_data
 from datetime import datetime
 import locale
 from loguru import logger
@@ -59,7 +59,7 @@ def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, sty
         info(f'{groupname} has {df.shape[0]} items')
         programme_file = File(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme" / f'{groupname}_total_overview_updated_{today}.xlsx')
         info(f'saving file with {df.shape[0]} rows to {programme_file.path}')
-        programme_data.write_excel(programme_file.path)
+        store_complete_data(programme_file, programme_data)
         style_iter = finalize_sheet(programme_file, programme_data, style_iter)
 
     return style_iter
@@ -129,7 +129,7 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
         overview_data.append(fac_data)
         fac_file = File(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
         info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
-        all_faculty_data.write_excel(fac_file.path)
+        store_complete_data(fac_file, all_faculty_data)
         style_iter = finalize_sheet(fac_file, all_faculty_data, style_iter)
         locale.setlocale(locale.LC_ALL, '')
 

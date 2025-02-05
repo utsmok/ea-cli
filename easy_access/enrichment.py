@@ -201,33 +201,97 @@ class ItemContacts:
 
         return final_data
 
-def determine_course_code(code: str, name: str) -> set | None:
+def determine_course_code(code: str, name: str) -> set[str|None]:
     """
-    For a given course code and name (cols of a copyright item), determine the correct course code(s).
-    Returns a set of course codes or None if no valid course code could be found.
+    For a given course code and name (cols of a copyright item; canvas data), determine the correct osiris course code(s).
+    Returns a set of course codes; if no valid course code could be found it will be empty.
+    Heuristic is as follows:
+
+    STEP 1: attempt to parse canvas course code into osiris course code(s)
+        - from column 'course_code', get the course code as a string
+        - Should look like YYYY - XXXXXXXXXXX - 1A, where YYYY is the year, XXXXXXXXXXX is the course code, and 1A is the period.
+        - split on '-', select the second part.
+        - course code should be numeric and (probably?) 9 digits long.
+        - period is (probably) one value from: JAAR, 1A, 1B, 2A, 2B, 3A, SEM1, SEM2, SEM3
+
+        EXAMPLES:
+            should result in extracted course code + period:
+                2024-191158500-JAAR
+                    --> Course code: 191158500, Period: JAAR
+                    --> return {191158500}
+                2024-201800005-1A
+                    --> Course code: 201800005, Period: 1A
+                    --> return {201800005}
+                2024-202400157-1A
+                    --> Course code: 202400157, Period: 1A
+                    --> return {202400157}
+                2024-201800236-SEM1
+                    --> Course code: 201800236, Period: SEM1
+                    --> return {201800236}
+
+            should be processed further:
+                2024-IDVWI-1A
+                    --> Course code: IDVWI, Period: 1A
+                    --> ERROR: not a valid course code
+                    --> continue to step 2
+                2024-ELECMSE-1B
+                    --> Course code: ELECMSE, Period: 1B
+                    --> ERROR: not a valid course code
+                    --> continue to step 2
+
+    If step 1 fails:
+    STEP 2: attempt to parse canvas course name into osiris course code(s)
+    in cases where the 'course code' is a string with only letters, it is likely this course has multiple course codes attached to it.
+    in this case, the set of related course codes should be extracted from the 'course name' column.
+        1. retrieve the string to parse from the 'course name' column.
+        2. split the string on ';'. Split the second item of result on '(', select the first item of that result. This should give a string of course codes separated by commas.
+        3. split on ',' and loop over results
+        4. For each: if str with only digits and len >= 8: add to result set, set found to True.
+
+        EXAMPLES:
+            should result in extracted course codes:
+                Circuit Analysis 1 and 2; 202001116,202200163 (2024-JAAR)
+                    --> return {202001116, 202200163}
+                Characterization of Nanostructures 2023; 193700010,201600043 (2024-1A)
+                    --> return {193700010, 201600043}
+
+            should not result in extracted course codes:
+                Circuit Analysis 1 and 2; CA12,CA34 (2024-JAAR)
+                    --> Course codes found: [CA12, CA34]
+                    --> ERROR: invalid course codes
+                    --> return empty list
+
     """
+    def is_valid_course_code(check_code) -> bool:
+        try:
+            check_code = str(check_code).strip()
+
+            if check_code.isdigit() and len(check_code) >= 8:
+                return True
+            else:
+                return False
+        except Exception as e:
+            return False
+
+    tempresults = set()
+    first_try = ""
+    second_try = ""
+
     try:
-        found = False
-        tempresults = set()
         first_try = code.split("-")[1].strip()
-        if len(first_try) >= 8 and first_try.isdigit():
-            tempresults.add(first_try)
-            found = True
-        else:
+        tempresults.add(first_try) if is_valid_course_code(first_try) else None
+        if (';' in name) and ('(' in name):
             second_try = name.split(";")[1].split("(")[0]
-            for c in second_try.split(","):
-                c = c.strip()
-                if c.isdigit() and len(c) >= 8:
-                    tempresults.add(c)
-                    found = True
-        if not found:
+            [tempresults.add(c.strip()) for c in second_try.split(",") if is_valid_course_code(c)]
+
+        if not tempresults:
             warn(f"No valid course code found for {code} - {name}")
             info(
                 f"code extraction results: {first_try}, name extraction results: {second_try}"
             )
         return tempresults
     except Exception as e:
-        warn(f"Error in determine_course_code: {e}")
+        warn(f"Error in determine_course_code for input: code={code}, name={name}: {e}")
         return tempresults
 
 def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.DataFrame:
@@ -237,8 +301,7 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
     Return the enriched dataframe.
     """
 
-
-
+    info(f'Enriching dataframe for {group} with {df.shape[0]} rows. Input cols:\n{df.columns}')
     item_data = df.select(
         pl.col("course_code"), pl.col("course_name"), pl.col("material_id")
     ).to_dicts()
@@ -248,7 +311,8 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
     total = len(item_data)
     updated = 0
     already_enriched = 0
-    not_found = 0
+    no_course_code_found = set()
+    no_osiris_data_found = set()
     for item in item_data:
         already_found_codes = []
         if item.get('osiris_course_codes_found'):
@@ -259,31 +323,23 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
                     already_found_codes = already_found_codes.append(item['osiris_course_codes_found'])
                 already_found_codes = [i.strip() for i in already_found_codes]
 
+        if already_found_codes:
+            already_enriched += 1
+            continue
+
         course_codes = determine_course_code(
             item["course_code"], item["course_name"]
         )
 
         if not course_codes:
-            not_found += 1
+            no_course_code_found.add(item["course_code"])
             continue
 
         course_codes = list(course_codes)
 
-        if len(course_codes) < 1:
-            not_found += 1
-            continue
 
         course_codes = [i.strip() for i in course_codes]
 
-        proceed = False
-        for cur_code in course_codes:
-            if cur_code not in already_found_codes:
-                proceed = True
-                break
-
-        if not proceed:
-            already_enriched += 1
-            continue
 
         new_item = dict()
         new_item["material_id"] = item["material_id"]
@@ -291,28 +347,57 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
             new_item["osiris_course_codes_found"] = course_codes[0]
         if len(course_codes) > 1:
             new_item["osiris_course_codes_found"] = " | ".join(course_codes)
-        found_osiris_data = OSIRIS_DATA.get(course_codes[0], None) if OSIRIS_DATA else None
+        used_codes = []
+        found_osiris_data = []
+        maybe_used_codes = []
+        maybe_found_data = []
+        for code in course_codes:
+            new_osiris_data = OSIRIS_DATA.get(code, None) if OSIRIS_DATA else None
+            if not new_osiris_data:
+                no_osiris_data_found.add(code)
+            else:
+                if new_osiris_data.get('faculty','') == item.get('faculty'):
+                    used_codes.append(code)
+                    found_osiris_data.append(new_osiris_data)
+                else:
+                    maybe_used_codes.append(code)
+                    maybe_found_data.append(new_osiris_data)
 
         if not found_osiris_data:
-            not_found += 1
-            continue
+            if maybe_found_data and maybe_used_codes:
+                used_codes = maybe_used_codes
+                found_osiris_data = maybe_found_data
 
-        new_item["osiris_course_code_data_selected"] = course_codes[0]
-        new_item["osiris_catalogue_url"] = osiris_cat_link + course_codes[0]
-        new_item["osiris_programme"] = found_osiris_data.get("programme")
-        if found_osiris_data.get("contacts"):
-            contacts: dict[str,dict[str, str|list[dict[str,str]]]] = found_osiris_data.get("contacts")
-            course_contacts = ItemContacts()
-            for contact_name, contact in contacts.items():
-                faculty_dict_start = {}
-                if contact.get('faculty'):
-                    if contact.get('faculty') in DEFAULT_FACULTIES:
-                        faculty_dict_start = {contact.get("faculty"): DEFAULT_FACULTIES.get(contact.get("faculty"))}
-                cur_contact = Contact(name=contact_name, email=contact.get("email"), faculties=faculty_dict_start)
-                if contact.get('orgs'):
-                    [cur_contact.add_raw_input(org) for org in contact.get('orgs')]
-                course_contacts.contacts.append(cur_contact)
-            new_item.update(course_contacts.get_merged_contact_data())
+        if len(used_codes) == 1:
+            used_code = used_codes[0]
+            new_item["osiris_course_codes_used"] = used_code
+            new_item["osiris_course_code_data_selected"] = used_code
+
+            new_item["osiris_catalogue_url"] = osiris_cat_link + used_code
+            new_item["osiris_programme"] = found_osiris_data[0].get("programme")
+
+        elif len(used_codes) > 1:
+            new_item["osiris_course_codes_used"] = " | ".join(used_codes)
+            new_item["osiris_course_code_data_selected"] = used_codes[0]
+            new_item["osiris_catalogue_url"] = osiris_cat_link + used_codes[0]
+            new_item["osiris_programme"] = " | ".join([osiris_data.get("programme", "") for osiris_data in found_osiris_data if osiris_data.get("programme")])
+            used_code = " | ".join(used_codes)
+
+        course_contacts = ItemContacts()
+        for osiris_data in found_osiris_data:
+            if osiris_data.get("contacts"):
+                contacts: dict[str,dict[str, str|list[dict[str,str]]]] = osiris_data.get("contacts")
+                for contact_name, contact in contacts.items():
+                    faculty_dict_start = {}
+                    if contact.get('faculty'):
+                        if contact.get('faculty') in DEFAULT_FACULTIES:
+                            faculty_dict_start = {contact.get("faculty"): DEFAULT_FACULTIES.get(contact.get("faculty"))}
+                    cur_contact = Contact(name=contact_name, email=contact.get("email"), faculties=faculty_dict_start)
+                    if contact.get('orgs'):
+                        [cur_contact.add_raw_input(org) for org in contact.get('orgs')]
+                    course_contacts.contacts.append(cur_contact)
+
+        new_item.update(course_contacts.get_merged_contact_data())
         updated += 1
         enriched_item_data.append(new_item)
 
@@ -330,23 +415,81 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
                 continue
             # If base column exists, compare
             if base in df.columns:
+
                 same_vals = df.select((pl.col(base).fill_null(value='') == pl.col(col).fill_null(value='')).all()).item(0,0)
                 if same_vals:
                     df = df.drop(col)
                 else:
+
                     # If base is all null, replace it
                     if df.select(pl.col(base).is_null().all()).item(0,0):
                         df = df.drop(base)
                         df = df.rename({col: base})
                     # if not: we have 2 cols that do not match. Merge them in some way.
                     else:
+                        final_data = []
                         warn(f"Conflicting values for column {base} in {group} enrichment results. Overwriting with new values.")
-                        df = df.drop(base).rename({col: base})
+                        all_base_vals = df.select(pl.col(base)).to_series().to_list()
+                        all_new_vals = df.select(pl.col(col)).to_series().to_list()
+                        material_ids = df.select(pl.col("material_id")).to_series().to_list()
+                        mismatched_cols = set()
+                        if base == 'osiris_catalogue_url':
+                            info('Not printing comparison for osiris_catalogue_urls.')
+                        elif len(all_base_vals) != len(all_new_vals):
+                            warn(f'Cannot print comparison: cols are not the same length. \nlen({base})={len(all_base_vals)} != len({col})={len(all_new_vals)}')
+                        else:
+                            info("Mismatches found:")
+                            printstr =""
+                            for material_id, orig_val, new_val in zip(material_ids, all_base_vals, all_new_vals):
+                                if not orig_val:
+                                    orig_val = ""
+                                if not new_val:
+                                    new_val = ""
+                                orig_data = orig_val
+                                new_data = new_val
 
+                                if ' | ' in orig_val:
+                                    orig_val = orig_val.split(' | ')
+                                    if isinstance(orig_val,list):
+                                        if len(orig_val) > 1:
+                                            orig_val = set(orig_val)
+                                if ' | ' in new_val:
+                                    new_val = new_val.split(' | ')
+                                    if isinstance(new_val,list):
+                                        if len(new_val) > 1:
+                                            new_val = set(new_val)
+
+                                if orig_val != new_val:
+                                    if not orig_val or orig_val == "":
+                                        final_data.append({'material_id':material_id, base:new_data})
+                                        printstr += (f'\nmaterial_id: {material_id}\n  {str(orig_val)}\n    --> {str(new_val)}')
+                                    elif not new_val or new_val == "":
+                                        final_data.append({'material_id':material_id, base:orig_data})
+                                        printstr += (f'\nmaterial_id: {material_id}\n  Keeping  {str(orig_val)}\n  NOT replacing with {str(new_val)}')
+                                    else:
+                                        final_data.append({'material_id':material_id, base:new_data})
+                                        printstr += (f'\nmaterial_id: {material_id}\n  Keeping  {str(orig_val)}\n  NOT replacing with {str(new_val)}')
+                                    mismatched_cols.add(material_id)
+                                else:
+                                    # no new val
+                                    final_data.append({'material_id':material_id, base:orig_data})
+                            info(printstr)
+
+                        if not final_data:
+                            df = df.drop(base).rename({col: base})
+                        else:
+                            # drop base and col from orig df
+                            # create temp dataframe from final_data -- has cols material_id and base
+                            # join temp dataframe to df on material_id
+                            info(f'replacing {base} with col constructed from {len(final_data)} items')
+                            tmp_df = pl.from_dicts(final_data, strict=False, infer_schema_length=1000)
+                            info(f'tmp_df details: {tmp_df.shape[0]} rows, cols: {tmp_df.columns}')
+                            info(tmp_df)
+                            df = df.drop([base, col]).join(tmp_df, on="material_id", how="left")
             else:
                 # base doesn't exist? weird, just rename suffix column to base and done
                 df = df.rename({col: base})
-    info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot found:        {not_found}/{total}")
+    info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot in osiris:    {len(no_osiris_data_found)}/{total}\nNo coursecode:    {len(no_course_code_found)}/{total}")
     return df
 
 async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = False) -> None:
@@ -409,9 +552,9 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
                     if not jaar:
                         warn(f'No data found for code {input_number}.')
                         return
-                    elif str(jaar) == "2021":
-                        warn(f'No data found for code {input_number} in years 2022-2024. Final retry without year param.')
+                    elif str(jaar) == "2018":
                         jaar = ""
+                        retry = True
                     else:
                         jaar = jaar - 1
                         retry = True
@@ -583,11 +726,10 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
                     print(newdatadict) if print_details else None
                     return newdatadict
         except Exception as e:
-            print("excption when getting course details")
+            print("exception when getting course details")
             logger.exception(e)
             return
         if retry:
-            info(f'retrying data retrieval for input {input_number} with year {jaar}')
             return await get_data_from_osiris(input_number, httpx_client, semaphore, jaar)
     async def get_data_from_people_page(
         name: str, httpx_client: httpx.AsyncClient, semaphore: asyncio.Semaphore
@@ -606,6 +748,14 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
             "sec-fetch-user": "?1",
             "upgrade-insecure-requests": "1",
         }
+        def strip_name(name: str) -> str:
+            stripped_name = name.strip()
+            titles = ['ing.', 'dr.', 'prof.', 'ir.', "rer.", 'nat.', ', MSc', ', PhD', ', BSc']
+            for title in titles:
+                stripped_name=stripped_name.replace(title,'').strip()
+            return stripped_name
+        def remove_dot_and_lower(name: str) -> str:
+            return str(name).strip().replace(".","").lower()
         async with semaphore:
             url = f"https://people.utwente.nl/overview?query={name}"
             r = await httpx_client.get(url, headers=headers)
@@ -613,14 +763,8 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
             # print(r.text)
             data = r.text
             pattern = r'data-link="([^"]+)"'
-            stripped_name = name.strip()
-            titles = ['ing.', 'dr.', 'prof.', 'ir.', "rer.", 'nat.', ', MSc', ', PhD', ', BSc']
-            for title in titles:
-                stripped_name=stripped_name.removeprefix(title).strip()
-                stripped_name=stripped_name.removesuffix(title).strip()
-            name_parsed = HumanName(stripped_name)
-            name_parsed_str = str(name_parsed)
-            compare_name = str(name_parsed.initials()+name_parsed.last.replace(" ",".")).replace(" ","").lower()
+            name_parsed_str = strip_name(name)
+            compare_name = remove_dot_and_lower(name_parsed_str)
 
             if data:
                 matches = re.findall(pattern, data)
@@ -628,17 +772,20 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
                     if len(matches) >= 10:
                         matches = matches[:5]
                     best_match = matches[0]
-                    ratio = Levenshtein.ratio(compare_name, best_match)
-                    for match in matches:
-                        if 'business' in match or '/' in match:
-                            continue
-                        new_ratio = Levenshtein.ratio(compare_name, match)
-                        if new_ratio > ratio:
-                            best_match = match
-                            ratio = new_ratio
+                    ratio = Levenshtein.ratio(compare_name, remove_dot_and_lower(best_match))
+                    if ratio < 0.8:
+                        for match in matches:
+                            if 'business' in match or '/' in match:
+                                continue
+                            new_ratio = Levenshtein.ratio(compare_name, remove_dot_and_lower(match))
 
+                            if new_ratio > ratio:
+                                best_match = match
+                                ratio = new_ratio
+                                if ratio > 0.8:
+                                    break
                     if ratio < 0.7:
-                        warn(f'Low match confidence: best match for {name} is {best_match} (compared with {compare_name}) with ratio {ratio}')
+                        warn(f'Low match confidence {ratio}: best match for {name} is {best_match}. Actual comparison:\nfound: {remove_dot_and_lower(best_match)} vs input {compare_name})')
 
 
                     new_url: str = "https://people.utwente.nl/" + best_match
@@ -669,11 +816,10 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
                                         .replace("(", "")
                                         .replace(")", "")
                                     )
-                            main_name_parsed_str = str(HumanName(main_name))
-                            final_ratio = Levenshtein.ratio(name_parsed_str, main_name_parsed_str)
+                            final_ratio = Levenshtein.ratio(name_parsed_str, strip_name(main_name))
 
                             if final_ratio < 0.7:
-                                print(f"found name {main_name_parsed_str} differs from input name: {name_parsed_str} (ratio {final_ratio})")
+                                print(f"found name {main_name} differs from input name: {name} with ratio {final_ratio}. Actually compared strings: found: {strip_name(main_name)} | input: {strip_name(name)}")
                                 print("still processing...")
 
                         try:
@@ -787,54 +933,18 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
                         logger.exception(e)
                         raise e
 
-    # step 1: determine list of courseids to search for
-    # each row in the df should have 1 or multiple course codes attached to it.
-    # we are going to search for each of these course codes in OSIRIS.
-    # we will need to extract these codes first.
 
-    # heuristic:
-
-    # 1. FROM COLUMN COURSE_CODE
-    # - from column 'course_code', get the course code as a string
-    # - Should look like YYYY - XXXXXXXXXXX - 1A, where YYYY is the year, XXXXXXXXXXX is the course code, and 1A is the period.
-    # - split on '-', select the second part.
-    # - course code should be numeric and (probably?) 9 digits long.
-    # - period is (probably) one value from: JAAR, 1A, 1B, 2A, 2B, 3A, SEM1, SEM2, SEM3
-
-    # example values that should result in extracted course code + period:
-    # 2024-191158500-JAAR --> Course code: 191158500, Period: JAAR
-    # 2024-201800005-1A --> Course code: 201800005, Period: 1A
-    # 2024-202400157-1A --> Course code: 202400157, Period: 1A
-    # 2024-201800236-SEM1 --> Course code: 201800236, Period: SEM1
-    #
-    # example values that should be processed further:
-    # 2024-IDVWI-1A --> Course code: IDVWI, Period: 1A --> ERROR: not a valid course code
-    # 2024-ELECMSE-1B --> Course code: ELECMSE, Period: 1B --> ERROR: not a valid course code
-
-    # 2. IF NO COURSE CODE FOUND: EXTRACT FROM COLUMN COURSE_NAME
-    # - in cases where the 'course code' is a string with only letters, it is likely this course has multiple course codes attached to it.
-    # - in this case, a list of all related course codes should be extracted from the 'course name' column.
-    # - retrieve the string to parse from the 'course name' column.
-    # - split the string on ';'. Retrieve the second part. Split this on '(', keep only the first part. This should give you the course codes separated by commas.
-    # - Each course code should consist solely of digits w/ len >= 8.
-    # - if no valid codes are found, mark as 'no code found'.
-
-    # example values that should result in extracted course codes:
-    # Circuit Analysis 1 and 2; 202001116,202200163 (2024-JAAR) --> Course codes: [202001116, 202200163]
-    # Characterization of Nanostructures 2023; 193700010,201600043 (2024-1A) --> Course codes: [193700010, 201600043]
-    #
-    # example values that should not result in extracted course codes:
-    # Circuit Analysis 1 and 2; CA12,CA34 (2024-JAAR) --> Course codes: [CA12, CA34] --> ERROR: no valid course codes -> return empty list
-
-    # first we extract the cols as lists using to_dict()
-
+    '''
+    each row in the df should have 1 or multiple osiris course codes attached to it.
+    Extract them using determine_course_code(code, name) with
+        code: canvas code from column course_code
+        name: canvas course name from column course_name
+    '''
     course_data_dict = df.select(
         pl.col("course_code"), pl.col("course_name")
     ).to_dict()
     course_code_list = course_data_dict.get("course_code").to_list()
     course_name_list = course_data_dict.get("course_name").to_list()
-
-    # then we build a set of all the course codes we need to look up
     lookup_values = set()
     for code, name in zip(course_code_list, course_name_list):
         result = determine_course_code(code, name)
@@ -845,6 +955,8 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
         return
     else:
         info(f"Found {len(lookup_values)} course codes to look up in OSIRIS")
+
+
     osiris_data_w_contacts_file = {}
     try:
         osiris_data_w_contacts_file = json.load(
