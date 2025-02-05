@@ -76,6 +76,13 @@ def cli(
             rich_help_panel="Functions",
         ),
     ] = False,
+    osiris_full_refresh: Annotated[
+        bool,
+        typer.Option(
+            help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
+            rich_help_panel="Functions",
+        ),
+    ] = True,
     other_sheet: Annotated[
         Path | None,
         typer.Option(
@@ -104,6 +111,7 @@ def cli(
         refresh_osiris_data=osiris_update,
         retrieve_all=retrieve_all,
         other_sheet=other_sheet,
+        only_retrieve_missing_osiris_data=not osiris_full_refresh,
     )
 
     if do not in [Functions.both, Functions.read, Functions.export]:

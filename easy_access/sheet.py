@@ -46,8 +46,18 @@ class DataEntrySheet:
             else:
                 col_name = col.name
             if col.is_new:
-                # create new coldata
-                col_data = [col.default_val] * self.max_row
+                # Check if col is truly new first by retrieving the data from the dataframe
+                # fill empty cells with default value if the col exists
+                # otherwise create new data with default value and length of max_row
+                if col.name in data.columns:
+                    col_data = data.select(pl.col(col.name)).to_series().to_list()
+                    if col.default_val != "":
+                        for item_num, item in enumerate(col_data):
+                            if item == "" or not item:
+                                col_data[item_num] = col.default_val
+                else:
+                    # create new coldata
+                    col_data = [col.default_val] * self.max_row
             else:
                 # retrieve coldata from dataframe
                 col_data = data.select(pl.col(col.name)).to_series().to_list()

@@ -74,6 +74,7 @@ class EasyAccessTool:
         self.retrieve_all = settings.retrieve_all
         self.refresh_osiris_data = settings.refresh_osiris_data
         self.enrich_with_osiris_data = settings.enrich_with_osiris_data
+        self.only_retrieve_missing_osiris_data = settings.only_retrieve_missing_osiris_data
         self.no_new_items = False
         self.style_iter = 2
 
@@ -252,10 +253,6 @@ class EasyAccessTool:
             self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
         )
 
-        # refresh OSIRIS data if bool is set
-        if self.refresh_osiris_data:
-            info("Refreshing OSIRIS data. This will take a while!")
-            asyncio.run(update_osiris_data(self.copyright_data))
 
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
@@ -1010,6 +1007,11 @@ class EasyAccessTool:
                     ["all_match", "any_missing_in_full_df"]
                 )
                 df_merged = df_merged.unique('material_id')
+
+                # refresh OSIRIS data if bool is set
+        if self.refresh_osiris_data:
+            info("Refreshing OSIRIS data. This will take a while!")
+            asyncio.run(update_osiris_data(df_merged, self.only_retrieve_missing_osiris_data))
 
         df_merged.write_parquet("full_df.parquet")
         df_merged.write_csv("full_data.csv")
