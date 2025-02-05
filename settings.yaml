@@ -1,0 +1,412 @@
+# This yaml file contains all settings for the ea-cli script.
+# Comments are provided in this file to explain the settings.
+# Note that missing settings will at best result in warnings or errors, at worst silently making errors in the output.
+
+
+# The directories to retrieve / store files. The directories should be folder names in the same directory as the script.
+directories:
+  raw_copyright_data: raw_copyright_data # Directory where the raw copyright data is downloaded to (output from qlik)
+  export_to_surf: copyright_data_for_SURF_import # The script will export files here to be sent to SURF for importing data.
+  faculties_dir: faculty_sheets # Here the sheets per faculty will be stored -- the most important output of the script.
+  all_items_dir: cip_sheets # Sheets with all items here, for quick reference and overview for the CIP.
+  overviews_backup: overviews_backup # Backup folder for 'overview' sheets, which are replaced each time the script runs.
+  script_data: script_data # Data directly used by the script, such as 'full_data.csv' and 'ea-cli.log'
+
+# additional specific file paths. Will be stored in script_data directory defined above.
+files:
+  # folder where all these files will be stored/retrieved from. If blank/null, use working dir
+  file_folder: script_data
+  # Enrichment related files
+  full_data_csv: full_data.csv
+  full_data_parquet: full_data.parquet
+  osiris_data: osiris_data.json
+  osiris_data_w_contacts: osiris_data_w_contacts.json
+  person_data: person_data.json
+
+# settings for data input/output/processing
+data_settings:
+  # sheet details for the complete data sheet & data entry sheet present in each output excel file.
+  # parameters: sheet name; cols to be included
+  # if cols is not specified, all cols will be added to this sheet..
+  complete_data_name: Complete data
+  complete_data_cols: null
+  data_entry_name: Data entry
+  data_entry_cols:
+    - name: "material_id"
+    - name: "url"
+      is_url: true
+    - name: "workflow_status"
+      is_new: true
+      is_editable: true
+      dropdown_options: '"ToDo,Done,InProgress"'
+      default_val: "ToDo"
+    - name: "manual_classification"
+      is_editable: true
+      dropdown_options: '"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,-"'
+    - name: "remarks"
+      is_editable: true
+    - name: "ml_prediction"
+    - name: "filename"
+    - name: "title"
+    - name: 'owner'
+      new_name: "uploaded_by"
+    - name: "author"
+      new_name: "detected_author"
+    - name: "contact_name"
+    - name: "contact_email"
+    - name: "contact_groups"
+    - name: "contact_departments"
+    - name: "osiris_catalogue_url"
+      is_url: true
+    - name: 'course_name'
+      new_name: "course_name_canvas"
+    - name: "department"
+      new_name: "programme_canvas"
+    - name: "osiris_programme"
+      new_name: "programme_osiris"
+    - name: "osiris_course_codes_found"
+    - name: "osiris_course_code_data_selected"
+
+  raw_data_col_order: !!seq [
+        material_id,
+        period,
+        department,
+        course_code,
+        course_name,
+        url,
+        filename,
+        title,
+        owner,
+        filetype,
+        classification,
+        type,
+        ml_prediction,
+        manual_classification,
+        manual_identifier,
+        scope,
+        remarks,
+        auditor,
+        last_change,
+        status,
+        google_search_file,
+        isbn,
+        doi,
+        in_collection,
+        pagecount,
+        wordcount,
+        picturecount,
+        author,
+        publisher,
+        reliability,
+        pages_x_students,
+        count_students_registered,
+        retrieved_from_copyright_on,
+        workflow_status,
+        faculty,
+    ]
+
+  final_data_col_order: !!seq [
+    material_id,
+    period,
+    department,
+    course_code,
+    course_name,
+    url,
+    filename,
+    title,
+    owner,
+    filetype,
+    classification,
+    type,
+    ml_prediction,
+    manual_classification,
+    manual_identifier,
+    scope,
+    remarks,
+    auditor,
+    last_change,
+    status,
+    google_search_file,
+    isbn,
+    doi,
+    in_collection,
+    pagecount,
+    wordcount,
+    picturecount,
+    author,
+    publisher,
+    reliability,
+    pages_x_students,
+    count_students_registered,
+    retrieved_from_copyright_on,
+    workflow_status,
+    possible_fine,
+    infringement,
+    faculty,
+    contact_faculties,
+    contact_name,
+    contact_email,
+    contact_groups,
+    contact_departments,
+    osiris_course_codes_used,
+    osiris_course_codes_found,
+    osiris_catalogue_url,
+    osiris_programme,
+  ]
+  new_fields:
+  # fields not present in raw data (so added by this script) that need configuration should be added here
+  # the key will be used as the field name.
+  # possible parameters:
+  # - values: list of possible values for this field
+  # - default: default value for this field
+    workflow_status:
+      values:
+      # NOTE! Order is important here:
+      # - First field in this list is the default field
+      # - For merge conflicts, fields lower in the list will be preferred, e.g. by default: Done > InProgress > ToDo
+        - ToDo
+        - InProgress
+        - Done
+      default:
+        - ToDo
+    faculty: # values are set dynamically based on the faculty mapping in the settings in the 'university' section
+      default:
+        - Unmapped
+
+
+# values that don't (yet) fit anywhere else
+unsorted:
+  fine_amount: 0.3 # fine amount per page per item per student
+
+# University settings
+# Set all the data for your university. This data is essential for the script to separate data into faculties and programmes;
+# and also to enrich the copyright data with additional information.
+
+university:
+  name: University of Twente
+  abbreviation: UT
+  lms: # Learning Management System
+    name: canvas
+    url: https://canvas.utwente.nl
+  course_catalogue: # The course catalogue of the university, to retrieve extra info about courses
+    name: OSIRIS
+    url: https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursus
+    query_url: https://utwente.osiris-student.nl/student/osiris/owc/cursussen/
+  employee_catalogue: # The employee catalogue of the university, to retrieve extra info about employees
+    name: People pages
+    url: https://people.utwente.nl/
+    query_url: https://people.utwente.nl/overview?query=
+  faculties: # this is a hierarchical structure of faculties and programmes. This is used to split the copyright data per faculty (and optionally per programme).
+    - name: Faculty of Behavioural, Management and Social Sciences
+      abbreviation: BMS
+      programmes:
+        - abbreviation: B-COM
+          name: Communication Science
+          programme_type: b
+        - abbreviation: M-ES
+          name: European Studies
+          programme_type: m
+        - abbreviation: M-PSY
+          name: Psychology
+          programme_type: m
+        - abbreviation: BMS
+          name: Behavioural, Management and Social Sciences
+          programme_type: o
+        - abbreviation: M-IEM
+          name: Industrial Engineering and Management
+          programme_type: m
+        - abbreviation: M-EEM
+          name: Environmental and Energy Management
+          programme_type: m
+        - abbreviation: B-PSY
+          name: Psychology
+          programme_type: b
+        - abbreviation: M-EST
+          name: Educational Science and Technology
+          programme_type: m
+        - abbreviation: M-PSTS
+          name: Philosophy of Science, Technology and Society
+          programme_type: m
+        - abbreviation: null
+          name: Master Risicomanagement
+          programme_type: m
+        - abbreviation: M-BA
+          name: Business Administration
+          programme_type: m
+        - abbreviation: B-IBA
+          name: International Business Administration
+          programme_type: b
+        - abbreviation: B-MST
+          name: Management, Society and Technology
+          programme_type: b
+        - abbreviation: B-IEM
+          name: Industrial Engineering and Management
+          programme_type: b
+        - abbreviation: M-COM
+          name: Communication Science
+          programme_type: m
+        - abbreviation: M-EB
+          name: Master Educatie in de Bètawetenschappen
+          programme_type: m
+        - abbreviation: M-PA
+          name: Public Administration
+          programme_type: m
+        - abbreviation: null
+          name: Master Public Management
+          programme_type: m
+    - name: Faculty of Engineering Technology
+      abbreviation: ET
+      programmes:
+        - abbreviation: M-ME
+          name: Mechanical Engineering
+          programme_type: m
+        - abbreviation: M-CEM
+          name: Civil Engineering and Management
+          programme_type: m
+        - abbreviation: M-IDE
+          name: Industrial Design Engineering
+          programme_type: m
+        - abbreviation: M-CME
+          name: Construction Management and Engineering
+          programme_type: m
+        - abbreviation: B-CE
+          name: Civil Engineering
+          programme_type: b
+        - abbreviation: B-IDE
+          name: Industrial Design Engineering
+          programme_type: b
+        - abbreviation: B-ME
+          name: Mechanical Engineering
+          programme_type: b
+        - abbreviation: B-ME-VU
+          name: Mechanical Engineering - Amsterdam (VU-UT)
+          programme_type: b
+        - abbreviation: null
+          name: ET niet-OSIRIS
+          programme_type: o
+        - abbreviation: M-SET
+          name: Sustainable Energy Technology
+          programme_type: m
+        - abbreviation: ET
+          name: Engineering Technology
+          programme_type: o
+    - name: Faculty of Electrical Engineering, Mathematics and Computer Science
+      abbreviation: EEMCS
+      programmes:
+        - abbreviation: M-EE
+          name: Electrical Engineering
+          programme_type: m
+        - abbreviation: M-CS
+          name: Computer Science
+          programme_type: m
+        - abbreviation: M-ITECH
+          name: Interaction Technology
+          programme_type: m
+        - abbreviation: M-ROB
+          name: Robotics
+          programme_type: m
+        - abbreviation: M-BIT
+          name: Business Information Technology
+          programme_type: m
+        - abbreviation: M-AM
+          name: Applied Mathematics
+          programme_type: m
+        - abbreviation: B-AM
+          name: Applied Mathematics
+          programme_type: b
+        - abbreviation: M-EMSYS
+          name: Embedded Systems
+          programme_type: m
+        - abbreviation: B-EE
+          name: Electrical Engineering
+          programme_type: b
+        - abbreviation: EEMCS
+          name: Electrical Engineering, Mathematics and Computer Science
+          programme_type: o
+        - abbreviation: B-TCS
+          name: Technical Computer Science
+          programme_type: b
+        - abbreviation: B-CREA
+          name: Creative Technology
+          programme_type: b
+        - abbreviation: B-BIT
+          name: Business Information Technology
+          programme_type: b
+        - abbreviation: B-CREA-VU
+          name: Creative Technology - Amsterdam (VU-UT)
+          programme_type: b
+        - abbreviation: null
+          name: 2024-ELSE Aspects MSc Robotics
+          programme_type: m
+        - abbreviation: null
+          name: EEMCS niet-OSIRIS
+          programme_type: o
+    - name: Faculty of Science and Technology
+      abbreviation: TNW
+      programmes:
+        - name: Chemical Engineering
+          abbreviation: B-CSE
+          cluster: CSE
+          programme_type: b
+        - name: Chemical Science & Engineering
+          abbreviation: M-CSE
+          cluster: CSE
+          programme_type: m
+        - name: Applied Physics
+          abbreviation: M-AP
+          cluster: TN_AP
+          programme_type: m
+        - name: Technische Natuurkunde
+          abbreviation: B-TN
+          cluster: TN_AP
+          programme_type: b
+        - name: Advanced Technology
+          abbreviation: B-AT
+          cluster: AT_NANO
+          programme_type: b
+        - name: Nanotechnology
+          abbreviation: M-NT
+          cluster: AT_NANO
+          programme_type: m
+        - name: Biomedische Technologie
+          abbreviation: B-BMT
+          cluster: BMT_BME
+          programme_type: b
+        - name: Biomedical Engineering
+          abbreviation: M-BME
+          cluster: BMT_BME
+          programme_type: m
+        - name: Gezondheidswetenschappen
+          abbreviation: B-GZW
+          cluster: HS_GZW
+          programme_type: b
+        - name: Health Sciences
+          abbreviation: M-HS
+          cluster: HS_GZW
+          programme_type: m
+        - name: Technische Geneeskunde
+          abbreviation: B-TG
+          cluster: TG_TM
+          programme_type: b
+        - name: Technical Medicine
+          abbreviation: M-TM
+          cluster: TG_TM
+          programme_type: m
+    - name: Faculty of Geo-Information Science and Earth Observation
+      abbreviation: ITC
+      programmes:
+        - abbreviation: M-GEO-WO
+          name: Geo-information Science and Earth Observation
+          programme_type: m
+        - abbreviation: B-ATLAS
+          name: Technology and Liberal Arts & Sciences
+          programme_type: b
+        - abbreviation: M-SE
+          name: Spatial Engineering
+          programme_type: m
+    - name: null
+      abbreviation: null
+      programmes:
+        - abbreviation: null
+          name: Testcourses
+          programme_type: o

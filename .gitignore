@@ -2,6 +2,10 @@
 *.xls
 *.xlsx
 *.csv
+*.json
+*.ndjson
+*.db
+*.parquet
 
 # documents
 *.doc
