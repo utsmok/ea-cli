@@ -49,8 +49,6 @@ def configure_logger():
         colorize=False,
     )
 
-
-
 @dataclass
 class ColInfo:
     """
@@ -113,8 +111,6 @@ class SheetSetting(Enum):
     DATA_ENTRY_COLS = "data_entry_cols"
     NEW_FIELDS = "new_fields"
 
-
-
 class Functions(str, Enum):
     """
     CLI option for picking which functions to run, see easy_access_cli.cli()
@@ -123,8 +119,6 @@ class Functions(str, Enum):
     both = "both"
     read = "read"
     export = "export"
-
-
 
 @dataclass
 class EasyAccessSettings:

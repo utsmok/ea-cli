@@ -39,11 +39,13 @@ quickstart:
 import typer
 from typing import Annotated
 from easy_access.utils import cool, warn
-from easy_access.settings import Functions, EasyAccessSettings
+from easy_access.settings import Functions, EasyAccessSettings, SETTINGS
+from easy_access.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
 from pathlib import Path
 from easy_access.easy_access_cli import EasyAccessTool
-cli_app = typer.Typer()
 
+
+cli_app = typer.Typer()
 
 @cli_app.command()
 def cli(
@@ -73,14 +75,14 @@ def cli(
         bool,
         typer.Option(
             help="If enabled, will retrieve fresh osiris data for all course + people page data.",
-            rich_help_panel="Functions",
+            rich_help_panel="Enrichment",
         ),
     ] = False,
     osiris_full_refresh: Annotated[
         bool,
         typer.Option(
             help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
-            rich_help_panel="Functions",
+            rich_help_panel="Enrichment",
         ),
     ] = True,
     other_sheet: Annotated[
@@ -97,11 +99,47 @@ def cli(
         bool,
         typer.Option(
             help="Retrieve all data from data entry folders and store as parquet file.",
-            rich_help_panel="Functions",
+            rich_help_panel="Backup/Restore",
         ),
     ] = True,
+    backup: Annotated[
+        BackupFlag,
+        typer.Option(
+            help="Backup/restore data before starting, neither, or based on settings.yaml (default).",
+            rich_help_panel="Backup/Restore",
+        ),
+    ] = BackupFlag.DEFAULT,
+    restore_dir: Annotated[
+        RestoreOptions,
+        typer.Option(
+            help="Set which backup to restore.",
+            rich_help_panel="Backup/Restore",
+        ),
+    ] = RestoreOptions.LATEST,
+    restore_strategy: Annotated[
+        RestoreStrategy,
+        typer.Option(
+            help="Set the strategy for restoring the backup. 'replace' will fully replace the faculties dir, 'merge' will only overwrite conflicts (with the prioritized source file) and keep the rest",
+            rich_help_panel="Backup/Restore",
+        ),
+    ] = RestoreStrategy.REPLACE,
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
+
+    backupper = Backupper()
+
+    match backup:
+        case BackupFlag.BACKUP:
+            backupper.backup_files()
+        case BackupFlag.RESTORE:
+            backupper.restore_backup(strategy=restore_strategy.value, select=restore_dir.value)
+        case BackupFlag.DEFAULT:
+            if SETTINGS.backup_settings.backup_all:
+                backupper.backup_files()
+        case BackupFlag.NONE:
+            pass
+        case _:
+            warn("Unrecognized backup flag. Skipping backup/restore.")
 
     # Load settings from env and CLI params
     ea_settings = EasyAccessSettings.from_env(

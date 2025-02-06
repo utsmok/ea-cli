@@ -78,8 +78,6 @@ class EasyAccessTool:
         self.no_new_items = False
         self.style_iter = 2
 
-        if SETTINGS.backup_settings.backup_all:
-            self.backup_files()
 
         # Set functions to run
         self.set_functions(settings.functions)
@@ -132,49 +130,6 @@ class EasyAccessTool:
             self.create_overviews,
             ])
 
-    def backup_files(self) -> None:
-        """
-        Creates a backup of all data in the specified dir(s).
-        """
-        dirs_to_backup = SETTINGS.backup_settings.backup_dirs
-        backup_location = SETTINGS.backup_settings.backup_location
-        max_backups = SETTINGS.backup_settings.max_backups
-        if not dirs_to_backup:
-            warn(f'backup_all set, but no dirs to backup were specified. Skipping.')
-            return
-        if not backup_location:
-            warn(f'backup_all set, but no backup location was specified. Skipping.')
-            return
-        if not max_backups:
-            warn(f'backup_all set, but no max amount of backups was specified. Skipping.')
-            return
-
-        backup_subdirs = backup_location.dirs
-        if len(backup_subdirs) > max_backups:
-            while len(backup_subdirs) > max_backups:
-                min(backup_subdirs, key=lambda x: x.created).delete()
-        info(f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}")
-        for i in range(0, max_backups + 4):
-            new_backup_dir = Directory(backup_location.full / f"backup{i if i > 0 else ""}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}", create_dir=False)
-            if not new_backup_dir.exists:
-                new_backup_dir.create()
-                break
-
-        def copy_file_and_dirs(d: Directory, target_dir: Directory) -> None:
-            files = d.files
-            if files:
-                for f in files:
-                    f.copy(target_dir.full / f.name)
-            dirs = d.dirs
-            if dirs:
-                for new_dir in dirs:
-
-                    copy_file_and_dirs(new_dir, Directory(target_dir.full / new_dir.name, create_dir=True))
-
-        for d in dirs_to_backup:
-            copy_file_and_dirs(d, new_backup_dir)
-
-        cool(f'Backups done, stored in {new_backup_dir.full}')
 
     def run(self) -> None:
         """

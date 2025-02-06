@@ -137,6 +137,19 @@ class Directory:
 
     def delete(self) -> None:
         shutil.rmtree(self.full)
+
+    def copy(self, target: pathlib.Path | str, overwrite:bool = True) -> None:
+        def copy_only_new(src, dst, *, follow_symlinks=True):
+            if dst.exists():
+                return dst
+            else:
+                return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
+
+        if not overwrite:
+            shutil.copytree(self.full, target, dirs_exist_ok=True, copy_function=copy_only_new)
+        else:
+            shutil.copytree(self.full, target, dirs_exist_ok=True)
+
     def __eq__(self, other) -> bool:
         return self.full == other.full
 
