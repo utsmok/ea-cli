@@ -360,9 +360,6 @@ class EasyAccessTool:
         course_to_sheet: dict[str, str] = COURSE_MAPPING[faculty]
         data: list[dict[str, pl.DataFrame]] = []
         info(f"creating programme sheets for {faculty}")
-        unique_depts = self.copyright_data.filter(pl.col('faculty') == faculty).select(pl.col("department").unique()).to_series().sort().to_list()
-        info(f'Unique department names found for {faculty}: {unique_depts}')
-        info(f'Department names in course_mapping: {list(course_to_sheet.keys())}')
         for course, group in course_to_sheet.items():
             course_data = self.copyright_data.filter(pl.col("department") == course)
             gap = " " * (40 - len(course))
@@ -620,9 +617,6 @@ class EasyAccessTool:
                 if (latest_mod_date < overview_file.modified) and (
                     not prefer_overview_cols
                 ):
-                    info(
-                        f"Latest mod date for overview is newer than latest mod date for any other sheet for {faculty}."
-                    )
                     all_overview_man_class = (
                         total_overview.select(pl.col("manual_classification"))
                         .to_series()
@@ -641,9 +635,6 @@ class EasyAccessTool:
                         for i in all_faculty_data_man_class
                         if i not in [None, "", "-", " "]
                     ]
-                    info(
-                        f"{len(all_overview_man_class)} manual classifications in total_overview. {len(all_faculty_data_man_class)} manual classifications in all_faculty_data."
-                    )
                     if len(all_faculty_data_man_class) < len(all_overview_man_class):
                         warn(
                             f"all_faculty_data has less manual classifications than total_overview. Will prefer overview columns for {faculty}."
@@ -683,7 +674,6 @@ class EasyAccessTool:
                         else:
                             file.delete()
 
-        logger.debug(f'{faculty} data retrieval: final rowcount {all_faculty_data.shape[0]}')
         return self.clean_and_validate_df(all_faculty_data)
 
     def create_overviews(self) -> None:

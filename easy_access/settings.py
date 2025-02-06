@@ -317,7 +317,6 @@ class Settings:
                     warn(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
 
     def parse_backup(self, backup_settings: dict[str, str|list|dict]):
-        logger.debug(backup_settings)
         for key, value in backup_settings.items():
             try:
                 key = BackupSetting(key)
@@ -338,7 +337,6 @@ class Settings:
                 case _:
                     warn(f"Unrecognized backup setting {key} (with value: {value}). Skipping.")
         self.backup_settings.backup_location = self.dirs.get(DirSetting.FULL_BACKUPS)
-        logger.debug(self.backup_settings)
     def parse_directories(self, raw_dir_strs:dict[str,str]):
         for key, path in raw_dir_strs.items():
             # turn str key into DefaultDirs enum
@@ -352,7 +350,6 @@ class Settings:
 
             except Exception as e:
                 logger.error(f"Error while creating directory {key} with path {path}: {e}")
-        logger.debug(self.dirs)
     def parse_files(self, raw_file_strs:dict[str,str]):
         if 'file_folder' in raw_file_strs:
             self.dirs[DirSetting.SCRIPT_DATA] = Directory(raw_file_strs['file_folder'])

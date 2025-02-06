@@ -123,7 +123,6 @@ class DataEntrySheet:
                 # Acceptable width, don't enable word wrap but fit width to contents
                 self.sheet.column_dimensions[col_letter].width = col.max_width
 
-        info(f"Added data to {self.sheet_name} in file {self.file_path}.")
         self.create_table()
         self.save()
 
@@ -135,13 +134,9 @@ class DataEntrySheet:
         )
         table.tableStyleInfo = self.table_style
         self.sheet.add_table(table)
-        info(
-            f"Created table with {self.max_row} rows and {len(self.cols)} cols in sheet {self.sheet_name} of file {self.file_path}"
-        )
 
     def save(self) -> None:
         self.workbook.save(filename=self.file_path)
-        info(f"Saved .xlsx file with DataEntrySheet to {self.file_path}")
 
 def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     """
@@ -152,7 +147,7 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     """
 
     wb = openpyxl.load_workbook(filename=str(file.path))
-    if not SETTINGS.data_settings.complete_data_name in wb.sheetnames:
+    if SETTINGS.data_settings.complete_data_name not in wb.sheetnames:
         wb.active.title = SETTINGS.data_settings.complete_data_name
 
     tabstyle = TableStyleInfo(
@@ -182,4 +177,4 @@ def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
     selectcols = [col for col in SETTINGS.data_settings.final_data_col_order if col in data.columns]
     data = data.select(selectcols)
     data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
-    info(f'Stored {data.shape[0]} rows to  {file}')
+    info(f'Stored {data.shape[0]} rows to {file}')

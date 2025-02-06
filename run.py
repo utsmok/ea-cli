@@ -108,31 +108,31 @@ def cli(
             help="Backup/restore data before starting, neither, or based on settings.yaml (default).",
             rich_help_panel="Backup/Restore",
         ),
-    ] = BackupFlag.DEFAULT,
+    ] = BackupFlag.DEFAULT.value,
     restore_dir: Annotated[
         RestoreOptions,
         typer.Option(
             help="Set which backup to restore.",
             rich_help_panel="Backup/Restore",
         ),
-    ] = RestoreOptions.LATEST,
+    ] = RestoreOptions.LATEST.value,
     restore_strategy: Annotated[
         RestoreStrategy,
         typer.Option(
             help="Set the strategy for restoring the backup. 'replace' will fully replace the faculties dir, 'merge' will only overwrite conflicts (with the prioritized source file) and keep the rest",
             rich_help_panel="Backup/Restore",
         ),
-    ] = RestoreStrategy.REPLACE,
+    ] = RestoreStrategy.REPLACE.value,
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
 
     backupper = Backupper()
-
+    backup = BackupFlag(backup)
     match backup:
         case BackupFlag.BACKUP:
             backupper.backup_files()
         case BackupFlag.RESTORE:
-            backupper.restore_backup(strategy=restore_strategy.value, select=restore_dir.value)
+            backupper.restore_backup(strategy=RestoreStrategy(restore_strategy), select=RestoreOptions(restore_dir))
         case BackupFlag.DEFAULT:
             if SETTINGS.backup_settings.backup_all:
                 backupper.backup_files()

@@ -145,9 +145,15 @@ class Directory:
             else:
                 return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
 
+        if isinstance(target, Directory):
+            target = target.full
+
+        info(f"Copying {self.full} to {target}")
         if not overwrite:
+            info('Overwrite set to False, copying only new files.')
             shutil.copytree(self.full, target, dirs_exist_ok=True, copy_function=copy_only_new)
         else:
+            info('Overwrite set to True, copying all files.')
             shutil.copytree(self.full, target, dirs_exist_ok=True)
 
     def __eq__(self, other) -> bool:

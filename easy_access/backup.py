@@ -53,10 +53,12 @@ class Backupper:
             warn('backup_all is set to true in settings.yaml, but no max amount of backups was specified. Skipping.')
             return
 
-        backup_subdirs = backup_location.dirs
-        if len(backup_subdirs) > max_backups:
-            while len(backup_subdirs) > max_backups:
-                min(backup_subdirs, key=lambda x: x.created).delete()
+
+        if len(backup_location.dirs) >= max_backups:
+            info(f"Found {len(backup_location.dirs)} backups, making room by deleting oldest backup(s).")
+            while len(backup_location.dirs) >= max_backups:
+                min(backup_location.dirs, key=lambda x: x.created).delete()
+
         info(f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}")
         for i in range(0, max_backups + 4):
             new_backup_dir = Directory(backup_location.full / f"backup{i if i > 0 else ""}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}", create_dir=False)
@@ -122,11 +124,13 @@ class Backupper:
 
         if strategy == RestoreStrategy.REPLACE:
             target_dir.delete()
+            info(f"Deleted {target_dir.full}")
+            info(f"Restoring backup from {selected_backup_dir.full} to {target_dir.full} using strategy: {strategy}")
             selected_backup_dir.copy(target_dir)
         elif strategy == RestoreStrategy.MERGE_PREFER_BACKUP:
             selected_backup_dir.copy(target_dir)
         elif strategy == RestoreStrategy.MERGE_PREFER_EXISTING:
-            target_dir.copy(selected_backup_dir, overwrite=False)
+            selected_backup_dir.copy(target_dir, overwrite=False)
         else:
             warn(f"Unrecognized strategy: {strategy}. Cannot restore backup.")
             return
