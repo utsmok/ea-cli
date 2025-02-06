@@ -90,54 +90,45 @@ class EasyAccessTool:
         if functions is None:
             return
 
-        if functions == Functions.both:
-            if not self.other_sheet:
-                self.functions = [
-                    self.read_copyright_export,
-                    self.process_copyright_export,  # read in new data
-                    self.read_all_items_sheets,
-                    self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
-                    self.create_faculty_sheets,
-                    self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_overviews,
-                ]
-            else:
-                self.functions = [
-                    self.read_other_sheet,  # read in new data
-                    self.read_all_items_sheets,
-                    self.read_faculty_sheets,  # read in data manually added to sheets
-                    self.create_import_sheet,  # from the old data, create a sheet to import into CopyRight
-                    self.create_faculty_sheets,
-                    self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_overviews,
-                ]
-
-        elif functions == Functions.read:
-            if not self.other_sheet:
-                self.functions = [
-                    self.read_copyright_export,
-                    self.process_copyright_export,  # read in new data
-                    self.create_faculty_sheets,
-                    self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_overviews,
-                ]
-            else:
-                self.functions = [
-                    self.read_other_sheet,
-                    self.process_copyright_export,  # read in new data
-                    self.create_faculty_sheets,
-                    self.create_all_items_sheet,  # create new sheets with new data
-                    self.create_overviews,
-                ]
-        elif functions == Functions.export:
+        # Export only
+        if functions == Functions.export:
             self.functions = [
-                self.read_faculty_sheets,  # read in data manually added to sheets
-                self.create_import_sheet,  # from the current manually added data, create a sheet to import into CopyRight
+                self.read_faculty_sheets,
+                self.create_import_sheet,
             ]
-            if self.other_sheet:
-                warn(
-                    f"Note: Only exporting data, so the contents of other sheet {self.other_sheet} will have no effect on the output."
-                )
+            return
+
+        # Read or Both
+
+        # First set source data sheet
+        if self.other_sheet:
+            self.functions = [
+                self.read_other_sheet
+                ]
+        else:
+            self.functions = [
+                self.read_copyright_export
+            ]
+
+        # Common functions
+        self.functions.extend([
+            self.process_copyright_export,
+            # self.read_all_items_sheets, # Disabled because the data is not used anywhere at the moment
+            ])
+
+        # exclusive for 'Both'
+        if functions == Functions.both:
+            self.functions.extend = [
+            self.create_import_sheet
+        ]
+
+        # Common functions
+        self.functions.extend([
+            self.create_faculty_sheets,
+            self.create_all_items_sheet,
+            self.create_overviews,
+            ])
+
 
     def run(self) -> None:
         """
@@ -228,6 +219,15 @@ class EasyAccessTool:
         If 'only_changes' it will compare this data to the items present in the faculty sheets,
         and only include new items in the export.
         """
+        if self.raw_copyright_data.is_empty():
+            if self.other_sheet:
+                self.read_other_sheet()
+            else:
+                self.read_copyright_export()
+            if self.raw_copyright_data.is_empty():
+                warn("No new Copyright data found to process! Exiting...")
+                raise typer.Exit(code=1)
+
         if self.copyright_data.is_empty():
             self.copyright_data = self.raw_copyright_data.rename(
                 lambda col: col.replace(" ", "_")
@@ -249,9 +249,6 @@ class EasyAccessTool:
                     DEPARTMENT_MAPPING, default="Unmapped"
                 ),
             )
-        self.faculties = (
-            self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
-        )
 
 
         # enrich copyright_data with OSIRIS data if bool is set
@@ -261,6 +258,11 @@ class EasyAccessTool:
             self.copyright_data = self.copyright_data.with_columns(
                 pl.exclude(pl.Utf8).cast(str)
             )
+
+        self.faculties = (
+            self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
+        )
+
         if self.only_changes:
             self.read_faculty_sheets(include_overview=False)
             if self.faculty_sheet_data.is_empty():
@@ -351,6 +353,9 @@ class EasyAccessTool:
         course_to_sheet: dict[str, str] = COURSE_MAPPING[faculty]
         data: list[dict[str, pl.DataFrame]] = []
         info(f"creating programme sheets for {faculty}")
+        unique_depts = self.copyright_data.filter(pl.col('faculty') == faculty).select(pl.col("department").unique()).to_series().sort().to_list()
+        info(f'Unique department names found for {faculty}: {unique_depts}')
+        info(f'Department names in course_mapping: {list(course_to_sheet.keys())}')
         for course, group in course_to_sheet.items():
             course_data = self.copyright_data.filter(pl.col("department") == course)
             gap = " " * (40 - len(course))
@@ -375,7 +380,7 @@ class EasyAccessTool:
                 programme_dir.full / f"{groupname}_{self.latest_file_date}.xlsx"
             )
 
-            store_complete_data(filename,df)
+            store_complete_data(filename, df)
             self.style_iter = finalize_sheet(File(str(filename)), df, self.style_iter)
             info(
                 f"created programme sheet {groupname}_{self.latest_file_date}.xlsx"
@@ -399,11 +404,14 @@ class EasyAccessTool:
         """
         Reads in all data from all 'all_items' sheets
         and stores it in self.all_items_sheet_data as a single concatted dataframe.
+
+        # NOTE: currently this data is not used anywhere!!
         """
 
         self.all_items_sheet_data = self.read_complete_data_from_sheets(
-            self.dirs[DirSetting.ALL_ITEMS_DIR].files_r, "Sheet1"
+            self.dirs[DirSetting.ALL_ITEMS_DIR].files_r
         )
+        warn(f'self.all_items_sheet_data has been set, but is not currently used.')
 
     def read_complete_data_from_sheets(
         self, files: list[File], sheetname: str = SETTINGS.data_settings.complete_data_name

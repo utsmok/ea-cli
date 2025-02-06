@@ -179,13 +179,7 @@ def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
     if isinstance(file, File):
         file = file.path
 
-    print(f'running store_complete data for {file}')
-    print(SETTINGS.data_settings.final_data_col_order)
-    print(data.columns)
     selectcols = [col for col in SETTINGS.data_settings.final_data_col_order if col in data.columns]
-    print(data.columns)
-    print(selectcols)
-    print(data.shape[0])
     data = data.select(selectcols)
-    print(data.shape[0])
     data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
+    info(f'Stored {data.shape[0]} rows to  {file}')

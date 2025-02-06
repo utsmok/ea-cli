@@ -301,7 +301,6 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
     Return the enriched dataframe.
     """
 
-    info(f'Enriching dataframe for {group} with {df.shape[0]} rows. Input cols:\n{df.columns}')
     item_data = df.select(
         pl.col("course_code"), pl.col("course_name"), pl.col("material_id")
     ).to_dicts()
@@ -428,17 +427,19 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
                     # if not: we have 2 cols that do not match. Merge them in some way.
                     else:
                         final_data = []
-                        warn(f"Conflicting values for column {base} in {group} enrichment results. Overwriting with new values.")
+                        #warn(f"Conflicting values for column {base} in {group} enrichment results. Overwriting with new values.")
                         all_base_vals = df.select(pl.col(base)).to_series().to_list()
                         all_new_vals = df.select(pl.col(col)).to_series().to_list()
                         material_ids = df.select(pl.col("material_id")).to_series().to_list()
                         mismatched_cols = set()
                         if base == 'osiris_catalogue_url':
-                            info('Not printing comparison for osiris_catalogue_urls.')
+                            #info('Not printing comparison for osiris_catalogue_urls.')
+                            ...
                         elif len(all_base_vals) != len(all_new_vals):
-                            warn(f'Cannot print comparison: cols are not the same length. \nlen({base})={len(all_base_vals)} != len({col})={len(all_new_vals)}')
+                            #warn(f'Cannot print comparison: cols are not the same length. \nlen({base})={len(all_base_vals)} != len({col})={len(all_new_vals)}')
+                            ...
                         else:
-                            info("Mismatches found:")
+                            #info("Mismatches found:")
                             printstr =""
                             for material_id, orig_val, new_val in zip(material_ids, all_base_vals, all_new_vals):
                                 if not orig_val:
@@ -473,7 +474,7 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
                                 else:
                                     # no new val
                                     final_data.append({'material_id':material_id, base:orig_data})
-                            info(printstr)
+                            #info(printstr)
 
                         if not final_data:
                             df = df.drop(base).rename({col: base})
@@ -481,10 +482,10 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
                             # drop base and col from orig df
                             # create temp dataframe from final_data -- has cols material_id and base
                             # join temp dataframe to df on material_id
-                            info(f'replacing {base} with col constructed from {len(final_data)} items')
+                            #info(f'replacing {base} with col constructed from {len(final_data)} items')
                             tmp_df = pl.from_dicts(final_data, strict=False, infer_schema_length=1000)
-                            info(f'tmp_df details: {tmp_df.shape[0]} rows, cols: {tmp_df.columns}')
-                            info(tmp_df)
+                            #info(f'tmp_df details: {tmp_df.shape[0]} rows, cols: {tmp_df.columns}')
+                            #info(tmp_df)
                             df = df.drop([base, col]).join(tmp_df, on="material_id", how="left")
             else:
                 # base doesn't exist? weird, just rename suffix column to base and done

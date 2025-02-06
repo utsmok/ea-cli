@@ -10,13 +10,14 @@ from rich.console import Console
 from rich.table import Table
 from rich.terminal_theme import SVG_EXPORT_THEME
 import copy
+from collections import defaultdict
 
 def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, style_iter:int):
     """
     create an overview sheet for each programme of the given faculty, using the data in df.
     """
     course_to_group: dict[str,str] = COURSE_MAPPING[faculty]
-    data: list[dict[str,pl.DataFrame]] = []
+    data: dict[str,pl.DataFrame] = defaultdict(pl.DataFrame)
     today = datetime.now().strftime("%Y-%m-%d")
 
     for course, group in course_to_group.items():
@@ -38,18 +39,14 @@ def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, sty
                                 .then(pl.lit("yes"))
                                 .otherwise(pl.lit("maybe"))
             )
-            data.append({'group':group, 'data': programme_data})
+            data[group] = pl.concat([data[group],programme_data], how="diagonal_relaxed")
 
-    final_data: dict[str,pl.DataFrame] = {}
-    for item in data:
-        info(f'group: {item.get("group")} --> + {item.get("data").shape[0]} items')
-        if item.get('group') in final_data:
-            final_data[item.get('group')] = pl.concat([final_data[item.get('group')], item['data']])
-        else:
-            final_data[item.get('group')] = item['data']
+    for group, item in data.items():
+        info(f'group: {group}: {item.shape[0]} items')
+
 
     overview_fac_programme_dir = Directory(SETTINGS.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty / "per_programme")
-    for groupname, df in final_data.items():
+    for groupname, df in data.items():
         for file in Directory(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme").files:
             if file.extension not in [".xls", ".xlsx"]:
                 continue
@@ -59,8 +56,8 @@ def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, sty
         info(f'{groupname} has {df.shape[0]} items')
         programme_file = File(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme" / f'{groupname}_total_overview_updated_{today}.xlsx')
         info(f'saving file with {df.shape[0]} rows to {programme_file.path}')
-        store_complete_data(programme_file, programme_data)
-        style_iter = finalize_sheet(programme_file, programme_data, style_iter)
+        store_complete_data(programme_file, df)
+        style_iter = finalize_sheet(programme_file, df, style_iter)
 
     return style_iter
 
