@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 import polars as pl
 import typer
-
+from loguru import logger
 from easy_access.utils import Directory, File, info, cool, warn, print
 from easy_access.enrichment import enrich_df_with_osiris_data, update_osiris_data
 from easy_access.sheet import finalize_sheet, store_complete_data
@@ -78,6 +78,9 @@ class EasyAccessTool:
         self.no_new_items = False
         self.style_iter = 2
 
+        if SETTINGS.backup_settings.backup_all:
+            self.backup_files()
+
         # Set functions to run
         self.set_functions(settings.functions)
 
@@ -129,6 +132,49 @@ class EasyAccessTool:
             self.create_overviews,
             ])
 
+    def backup_files(self) -> None:
+        """
+        Creates a backup of all data in the specified dir(s).
+        """
+        dirs_to_backup = SETTINGS.backup_settings.backup_dirs
+        backup_location = SETTINGS.backup_settings.backup_location
+        max_backups = SETTINGS.backup_settings.max_backups
+        if not dirs_to_backup:
+            warn(f'backup_all set, but no dirs to backup were specified. Skipping.')
+            return
+        if not backup_location:
+            warn(f'backup_all set, but no backup location was specified. Skipping.')
+            return
+        if not max_backups:
+            warn(f'backup_all set, but no max amount of backups was specified. Skipping.')
+            return
+
+        backup_subdirs = backup_location.dirs
+        if len(backup_subdirs) > max_backups:
+            while len(backup_subdirs) > max_backups:
+                min(backup_subdirs, key=lambda x: x.created).delete()
+        info(f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}")
+        for i in range(0, max_backups + 4):
+            new_backup_dir = Directory(backup_location.full / f"backup{i if i > 0 else ""}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}", create_dir=False)
+            if not new_backup_dir.exists:
+                new_backup_dir.create()
+                break
+
+        def copy_file_and_dirs(d: Directory, target_dir: Directory) -> None:
+            files = d.files
+            if files:
+                for f in files:
+                    f.copy(target_dir.full / f.name)
+            dirs = d.dirs
+            if dirs:
+                for new_dir in dirs:
+
+                    copy_file_and_dirs(new_dir, Directory(target_dir.full / new_dir.name, create_dir=True))
+
+        for d in dirs_to_backup:
+            copy_file_and_dirs(d, new_backup_dir)
+
+        cool(f'Backups done, stored in {new_backup_dir.full}')
 
     def run(self) -> None:
         """
@@ -254,15 +300,13 @@ class EasyAccessTool:
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
             self.copyright_data = enrich_df_with_osiris_data(self.copyright_data,'full data')
-            # set dtype of all columns to str
-            self.copyright_data = self.copyright_data.with_columns(
-                pl.exclude(pl.Utf8).cast(str)
-            )
+            self.copyright_data = self.clean_and_validate_df(self.copyright_data)
+
 
         self.faculties = (
             self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
         )
-
+        self.copyright_data = self.clean_and_validate_df(self.copyright_data)
         if self.only_changes:
             self.read_faculty_sheets(include_overview=False)
             if self.faculty_sheet_data.is_empty():
@@ -278,9 +322,14 @@ class EasyAccessTool:
                 - material_id is not present in self.faculty_sheet_data
                 - material_id is found but last_change date is different
                 """
+                info(f'number of rows in copyright_data: {self.copyright_data.shape[0]}')
+                info(f'number of rows in faculty sheet data: {self.faculty_sheet_data.shape[0]}')
+
                 not_in_faculty = self.copyright_data.join(
                     self.faculty_sheet_data, on="material_id", how="anti"
                 )
+                info(f'copyright_data rows not found in faculty sheet data: {not_in_faculty.shape[0]}')
+
                 matching_id_diff_change = (
                     self.copyright_data.join(
                         self.faculty_sheet_data, on="material_id", how="inner"
@@ -303,9 +352,10 @@ class EasyAccessTool:
                     )
                 else:
                     self.copyright_data = not_in_faculty
-
+                self.copyright_data = self.clean_and_validate_df(self.copyright_data)
                 self.read_all_items_sheets()
 
+        cool(f'process copyright export done. {self.copyright_data.shape[0]} rows in self.copyright_data.')
 
     def create_faculty_sheets(self) -> None:
         """
@@ -315,6 +365,8 @@ class EasyAccessTool:
         info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
         if self.faculties:
             self.faculties.sort()
+        if not self.copyright_data.is_empty():
+            self.copyright_data = enrich_df_with_osiris_data(self.copyright_data)
         for faculty in self.faculties:
             if faculty in COURSE_MAPPING:
                 self.create_programme_sheets(faculty)
@@ -433,7 +485,7 @@ class EasyAccessTool:
             except Exception:
                 current_data = pl.read_excel(file.path, infer_schema_length=None)
 
-            current_data = self.validate_ea_sheet(current_data, file)
+            current_data = self.clean_and_validate_df(current_data)
             if current_data.is_empty():
                 continue
             else:
@@ -442,43 +494,30 @@ class EasyAccessTool:
             result: pl.DataFrame = pl.concat(file_data, how="diagonal_relaxed")
         else:
             result = pl.DataFrame()
-        return result.unique()
+        return self.clean_and_validate_df(result.unique())
 
-    def validate_ea_sheet(self, df: pl.DataFrame, file: File) -> pl.DataFrame:
+    def clean_and_validate_df(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        For a given dataframe created from an EA excel sheet,
-        check the data for errors.
-        If found, try to fix, else print the errors.
-        If the sheet is not validated, return an empty dataframe.
-
         Current implementation is bare:
-        - is sheet empty? if yes: print error
-        - set all columns to type str
+        - if sheet is not empty:
+            - set all columns to type str
+            - replace truncated url values
 
         TODO: Implement this function fully.
-        TODO: handle multiple sheets in the same file
+
 
         """
-        valid = True
-        errlist = []
-        if df.is_empty():
-            valid = False
-            errlist.append("Sheet is empty")
-        if valid:
+
+        if not df.is_empty():
             # set all columns to type str
             df = df.with_columns(pl.exclude(pl.Utf8).cast(str))
-            # check that the sheet has the correct columns
-            ...
-        if valid:
-            # check the values in the columns
-            ...
-        if not valid:
-            info(f"Errors in sheet {file}:")
-            for err in errlist:
-                warn(err)
-            return pl.DataFrame()
-        else:
-            return df
+
+            # replace truncated url values
+            if 'url' in df.columns:
+                df = df.with_columns(pl.col('url').str.replace(r'\.{3}','https://utwente.instructure.com/files'))
+            if 'osiris_catalogue_url' in df.columns:
+                df = df.with_columns(pl.col('osiris_catalogue_url').str.replace(r'\.{3}','https://utwente.instructure.com/files'))
+        return df
 
     def create_import_sheet(self) -> None:
         """
@@ -517,7 +556,9 @@ class EasyAccessTool:
                 [all_faculty_data, faculty_data], how="diagonal_relaxed"
             )
 
-        return all_faculty_data.unique()
+        final_data =  self.clean_and_validate_df(all_faculty_data.unique())
+        info(f'data from all faculties has {final_data.shape[0]} unique rows')
+        return final_data
 
     def get_faculty_data(
         self, faculty: str, del_overview: bool = False, include_overview: bool = True
@@ -583,8 +624,8 @@ class EasyAccessTool:
                         )
                     except ValueError:
                         total_overview = pl.read_excel(file.path)
-
                     overview_file = file
+                    logger.debug(f'{faculty} data retrieval:  {total_overview.shape[0]} rows in overview file')
         for file in faculty_files:
             if file.extension not in [".xls", ".xlsx"]:
                 continue
@@ -596,11 +637,11 @@ class EasyAccessTool:
                     if latest_mod_date is None
                     else max(latest_mod_date, file.modified)
                 )
-                full_data = pl.read_excel(file.path, sheet_name="Complete data")
-                data_entry = pl.read_excel(file.path, sheet_name="Data entry")
+                full_data = pl.read_excel(file.path, sheet_name=SETTINGS.data_settings.complete_data_name)
+                data_entry = pl.read_excel(file.path, sheet_name=SETTINGS.data_settings.data_entry_name)
 
-                full_data = self.validate_ea_sheet(full_data, file)
-                data_entry = self.validate_ea_sheet(data_entry, file)
+                full_data = self.clean_and_validate_df(full_data)
+                data_entry = self.clean_and_validate_df(data_entry)
 
                 # merge data_entry into full_data on column material_id.
                 # data from data_entry will overwrite data from full_data
@@ -675,13 +716,20 @@ class EasyAccessTool:
 
         if del_overview:
             if overview_file:
-                overview_file.move(overview_fac_dir.full / overview_file.name)
+                if SETTINGS.backup_settings.backup_overviews:
+                    overview_file.move(overview_fac_dir.full / overview_file.name)
+                else:
+                    overview_file.delete()
             else:
                 for file in faculty_files:
                     if "total_overview" in file.name and faculty in file.name:
-                        file.move(overview_fac_dir.full / file.name)
-                        break
-        return all_faculty_data
+                        if SETTINGS.backup_settings.backup_overviews:
+                            file.move(overview_fac_dir.full / file.name)
+                        else:
+                            file.delete()
+
+        logger.debug(f'{faculty} data retrieval: final rowcount {all_faculty_data.shape[0]}')
+        return self.clean_and_validate_df(all_faculty_data)
 
     def create_overviews(self) -> None:
         """
@@ -1016,6 +1064,6 @@ class EasyAccessTool:
         if self.refresh_osiris_data:
             info("Refreshing OSIRIS data. This will take a while!")
             asyncio.run(update_osiris_data(df_merged, self.only_retrieve_missing_osiris_data))
-
+        self.clean_and_validate_df(df_merged)
         df_merged.write_parquet(SETTINGS.files.get(FileSetting.FULL_DATA_PARQUET).path)
         df_merged.write_csv(SETTINGS.files.get(FileSetting.FULL_DATA_CSV).path)

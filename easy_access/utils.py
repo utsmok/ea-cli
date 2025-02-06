@@ -56,10 +56,10 @@ class Directory:
             if self.create_dir:
                 self.create()
             else:
-                raise FileNotFoundError(
-                    f"Directory {self.full} does not exist and create_dir is set to False."
+                warn(
+                    f"Directory {self.full} does not exist and create_dir is set to False. Call create() before any other commands!"
                 )
-        if not self.full.is_dir():
+        elif not self.full.is_dir():
             raise NotADirectoryError(f"Directory {self.full} is not a directory.")
 
     @property
@@ -79,7 +79,12 @@ class Directory:
         return [
             File(self.full / file) for file in self.full.rglob("*") if file.is_file()
         ]
-
+    @property
+    def name(self) -> str:
+        return self.full.name
+    @property
+    def created(self) -> datetime:
+        return datetime.strptime(time.ctime(self.full.stat().st_birthtime), "%c")
     @property
     def dirs(self, r: bool = False) -> list["Directory"]:
         """
@@ -130,6 +135,8 @@ class Directory:
         except FileExistsError:
             pass
 
+    def delete(self) -> None:
+        shutil.rmtree(self.full)
     def __eq__(self, other) -> bool:
         return self.full == other.full
 

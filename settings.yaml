@@ -2,14 +2,31 @@
 # Comments are provided in this file to explain the settings.
 # Note that missing settings will at best result in warnings or errors, at worst silently making errors in the output.
 
+unsorted:
+# values that don't (yet) fit anywhere else
+  fine_amount: 0.3 # fine amount per page per item per student
 
-# The directories to retrieve / store files. The directories should be folder names in the same directory as the script.
+backup:
+  # backup all sheets in selected directories before starting? (bool)
+  backup_all: true
+  # directories to backup, use keys from the 'directories' section
+  backup_dirs:
+    - faculties_dir
+  # maximum number of backups to keep (int)
+  max_backups: 3
+  # backup overview files (move them to overview_backup instead of deleting)? (bool)
+  # note that this settings is separate from backup_all!
+  backup_overviews: true
+
+
 directories:
+# The directories to retrieve / store files. The directories should be folder names in the same directory as the script.
   raw_copyright_data: raw_copyright_data # Directory where the raw copyright data is downloaded to (output from qlik)
   export_to_surf: copyright_data_for_SURF_import # The script will export files here to be sent to SURF for importing data.
   faculties_dir: faculty_sheets # Here the sheets per faculty will be stored -- the most important output of the script.
   all_items_dir: cip_sheets # Sheets with all items here, for quick reference and overview for the CIP.
   overviews_backup: overviews_backup # Backup folder for 'overview' sheets, which are replaced each time the script runs.
+  full_backups: full_backups # Backup folder for entire faculty dir backups, see 'backup' section
   script_data: script_data # Data directly used by the script, such as 'full_data.csv' and 'ea-cli.log'
 
 # additional specific file paths. Will be stored in script_data directory defined above.
@@ -174,9 +191,6 @@ data_settings:
         - Unmapped
 
 
-# values that don't (yet) fit anywhere else
-unsorted:
-  fine_amount: 0.3 # fine amount per page per item per student
 
 # University settings
 # Set all the data for your university. This data is essential for the script to separate data into faculties and programmes;

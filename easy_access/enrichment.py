@@ -490,7 +490,7 @@ def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.
             else:
                 # base doesn't exist? weird, just rename suffix column to base and done
                 df = df.rename({col: base})
-    info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot in osiris:    {len(no_osiris_data_found)}/{total}\nNo coursecode:    {len(no_course_code_found)}/{total}")
+    #info(f"{group} enrichment results\n----------------------------\nUpdated:          {updated}/{total}\nAlready enriched: {already_enriched}/{total}\nNot in osiris:    {len(no_osiris_data_found)}/{total}\nNo coursecode:    {len(no_course_code_found)}/{total}")
     return df
 
 async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = False) -> None:

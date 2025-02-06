@@ -86,6 +86,7 @@ class DirSetting(Enum):
     ALL_ITEMS_DIR = "all_items_dir"
     OVERVIEWS_BACKUP = "overviews_backup"
     SCRIPT_DATA = "script_data"
+    FULL_BACKUPS = "full_backups"
 
 class FileSetting(Enum):
     """Enum for files expected by the script"""
@@ -95,6 +96,12 @@ class FileSetting(Enum):
     OSIRIS_DATA_W_CONTACTS = "osiris_data_w_contacts"
     PERSON_DATA = "person_data"
 
+class BackupSetting(Enum):
+    """Enum for backup settings expected by the script"""
+    BACKUP_ALL = "backup_all"
+    BACKUP_DIRS = "backup_dirs"
+    MAX_BACKUPS = "max_backups"
+    BACKUP_OVERVIEWS = "backup_overviews"
 
 class SheetSetting(Enum):
     """Enum for sheet settings expected by the script"""
@@ -139,6 +146,23 @@ class EasyAccessSettings:
         dirs = SETTINGS.dirs
         return cls(dirs=dirs, **kwargs)
 
+@dataclass
+class DataSettings:
+    data_entry_cols: list[ColInfo] = field(default_factory=list, init=False)
+    complete_data_cols: list[ColInfo] = field(default_factory=list, init=False)
+    complete_data_name: str = field(default="Complete Data", init=False)
+    data_entry_name: str = field(default="Data Entry", init=False)
+    raw_data_col_order: list[str] = field(default_factory=list, init=False)
+    final_data_col_order: list[str] = field(default_factory=list, init=False)
+    new_fields: dict[str, dict[str, str|list]] = field(default_factory=list, init=False)
+
+@dataclass
+class BackupSettings:
+    backup_all: bool = True
+    backup_dirs: set[Directory] = field(default_factory=set)
+    max_backups: int = 3
+    backup_overviews: bool = True
+    backup_location: Directory | None = field(default=None)
 
 @dataclass(frozen=True)
 class Programme:
@@ -157,15 +181,6 @@ class Faculty:
     programmes: list[Programme] = field(default_factory=list)
 
 
-@dataclass
-class DataSettings:
-    data_entry_cols: list[ColInfo] = field(default_factory=list, init=False)
-    complete_data_cols: list[ColInfo] = field(default_factory=list, init=False)
-    complete_data_name: str = field(default="Complete Data", init=False)
-    data_entry_name: str = field(default="Data Entry", init=False)
-    raw_data_col_order: list[str] = field(default_factory=list, init=False)
-    final_data_col_order: list[str] = field(default_factory=list, init=False)
-    new_fields: dict[str, dict[str, str|list]] = field(default_factory=list, init=False)
 
 @dataclass
 class UniversitySettings:
@@ -213,6 +228,7 @@ class UniversitySettings:
                 course_mapping_dict[faculty_name] = data
         return course_mapping_dict
 
+
 @dataclass
 class Settings:
     """Dataclass holding the app settings"""
@@ -225,6 +241,7 @@ class Settings:
     fine_amount: float = field(default=0.3, init=False, repr=False)
     data_settings: DataSettings = field(default_factory=DataSettings, init=False)
     university_settings: UniversitySettings = field(default_factory=UniversitySettings, init=False)
+    backup_settings: BackupSettings = field(default_factory=BackupSettings, init=False)
 
     def __post_init__(self):
         self.settings_file = File(self.input_file_path)
@@ -244,11 +261,19 @@ class Settings:
     def parse_settings(self) -> None:
         """Parse the settings into the dataclass"""
         for key, value in self.raw_settings.items():
+            if key == 'backup':
+                # skip backup settings until we are sure self.dirs has been initialized
+                continue
+
             if key in self.KEY_TO_PARSER_MAPPING:
                 self.KEY_TO_PARSER_MAPPING[key](self,value)
             else:
                 logger.error(f'Unrecognized key: {key}. Directly setting value as attribute.')
                 setattr(self, key, value)
+
+        if 'backup' in self.raw_settings:
+            self.parse_backup(self.raw_settings['backup'])
+
 
     def parse_university(self, value):
         self.university_settings.name = value.get('name', "")
@@ -297,8 +322,29 @@ class Settings:
                 case _:
                     warn(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
 
-
-
+    def parse_backup(self, backup_settings: dict[str, str|list|dict]):
+        logger.debug(backup_settings)
+        for key, value in backup_settings.items():
+            try:
+                key = BackupSetting(key)
+            except ValueError:
+                logger.error(f"Unrecognized backup setting {key} (with value: {value}). Skipping.")
+                continue
+            match key:
+                case BackupSetting.BACKUP_ALL:
+                    self.backup_settings.backup_all = value
+                case BackupSetting.BACKUP_DIRS:
+                    if not isinstance(value, list):
+                        value = [value]
+                    self.backup_settings.backup_dirs = [self.dirs.get(DirSetting(v)) for v in value if v]
+                case BackupSetting.MAX_BACKUPS:
+                    self.backup_settings.max_backups = value
+                case BackupSetting.BACKUP_OVERVIEWS:
+                    self.backup_settings.backup_overviews = value
+                case _:
+                    warn(f"Unrecognized backup setting {key} (with value: {value}). Skipping.")
+        self.backup_settings.backup_location = self.dirs.get(DirSetting.FULL_BACKUPS)
+        logger.debug(self.backup_settings)
     def parse_directories(self, raw_dir_strs:dict[str,str]):
         for key, path in raw_dir_strs.items():
             # turn str key into DefaultDirs enum
@@ -312,7 +358,7 @@ class Settings:
 
             except Exception as e:
                 logger.error(f"Error while creating directory {key} with path {path}: {e}")
-
+        logger.debug(self.dirs)
     def parse_files(self, raw_file_strs:dict[str,str]):
         if 'file_folder' in raw_file_strs:
             self.dirs[DirSetting.SCRIPT_DATA] = Directory(raw_file_strs['file_folder'])
@@ -346,7 +392,8 @@ class Settings:
         'data_settings': parse_data_settings,
         'directories': parse_directories,
         'files': parse_files,
-        'unsorted': parse_unsorted
+        'unsorted': parse_unsorted,
+        'backup': parse_backup
     }
 
 
