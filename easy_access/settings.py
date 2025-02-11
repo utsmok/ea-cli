@@ -2,7 +2,8 @@ import yaml
 from dataclasses import dataclass, field
 from easy_access.utils import File, Directory, print, warn
 from enum import Enum
-from typing import Literal
+from typing import Literal, Any
+from collections.abc import Callable
 import logging
 import os
 import sys
@@ -18,11 +19,11 @@ with nested dataclasses for the different settings.
 Used throughout the app to access settings (file/dirnames, university data, mappings, etc) in a structured way.
 """
 
-def configure_logger():
-    log_dir = Directory("logs")
+def configure_logger() -> None:
+    log_dir = Directory(path="logs")
 
-    def console_formatter(record):
-        level = record["level"].name
+    def console_formatter(record) -> Literal['<level>{level} |> </level>{message}\n']:
+        level: str = record["level"].name
         if level == "INFO":
             return "<level>{level} |> </level>{message}\n"
         elif level == "WARNING":
@@ -30,10 +31,10 @@ def configure_logger():
         elif level == "SUCCESS":  # We'll use SUCCESS level for 'cool' messages
             return "<level>{level} |> </level>{message}\n"
         else:
-            return "<level>{level}: |> </level>{message}\n"
+            return "<level>{level} |> </level>{message}\n"
 
     logger.add(
-        sys.stderr,
+        sink=sys.stderr,
         colorize=True,
         format=console_formatter,
         level="TRACE",
@@ -41,7 +42,7 @@ def configure_logger():
     )
 
     logger.add(
-        log_dir.full / "app_{time}.log",
+        sink=log_dir.full / "app_{time}.log",
         rotation="1 month",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
         level="TRACE",
@@ -116,9 +117,9 @@ class Functions(str, Enum):
     CLI option for picking which functions to run, see easy_access_cli.cli()
     """
 
-    both = "both"
-    read = "read"
-    export = "export"
+    both: str = "both"
+    read: str = "read"
+    export: str = "export"
 
 @dataclass
 class EasyAccessSettings:
@@ -137,7 +138,7 @@ class EasyAccessSettings:
     @classmethod
     def from_env(cls, **kwargs) -> "EasyAccessSettings":
         """Create settings from environment variables and override with kwargs."""
-        dirs = SETTINGS.dirs
+        dirs: dict[DirSetting, Directory] = SETTINGS.dirs
         return cls(dirs=dirs, **kwargs)
 
 @dataclass
@@ -186,35 +187,35 @@ class UniversitySettings:
     faculties: list[Faculty] = field(default_factory=list, init=False)
     programmes: set[Programme] = field(default_factory=set, init=False)
 
-    def make_programme_set(self):
+    def make_programme_set(self) -> None:
         if self.faculties:
             for faculty in self.faculties:
-                programmes = faculty.programmes
+                programmes: list[Programme] = faculty.programmes
                 if not programmes:
                     continue
                 for programme in programmes:
-                    prog_dict = programme.__dict__
+                    prog_dict: dict[str, Any] = programme.__dict__
                     prog_dict['faculty_name'] = faculty.name
                     prog_dict['faculty_abbreviation'] = faculty.abbreviation
                     self.programmes.add(Programme(**prog_dict))
 
     @property
-    def faculty_abbreviations(self):
+    def faculty_abbreviations(self) -> set[str]:
         return {faculty.abbreviation for faculty in self.faculties}
     @property
-    def department_mapping(self):
+    def department_mapping(self) -> dict[str, str]:
         if not self.programmes:
             self.make_programme_set()
         return {f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}": programme.faculty_abbreviation if programme.faculty_abbreviation else "" for programme in self.programmes}
 
     @property
-    def course_mapping(self):
+    def course_mapping(self) -> dict[str, dict[str, str]]:
         if not self.programmes:
             self.make_programme_set()
-        course_mapping_dict = {}
+        course_mapping_dict: dict[str, dict[str, str]] = {}
         for faculty in self.faculties:
-            faculty_name = faculty.abbreviation
-            data = dict()
+            faculty_name: str = faculty.abbreviation
+            data: dict[str, str] = dict()
             for programme in faculty.programmes:
                 if programme.cluster:
                     data[f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}"] = programme.cluster
@@ -237,39 +238,42 @@ class Settings:
     university_settings: UniversitySettings = field(default_factory=UniversitySettings, init=False)
     backup_settings: BackupSettings = field(default_factory=BackupSettings, init=False)
 
-    def __post_init__(self):
-        self.settings_file = File(self.input_file_path)
+    def __post_init__(self) -> None:
+        self.settings_file = File(path=self.input_file_path)
         self.load()
         if self.raw_settings:
             self.parse_settings()
 
-        # these are here to indicate they need to be implemented
-        self.dump()
-        self.create_defaults()
+        # these are here to indicate they need to be implemented!!!
+        # remove when implemented
+        warn(text="settings.dump() not yet implemented")
+        warn(text="settings.create_defaults() not yet implemented")
+
     def load(self) -> None:
         """Load the settings from the settings.yaml file"""
         try:
-            with open(self.settings_file.path) as f:
-                self.raw_settings = yaml.load(f, Loader=yaml.FullLoader)
+            with open(file=self.settings_file.path) as f:
+                self.raw_settings = yaml.load(stream=f, Loader=yaml.FullLoader)
         except Exception as e:
             logger.error(f"Error while loading settings from {self.settings_file}: {e}")
             self.raw_settings = {}
+
     def dump(self) -> None:
         """
         Store the current settings in the settings.yaml file
         """
         ...
         # parse all attributes back into single dict for yaml dump
-        warn("settings.dump not yet implemented")
+
     def create_defaults(self) -> None:
         """
         Create the default settings.yaml file
         """
         # ask for confirmation before overwriting the file
         ...
-        warn("settings.create_defaults not yet implemented")
+
     def parse_settings(self) -> None:
-        """Parse the settings into the dataclass"""
+        """Parse all settings from settings.yaml by calling the apprioriate parsing functions from this class"""
         for key, value in self.raw_settings.items():
             if key == 'backup':
                 # skip backup settings until we are sure self.dirs has been initialized
@@ -282,27 +286,33 @@ class Settings:
                 setattr(self, key, value)
 
         if 'backup' in self.raw_settings:
-            self.parse_backup(self.raw_settings['backup'])
+            self.parse_backup(backup_settings=self.raw_settings['backup'])
 
 
-    def parse_university(self, value):
+    def parse_university(self, value: dict[str,list[dict[str,str]]]) -> None:
+        """
+        Parse the settings for the key 'university' in settings.yaml into the UniversitySettings dataclass
+        """
         self.university_settings.name = value.get('name', "")
         self.university_settings.abbreviation = value.get('abbreviation', "")
         self.university_settings.lms = value.get('lms', {})
         self.university_settings.course_catalogue = value.get('course_catalogue', {})
         self.university_settings.employee_catalogue = value.get('employee_catalogue', {})
         for faculty in value.get('faculties', []):
-            name = faculty.get('name', "")
-            abbreviation = faculty.get('abbreviation', "")
-            programmes = [Programme(**programme) for programme in faculty.get('programmes', [])]
-            self.university_settings.faculties.append(Faculty(name, abbreviation, programmes))
+            name: str = faculty.get('name', "")
+            abbreviation: str = faculty.get('abbreviation', "")
+            programmes: list[Programme] = [Programme(**programme) for programme in faculty.get('programmes', [])]
+            self.university_settings.faculties.append(Faculty(name=name, abbreviation=abbreviation, programmes=programmes))
 
         self.university_settings.make_programme_set()
 
-    def parse_data_settings(self, data_settings: dict[str, str|list|dict]):
+    def parse_data_settings(self, data_settings: dict[str, str|list|dict]) -> None:
+        """
+        Parse the settings for the key 'data_settings' in settings.yaml into the DataSettings dataclass
+        """
         for key, value in data_settings.items():
             try:
-                key = SheetSetting(key)
+                key = SheetSetting(value=key)
             except ValueError:
                 logger.error(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
                 continue
@@ -310,7 +320,7 @@ class Settings:
                 case SheetSetting.DATA_ENTRY_COLS:
                     self.data_settings.data_entry_cols = [ColInfo(**col_info) for col_info in value]
                 case SheetSetting.COMPLETE_DATA_COLS:
-                    warn('complete data cols setting not implemented yet')
+                    warn(text='complete data cols setting not implemented yet')
                 case SheetSetting.COMPLETE_DATA_NAME:
                     self.data_settings.complete_data_name = value
                 case SheetSetting.DATA_ENTRY_NAME:
@@ -320,9 +330,9 @@ class Settings:
                 case SheetSetting.FINAL_DATA_COL_ORDER:
                     self.data_settings.final_data_col_order = value
                 case SheetSetting.NEW_FIELDS:
-                    new_fields = {}
+                    new_fields: dict = {}
                     for colname, settings in value.items():
-                        new_field_dict = {}
+                        new_field_dict: dict = {}
                         if 'values' in settings:
                             new_field_dict['values'] = settings['values']
                         if 'default' in settings:
@@ -330,12 +340,15 @@ class Settings:
                         new_fields[colname] = new_field_dict
                     self.data_settings.new_fields = new_fields
                 case _:
-                    warn(f"Unrecognized data setting {key} (with value: {value}). Skipping.")
+                    warn(text=f"Unrecognized data setting {key} (with value: {value}). Skipping.")
 
-    def parse_backup(self, backup_settings: dict[str, str|list|dict]):
+    def parse_backup(self, backup_settings: dict[str, str|list|dict]) -> None:
+        """
+        Parse the settings for the key 'backup' in settings.yaml into the BackupSettings dataclass
+        """
         for key, value in backup_settings.items():
             try:
-                key = BackupSetting(key)
+                key = BackupSetting(value=key)
             except ValueError:
                 logger.error(f"Unrecognized backup setting {key} (with value: {value}). Skipping.")
                 continue
@@ -344,49 +357,56 @@ class Settings:
                     self.backup_settings.backup_all = value
                 case BackupSetting.BACKUP_DIRS:
                     if not isinstance(value, list):
-                        value = [value]
-                    self.backup_settings.backup_dirs = [self.dirs.get(DirSetting(v)) for v in value if v]
+                        value: list[str|dict] = [value]
+                    self.backup_settings.backup_dirs = [self.dirs.get(DirSetting(value=v)) for v in value if v]
                 case BackupSetting.MAX_BACKUPS:
                     self.backup_settings.max_backups = value
                 case BackupSetting.BACKUP_OVERVIEWS:
                     self.backup_settings.backup_overviews = value
                 case _:
-                    warn(f"Unrecognized backup setting {key} (with value: {value}). Skipping.")
+                    warn(text=f"Unrecognized backup setting {key} (with value: {value}). Skipping.")
         self.backup_settings.backup_location = self.dirs.get(DirSetting.FULL_BACKUPS)
-    def parse_directories(self, raw_dir_strs:dict[str,str]):
+    def parse_directories(self, raw_dir_strs:dict[str,str]) -> None:
+        """
+        Parse the settings for the key 'directories' in settings.yaml into the dirs attribute of the Settings dataclass
+        """
         for key, path in raw_dir_strs.items():
             # turn str key into DefaultDirs enum
             try:
-                key = DirSetting(key)
+                key = DirSetting(value=key)
             except ValueError:
                 logger.error(f"Unrecognized directory type {key} (with path: {path}). Skipping.")
                 continue
             try:
-                self.dirs[key] = Directory(path)
+                self.dirs[key] = Directory(path=path)
 
             except Exception as e:
                 logger.error(f"Error while creating directory {key} with path {path}: {e}")
-    def parse_files(self, raw_file_strs:dict[str,str]):
-        if 'file_folder' in raw_file_strs:
-            self.dirs[DirSetting.SCRIPT_DATA] = Directory(raw_file_strs['file_folder'])
-        else:
-            self.dirs[DirSetting.SCRIPT_DATA] = Directory(os.getcwd())
+    def parse_files(self, raw_file_strs:dict[str,str]) -> None:
+        """
+        Parse the settings for the key 'files' in settings.yaml into the files attribute of the Settings dataclass
+        """
 
-        file_dir_path = self.dirs[DirSetting.SCRIPT_DATA].full
+        if 'file_folder' in raw_file_strs:
+            self.dirs[DirSetting.SCRIPT_DATA] = Directory(path=raw_file_strs['file_folder'])
+        else:
+            self.dirs[DirSetting.SCRIPT_DATA] = Directory(path=os.getcwd())
+
+        file_dir_path: Path = self.dirs[DirSetting.SCRIPT_DATA].full
         for key, path in raw_file_strs.items():
             if key == 'file_folder':
                 continue
             try:
-                key = FileSetting(key)
+                key = FileSetting(value=key)
             except ValueError:
                 logger.error(f"Unrecognized file type {key} (with path: {path}). Skipping.")
                 continue
             try:
-                self.files[key] = File(file_dir_path / path)
+                self.files[key] = File(path=file_dir_path / path)
             except Exception as e:
                 logger.error(f"Error while adding file {key} with path {path}: {e}")
 
-    def parse_unsorted(self, rest_values):
+    def parse_unsorted(self, rest_values) -> None:
         """
         Settings in the unsorted key are set as-is as attributes for this Settings instance
         """
@@ -404,11 +424,13 @@ class Settings:
     }
 
 
-def load_osiris_data() -> dict[str,dict]:
-
-    # load osiris data from JSON if available, else warn user to refresh data
+def load_osiris_data() -> dict[str,dict] | None:
+    """
+    Loads osiris data from the json file specified in the settings
+    if the file is not found, a warning is printed and the function returns None
+    """
     try:
-        return json.load(open(SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path))
+        return json.load(fp=open(file=SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path))
     except Exception as e:
         print(e)
         logger.error(
@@ -423,13 +445,13 @@ configure_logger()
 install(show_locals=True)
 
 # suppress some annoying warnings when reading excel files
-logging.getLogger("fastexcel.types.dtype").setLevel(logging.ERROR)
+logging.getLogger(name="fastexcel.types.dtype").setLevel(level=logging.ERROR)
 
 # initialize settings from (default: read from 'settings.yaml')
 SETTINGS = Settings()
 
 # create global variables from certain settings
-DEPARTMENT_MAPPING = SETTINGS.university_settings.department_mapping
-COURSE_MAPPING = SETTINGS.university_settings.course_mapping
-FINE_AMOUNT = SETTINGS.fine_amount
-OSIRIS_DATA = load_osiris_data()
+DEPARTMENT_MAPPING: dict[str, str] = SETTINGS.university_settings.department_mapping
+COURSE_MAPPING: dict[str, dict[str, str]] = SETTINGS.university_settings.course_mapping
+FINE_AMOUNT: float = SETTINGS.fine_amount
+OSIRIS_DATA: dict[str,str] | None = load_osiris_data()

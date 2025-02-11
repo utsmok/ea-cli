@@ -83,6 +83,7 @@ dependencies = [
     { name = "lxml" },
     { name = "nameparser" },
     { name = "openpyxl" },
+    { name = "pipe" },
     { name = "polars", extra = ["sqlalchemy"] },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -103,6 +104,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=5.3.0" },
     { name = "nameparser" },
     { name = "openpyxl", specifier = ">=3.1.5" },
+    { name = "pipe", specifier = ">=2.2" },
     { name = "polars", extras = ["sqlalchemy"], specifier = ">=1.7.1" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pyyaml" },
@@ -453,6 +455,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/25/b0/98d6ae2e1abac4f35230aa756005e8654649d305df9a28b16b9ae4353bff/pandas-2.2.3-cp313-cp313t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1db71525a1538b30142094edb9adc10be3f3e176748cd7acc2240c2f2e5aa3a4", size = 11871013 },
     { url = "https://files.pythonhosted.org/packages/cc/57/0f72a10f9db6a4628744c8e8f0df4e6e21de01212c7c981d31e50ffc8328/pandas-2.2.3-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:15c0e1e02e93116177d29ff83e8b1619c93ddc9c49083f237d4312337a61165d", size = 15711620 },
     { url = "https://files.pythonhosted.org/packages/ab/5f/b38085618b950b79d2d9164a711c52b10aefc0ae6833b96f626b7021b2ed/pandas-2.2.3-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:ad5b65698ab28ed8d7f18790a0dc58005c7629f227be9ecc1072aa74c0c1d43a", size = 13098436 },
+]
+
+[[package]]
+name = "pipe"
+version = "2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/37/aef2cba01787ad8bd266705a95c23db0e9d0b7cd0e01582c969143892655/pipe-2.2.tar.gz", hash = "sha256:6a253198e3bc542ffaf0a4222376586bce8583b27a9ddbc2cfbaa554c049230d", size = 10456 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/21/96f1508f67fadb4ab7e5df7c3389e4a2f03cba92f62846f99f6301cf0735/pipe-2.2-py3-none-any.whl", hash = "sha256:0a5c3202ff35122f69a34ccbd40c9658646f033cc941055304fe8bfa7e13376e", size = 9655 },
 ]
 
 [[package]]

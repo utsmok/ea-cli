@@ -10,13 +10,13 @@ from loguru import logger
 cons = Console(emoji=True, markup=True)
 print: callable = cons.print
 
-def info(text: str):
+def info(text: str) -> None:
     logger.info(text)
 
-def warn(text: str):
+def warn(text: str) -> None:
     logger.warning(text)
 
-def cool(text: str):
+def cool(text: str) -> None:
     logger.success(text)
 
 
@@ -31,13 +31,13 @@ class Directory:
     If the dir does not yet exist, it will be created. Disable this by setting the 'create_dir' parameter to False.
     """
     full: pathlib.Path
-    def __init__(self, path: str | pathlib.Path, create_dir: bool = True):
+    def __init__(self, path: str | pathlib.Path, create_dir: bool = True) -> None:
         if isinstance(path, pathlib.Path):
-            self.input_path_str = str(path)
+            self.input_path_str = str(object=path)
         else:
             self.input_path_str = path
             path = pathlib.Path(path)
-        self.create_dir = create_dir
+        self.create_dir: bool = create_dir
 
         # check if the path is absolute
         if path.is_absolute():
@@ -57,7 +57,7 @@ class Directory:
                 self.create()
             else:
                 warn(
-                    f"Directory {self.full} does not exist and create_dir is set to False. Call create() before any other commands!"
+                    text=f"Directory {self.full} does not exist and create_dir is set to False. Call create() before any other commands!"
                 )
         elif not self.full.is_dir():
             raise NotADirectoryError(f"Directory {self.full} is not a directory.")
@@ -68,7 +68,7 @@ class Directory:
         Gets all files in the dir as a list of File objects.
         """
         return [
-            File(self.full / file) for file in self.full.iterdir() if file.is_file()
+            File(path=self.full / file) for file in self.full.iterdir() if file.is_file()
         ]
 
     @property
@@ -77,7 +77,7 @@ class Directory:
         Recursively gets all files in the dir, so including files in subdirs, as a list of File objects.
         """
         return [
-            File(self.full / file) for file in self.full.rglob("*") if file.is_file()
+            File(path=self.full / file) for file in self.full.rglob(pattern="*") if file.is_file()
         ]
     @property
     def name(self) -> str:
@@ -92,9 +92,9 @@ class Directory:
         If r is set to True, it will return all children dirs recursively.
         """
         if not r:
-            return [Directory(str(d), False) for d in self.full.iterdir() if d.is_dir()]
+            return [Directory(path=str(d), create_dir=False) for d in self.full.iterdir() if d.is_dir()]
         if r:
-            return [Directory(str(d), False) for d in self.full.rglob("*") if d.is_dir()]
+            return [Directory(path=str(d), create_dir=False) for d in self.full.rglob(pattern="*") if d.is_dir()]
 
     def newest_file(self, file_type:list[str]|str|None = None) -> "File":
         """
@@ -103,7 +103,7 @@ class Directory:
             file_type (str): If set, only files with this extension will be returned.
             input the extension incl dot; or a list of them.
         """
-        all_files = self.files
+        all_files: list[File] = self.files
         if file_type:
             if isinstance(file_type, str):
                 file_type = [file_type]
@@ -118,7 +118,7 @@ class Directory:
         """
         Recursively gets the newest file in the dir, so including files in subdirs, as a File object.
         """
-        all_files = self.files_r
+        all_files: list[File] = self.files_r
         return max(all_files, key=lambda x: x.created)
 
     @property
@@ -143,27 +143,28 @@ class Directory:
             if dst.exists():
                 return dst
             else:
-                return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
+                return shutil.copy2(src=src, dst=dst, follow_symlinks=follow_symlinks)
 
         if isinstance(target, Directory):
             target = target.full
 
-        info(f"Copying {self.full} to {target}")
+        info(text=f"Copying {self.full} to {target}")
         if not overwrite:
-            info('Overwrite set to False, copying only new files.')
-            shutil.copytree(self.full, target, dirs_exist_ok=True, copy_function=copy_only_new)
+            info(text='Overwrite set to False, copying only new files.')
+            shutil.copytree(src=self.full, dst=target, dirs_exist_ok=True, copy_function=copy_only_new)
         else:
-            info('Overwrite set to True, copying all files.')
-            shutil.copytree(self.full, target, dirs_exist_ok=True)
+            info(text='Overwrite set to True, copying all files.')
+            shutil.copytree(src=self.full, dst=target, dirs_exist_ok=True)
 
     def __eq__(self, other) -> bool:
         return self.full == other.full
 
-    def __str__(self):
-        return str(self.full)
+    def __str__(self) -> str:
+        return str(object=self.full)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"DirPath('{self.input_path_str}') -> {self.full}"
+
 class File:
     """
     Simple class for files + operations
@@ -175,25 +176,25 @@ class File:
             Should always end with the filename including extension.
     """
 
-    def __init__(self, path: str | pathlib.Path):
-        self._path_init_str = str(path)
+    def __init__(self, path: str | pathlib.Path) -> None:
+        self._path_init_str = str(object=path)
 
         assert isinstance(path, str) or isinstance(path, pathlib.Path)
 
         if isinstance(path, pathlib.Path):
-            self._path = path
-            self._name = path.name
-            self._extension = path.suffix
-            self._dir = Directory(str(self._path.absolute().parent))
+            self._path: pathlib.Path = path
+            self._name: str = path.name
+            self._extension: str = path.suffix
+            self._dir = Directory(path=str(object=self._path.absolute().parent))
         elif isinstance(path, str):
             if "/" in path:
-                self._name = path.rsplit("/", 1)[-1]
-                self._dir = Directory(path.rsplit("/", 1)[0], create_dir=True)
+                self._name = path.rsplit(sep="/", maxsplit=1)[-1]
+                self._dir = Directory(path=path.rsplit(sep="/", maxsplit=1)[0], create_dir=True)
             else:
                 self._name = path
-                self._dir = Directory(os.getcwd())
+                self._dir = Directory(path=os.getcwd())
 
-            self._extension = self._name.split(".")[-1]
+            self._extension = self._name.split(sep=".")[-1]
             self._path = self._dir.full / self._name
 
     @property
@@ -222,15 +223,15 @@ class File:
 
     @property
     def created(self) -> datetime:
-        return datetime.fromtimestamp(self._path.stat().st_birthtime)
+        return datetime.fromtimestamp(timestamp=self._path.stat().st_birthtime)
 
     @property
     def modified(self) -> datetime:
-        return datetime.fromtimestamp(self._path.stat().st_mtime)
+        return datetime.fromtimestamp(timestamp=self._path.stat().st_mtime)
 
     def copy(self, new_path: str) -> "File":
-        shutil.copy(self._path, new_path)
-        return File(new_path)
+        shutil.copy(src=self._path, dst=new_path)
+        return File(path=new_path)
 
     def move(self, new_path: str | pathlib.Path) -> "File":
         '''
@@ -240,25 +241,25 @@ class File:
         if isinstance(new_path, str):
             new_path = pathlib.Path(new_path)
         if new_path.exists():
-            if '.' in str(new_path):
-                new_path = pathlib.Path(str(new_path).split(".")[0]+"_" +str(int(time.time()))+'.'+str(new_path).split(".")[1])
+            if '.' in str(object=new_path):
+                new_path = pathlib.Path(str(object=new_path).split(sep=".")[0]+"_" +str(object=int(time.time()))+'.'+str(object=new_path).split(sep=".")[1])
             else:
-                new_path = pathlib.Path(str(new_path)+"_" +str(int(time.time())))
-        shutil.move(self._path, str(new_path.absolute()))
-        return File(new_path)
+                new_path = pathlib.Path(str(object=new_path)+"_" +str(object=int(x=time.time())))
+        shutil.move(src=self._path, dst=str(object=new_path.absolute()))
+        return File(path=new_path)
 
     def rename(self, new_name: str) -> "File":
         self._path = self._dir.full / new_name
-        return File(self._path)
+        return File(path=self._path)
 
     def delete(self) -> None:
-        os.remove(self._path)
+        os.remove(path=self._path)
 
     def __eq__(self, other: "File") -> bool:
         return self._path == other.path
 
-    def __str__(self):
-        return str(self._path)
+    def __str__(self) -> str:
+        return str(object=self._path)
 
-    def __repr__(self):
-        return str(self._path.absolute())
+    def __repr__(self) -> str:
+        return str(object=self._path.absolute())

@@ -135,7 +135,6 @@ class EasyAccessTool:
             info(f'running {func}')
             func()
 
-
     def process_copyright_export(self) -> None:
         """
         Process the raw copyright data:
@@ -921,4 +920,23 @@ class EasyAccessTool:
         df_merged.write_csv(SETTINGS.files.get(FileSetting.FULL_DATA_CSV).path)
 
     def create_export_sheet(self) -> None:
-        create_export_sheet(self.import_sheet_data)
+        material_ids: list[str] = create_export_sheet(data=self.import_sheet_data)
+        if material_ids:
+            info(f"Updating export status for {len(material_ids)} material ids.")
+            warn(f'NOT YET IMPLEMENTED')
+            item_data: pl.DataFrame = self.import_sheet_data.filter(pl.col(name='material_id').is_in(other=material_ids))
+
+            # group by faculty
+            item_data_per_faculty: dict[str, pl.DataFrame] = {faculty: item_data.filter(pl.col(name='faculty') == faculty) for faculty in item_data.select(pl.col(name='faculty')).unique().to_series().to_list()}
+            for faculty, data in item_data_per_faculty.items():
+                # for each file in the faculty dir, open it
+                # read the data
+                # if the material_id is in the data, add col 'exported_on' with the current date (YYYY-MM-DD)
+                # save the file
+                info(f'Updating export status for {faculty}')
+                print(data)
+                warn(f'NOT YET IMPLEMENTED')
+
+            # once done, run 'update_export_sheets' to create/update the export sheets for each faculty
+            # these sheets show all the exported item for that faculty
+            # items in these sheets should be removed from the overview sheets of that faculty

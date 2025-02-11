@@ -1,3 +1,4 @@
+from copy import copy
 import polars as pl
 
 from easy_access.settings import SETTINGS, ColInfo, DirSetting, DEPARTMENT_MAPPING
@@ -5,6 +6,7 @@ from dataclasses import dataclass, field
 from easy_access.utils import File, info, warn, cool
 from pathlib import Path
 from datetime import datetime
+from itertools import batched
 
 import openpyxl
 from openpyxl.styles import NamedStyle, Alignment
@@ -287,7 +289,7 @@ def read_export_sheets() -> pl.DataFrame:
             returndata = pl.concat([returndata, pl.read_csv(file.path)], how="diagonal_relaxed")
     return returndata
 
-def create_export_sheet(data: pl.DataFrame) -> None:
+def create_export_sheet(data: pl.DataFrame) -> list[str]:
     """
     Create an export sheet to import back into CopyRight tool
 
@@ -300,9 +302,12 @@ def create_export_sheet(data: pl.DataFrame) -> None:
     Remarks
     Scope
 
+    And also store a full details sheet with all the data available for each entry.
+
+    Returns a list of material_ids for the items that were exported.
     """
 
-    col_name_mapping = {
+    col_name_mapping: dict[str, str] = {
         'material_id':"Material id",
         'filename':"Filename",
         'manual_classification':"Manual classification",
@@ -311,47 +316,87 @@ def create_export_sheet(data: pl.DataFrame) -> None:
         'scope':"Scope"
     }
 
-    alt_col_names = { # 'expected field name':'alternative name'
+    alt_col_names: dict[str, str] = { # 'expected field name':'alternative name'
         'owner':'uploaded_by',
     }
 
 
     # extract the cols from data using col_name_mapping
     # if any cols are missing, try using alt_col_names
-    final_selected_colnames = {}
+    final_selected_colnames: dict[str,str] = {}
     for col in col_name_mapping:
         if col not in data.columns:
             if col not in alt_col_names:
-                raise Exception(f"While building export sheet:Could not find column {col} in data: {data.head(5)} with columns {data.columns}")
+                raise Exception(f"While building export sheet:Could not find column {col} in data: {data.head(n=5)} with columns {data.columns}")
             if alt_col_names[col] in data.columns:
                 final_selected_colnames[alt_col_names[col]] = col_name_mapping[col]
             else:
-                raise Exception(f"While building export sheet:Could not find alternative column name {alt_col_names[col]} in data: {data.head(5)} with columns {data.columns}")
+                raise Exception(f"While building export sheet:Could not find alternative column name {alt_col_names[col]} in data: {data.head(n=5)} with columns {data.columns}")
         else:
             final_selected_colnames[col] = col_name_mapping[col]
 
-    data = data.filter(pl.col('workflow_status') == 'Done')
+    data = data.filter(pl.col(name='workflow_status') == 'Done')
 
-
-    data = data.select(final_selected_colnames.keys()).rename(final_selected_colnames)
-    existing = read_export_sheets()
+    full_data: pl.DataFrame = copy(x=data)
+    data = data.select(final_selected_colnames.keys()).rename(mapping=final_selected_colnames)
+    existing: pl.DataFrame = read_export_sheets()
     if not existing.is_empty():
-        data = data.join(existing, on='Material id', how='anti')
+        data = data.join(other=existing, on='Material id', how='anti')
 
     if data.is_empty():
-        warn("No new data found to export!")
+        warn(text="No new data found to export!")
 
-    # IMPLEMENT HERE:
-    # TODO: clean up / validate / check
+    full_data = full_data.filter((pl.col(name='material_id').is_in(other=data['Material id'])) & (pl.col(name='workflow_status') == 'Done'))
 
-    info(f'Creating export sheet with {data.shape[0]} rows.')
+    overview = {
 
-    # IMPLEMENT HERE:
-    # TODO: print better overview of contents of sheet, like how many items per faculty and such
+        "Number of items per faculty": full_data.group_by("faculty").len().sort("len", descending=True).to_dicts(),
+        "Number of items per classification": full_data.group_by("manual_classification").len().sort("len", descending=True).to_dicts(),
+        "Number of items per ml_prediction": full_data.group_by("ml_prediction").len().sort("len", descending=True).to_dicts(),
+        "man_class per ml_pred": full_data.group_by(["ml_prediction", "manual_classification"]).agg(pl.len().alias(name='len')).sort("ml_prediction","len", descending=[False, True]).to_dicts(),
+    }
+    print(overview)
+    info(text=f'Creating export sheet with {data.shape[0]} rows.')
+    print()
+    print()
+    for key, value in overview.items():
+        print("    -------------------------------------------------------------------")
+        print(f"                                   {key}")
+        print("    -------------------------------------------------------------------")
+        if 'man_class per ml_pred' in key:
+            batch_num = 3
 
-    today = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    # store as an excel sheet in the output file dir with the current datetime in the name
-    export_file_path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"export_{today}.xlsx"
-    data.write_excel(export_file_path)
+        else:
+            batch_num = 2
+        maxgap: int = max([max([len(str(object=val)) for val in item.values()]) for item in value])
+        if batch_num == 3:
+            maxgap = maxgap * 2
+        for n, item in enumerate(value):
+            item: dict[str, int] = item
+            if n == 0:
+                if batch_num == 3:
+                    print(f"      {list(item.keys())[0]}:{list(item.keys())[1]}{" "*(maxgap-len(list(item.keys())[0])-len(list(item.keys())[1]))} |     {list(item.keys())[2]}")
+                    print(f" {'-'*(len(str(list(item.keys())[0])+":"+str(list(item.keys())[1]))+5)}{"-"*(maxgap-len(str(list(item.keys())[0])+":"+str(list(item.keys())[1]))+4)}|{'-'*(len(list(item.keys())[2])+10)}")
 
-    # TODO: add field to overview sheets 'exported_to_surf'(bool)+'exported_date'
+                else:
+                    print(f"      {list(item.keys())[0]}{" "*(maxgap-len(list(item.keys())[0])-3)} |     {list(item.keys())[1]}")
+                    print(f" {'-'*(len(list(item.keys())[0])+5)}{"-"*(maxgap-len(list(item.keys())[0])+4)}|{'-'*(len(list(item.keys())[1])+10)}")
+            for results in batched(item.items(),batch_num):
+                if batch_num != 3:
+                    key = results[0][1]
+                    value = results[1][1]
+                else:
+                    key = f"{results[0][1]} --> {results[1][1]}"
+                    value = results[2][1]
+                print(f"      {key}{" "*(maxgap-len(key)+3)} |     {value}")
+
+    material_ids_exported: list[str] = data["Material id"].to_list()
+
+    today: str = datetime.now().strftime(format="%Y-%m-%d_%H-%M-%S")
+
+    export_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{today}_{data.shape[0]}_items_copyright_import.xlsx"
+    data.write_excel(workbook=export_file_path)
+    full_details_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{today}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
+    full_data.write_excel(workbook=full_details_file_path)
+
+    return material_ids_exported
