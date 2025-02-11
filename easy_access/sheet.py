@@ -1,9 +1,10 @@
-from easy_access.settings import SETTINGS, ColInfo
-from dataclasses import dataclass, field
-from easy_access.utils import File, info
 import polars as pl
-from pathlib import Path
 
+from easy_access.settings import SETTINGS, ColInfo, DirSetting, DEPARTMENT_MAPPING
+from dataclasses import dataclass, field
+from easy_access.utils import File, info, warn, cool
+from pathlib import Path
+from datetime import datetime
 
 import openpyxl
 from openpyxl.styles import NamedStyle, Alignment
@@ -13,7 +14,101 @@ import openpyxl.worksheet.table
 import openpyxl.worksheet.worksheet
 from openpyxl.worksheet.table import TableStyleInfo
 from openpyxl.worksheet.table import Table as ExcelTable
+import typer
 
+def read_other_sheet(file: File) -> pl.DataFrame:
+        """
+        Reads in the data from another sheet as the datasource, instead of using CopyRight data.
+        Sheet should be formatted in the same way as the faculty output sheets.
+        It will read in the first sheet in the .xlsx file.
+        It will do a quick check on the columns in the sheets to prevent the most basic errors.
+        """
+
+        info(f"Reading in data from {file.name}")
+        copyright_data = pl.read_excel(file.path)
+        latest_file_date = file.modified.strftime("%Y-%m-%d")
+        info(
+            f"Read {len(copyright_data)} items from {file.name}. Item was lasted changed on {latest_file_date}"
+        )
+
+        if "workflow_status" not in copyright_data.columns:
+            copyright_data = copyright_data.with_columns(
+                pl.Series("workflow_status", ["ToDo"] * len(copyright_data))
+            )
+        if "retrieved_from_copyright_on" not in copyright_data.columns:
+            if "added_to_sheet_on" not in copyright_data.columns:
+                copyright_data = copyright_data.with_columns(
+                    pl.Series(
+                        "retrieved_from_copyright_on",
+                        [latest_file_date] * len(copyright_data),
+                    )
+                )
+            else:
+                copyright_data = copyright_data.rename(
+                    {"added_to_sheet_on": "retrieved_from_copyright_on"}
+                )
+
+        latest_file_date = max(
+            copyright_data.select(pl.col("retrieved_from_copyright_on"))
+            .to_series()
+            .to_list()
+        )
+
+        return latest_file_date, copyright_data.select(SETTINGS.data_settings.complete_data_cols)
+
+def read_copyright_export() -> tuple[str, pl.DataFrame]:
+        """
+        Reads in data from the latest copyright export file in the copyright dir.
+        """
+
+        info(
+            f"Reading in newest Copyright Data from directory: {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
+        )
+        try:
+            all_files = SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
+            latest_file = max(all_files, key=lambda x: x.created)
+            latest_file_date = latest_file.created.strftime("%Y-%m-%d")
+            info(
+                f"Selected newest copyright export file:\n          {latest_file.name}\n          created @ {latest_file_date}"
+            )
+            raw_copyright_data = pl.read_excel(latest_file.path)
+            # cast all columns to str
+            raw_copyright_data =  raw_copyright_data.with_columns(
+                pl.exclude(pl.Utf8).cast(str)
+            )
+
+            copyright_data =  raw_copyright_data.rename(
+                lambda col: col.replace(" ", "_")
+                .replace("#", "count_")
+                .replace("*", "x")
+                .lower()
+            ).with_columns(
+                pl.Series(
+                    "retrieved_from_copyright_on",
+                    [latest_file_date] * len(raw_copyright_data),
+                ),
+                pl.Series("workflow_status", ["ToDo"] * len(raw_copyright_data)),
+                pl.col("last_change")
+                .str.replace(r"^-$", "")
+                .str.strip_chars()
+                .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+                .dt.strftime("%Y-%m-%d"),
+                faculty=pl.col("department").replace_strict(
+                    DEPARTMENT_MAPPING, default="Unmapped"
+                ),
+            )
+
+            return latest_file_date, copyright_data
+
+        except FileNotFoundError:
+            warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
+            raise typer.Exit(code=1)
+        except PermissionError:
+            warn(f"Permission denied to read {SETTINGS.latest_file.name}")
+            raise typer.Exit(code=1)
+        except ValueError:
+            warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
+            raise typer.Exit(code=1)
 @dataclass
 class DataEntrySheet:
     """
@@ -179,6 +274,19 @@ def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
     data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
     info(f'Stored {data.shape[0]} rows to {file}')
 
+def read_export_sheets() -> pl.DataFrame:
+    """
+    Read in the export sheets from the EXPORT_TO_SURF dir
+    return as concatenated dataframe
+    """
+    returndata = pl.DataFrame()
+    for file in SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].files:
+        if file.extension in [".xls", ".xlsx"]:
+            returndata = pl.concat([returndata, pl.read_excel(file.path)], how="diagonal_relaxed")
+        if file.extension in [".csv"]:
+            returndata = pl.concat([returndata, pl.read_csv(file.path)], how="diagonal_relaxed")
+    return returndata
+
 def create_export_sheet(data: pl.DataFrame) -> None:
     """
     Create an export sheet to import back into CopyRight tool
@@ -194,14 +302,56 @@ def create_export_sheet(data: pl.DataFrame) -> None:
 
     """
 
-    col_names = ["Material id","Filename","Manual classification","Owner","Remarks","Scope"]
+    col_name_mapping = {
+        'material_id':"Material id",
+        'filename':"Filename",
+        'manual_classification':"Manual classification",
+        'owner':"Owner",
+        'remarks':"Remarks",
+        'scope':"Scope"
+    }
 
-    # first translate the colnames to the ones used in the script
-    # extract the cols from data
-    # only select items with workflow status 'Done'
-    # rename the cols
-    # clean up where required
-    # store as an excel sheet in the output file dir with the date in the name
+    alt_col_names = { # 'expected field name':'alternative name'
+        'owner':'uploaded_by',
+    }
 
-    # todo: also include reading in existing sheets
-    # todo: add field to overview sheets 'exported_to_surf' t/f, and 'exported_date' or something
+
+    # extract the cols from data using col_name_mapping
+    # if any cols are missing, try using alt_col_names
+    final_selected_colnames = {}
+    for col in col_name_mapping:
+        if col not in data.columns:
+            if col not in alt_col_names:
+                raise Exception(f"While building export sheet:Could not find column {col} in data: {data.head(5)} with columns {data.columns}")
+            if alt_col_names[col] in data.columns:
+                final_selected_colnames[alt_col_names[col]] = col_name_mapping[col]
+            else:
+                raise Exception(f"While building export sheet:Could not find alternative column name {alt_col_names[col]} in data: {data.head(5)} with columns {data.columns}")
+        else:
+            final_selected_colnames[col] = col_name_mapping[col]
+
+    data = data.filter(pl.col('workflow_status') == 'Done')
+
+
+    data = data.select(final_selected_colnames.keys()).rename(final_selected_colnames)
+    existing = read_export_sheets()
+    if not existing.is_empty():
+        data = data.join(existing, on='Material id', how='anti')
+
+    if data.is_empty():
+        warn("No new data found to export!")
+
+    # IMPLEMENT HERE:
+    # TODO: clean up / validate / check
+
+    info(f'Creating export sheet with {data.shape[0]} rows.')
+
+    # IMPLEMENT HERE:
+    # TODO: print better overview of contents of sheet, like how many items per faculty and such
+
+    today = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # store as an excel sheet in the output file dir with the current datetime in the name
+    export_file_path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"export_{today}.xlsx"
+    data.write_excel(export_file_path)
+
+    # TODO: add field to overview sheets 'exported_to_surf'(bool)+'exported_date'

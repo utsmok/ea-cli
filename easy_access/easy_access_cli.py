@@ -7,7 +7,13 @@ import typer
 from loguru import logger
 from easy_access.utils import Directory, File, info, cool, warn, print
 from easy_access.enrichment import enrich_df_with_osiris_data, update_osiris_data
-from easy_access.sheet import finalize_sheet, store_complete_data
+from easy_access.sheet import (
+    finalize_sheet,
+    store_complete_data,
+    read_copyright_export,
+    read_other_sheet,
+    create_export_sheet
+)
 from easy_access.analysis import create_faculty_overviews
 from easy_access.settings import (
     SETTINGS,
@@ -15,8 +21,8 @@ from easy_access.settings import (
     DirSetting,
     EasyAccessSettings,
     Functions,
-    COURSE_MAPPING,
-    DEPARTMENT_MAPPING)
+    COURSE_MAPPING
+)
 
 
 
@@ -28,13 +34,11 @@ class EasyAccessTool:
     """
 
     files: dict[FileSetting, File] = SETTINGS.files
-    faculties: list[str] = [] # list of all found/used faculties
+    faculties: list[str] = []
+
     # latest copyright export file & when it was created
-    latest_file: File
     latest_file_date: str
 
-    # standard basic column order for the complete data sheets
-    COLUMN_ORDER = SETTINGS.data_settings.raw_data_col_order
     # debug option: completely disables all new file writes
     disable_writes = False
 
@@ -62,10 +66,10 @@ class EasyAccessTool:
         self.dirs = settings.dirs
 
         # Initialize data structures
-        self.raw_copyright_data = pl.DataFrame()
         self.copyright_data = pl.DataFrame()
         self.faculty_sheet_data = pl.DataFrame()
         self.all_items_sheet_data = pl.DataFrame()
+        self.import_sheet_data = pl.DataFrame()
 
         # Initialize other attributes
         self.other_sheet = File(settings.other_sheet) if settings.other_sheet else None
@@ -77,7 +81,6 @@ class EasyAccessTool:
         self.only_retrieve_missing_osiris_data = settings.only_retrieve_missing_osiris_data
         self.no_new_items = False
         self.style_iter = 2
-
 
         # Set functions to run
         self.set_functions(settings.functions)
@@ -99,17 +102,6 @@ class EasyAccessTool:
             ]
             return
 
-        # Read or Both
-
-        # First set source data sheet
-        if self.other_sheet:
-            self.functions = [
-                self.read_other_sheet
-                ]
-        else:
-            self.functions = [
-                self.read_copyright_export
-            ]
 
         # Common functions
         self.functions.extend([
@@ -117,11 +109,7 @@ class EasyAccessTool:
             # self.read_all_items_sheets, # Disabled because the data is not used anywhere at the moment
             ])
 
-        # exclusive for 'Both'
-        if functions == Functions.both:
-            self.functions.extend = [
-            self.create_import_sheet
-        ]
+
 
         # Common functions
         self.functions.extend([
@@ -130,7 +118,11 @@ class EasyAccessTool:
             self.create_overviews,
             ])
 
-
+        # exclusive for 'Both'
+        if functions == Functions.both:
+            self.functions.extend([
+            self.create_export_sheet
+        ])
     def run(self) -> None:
         """
         Runs the functions as specified in the settings dict.
@@ -140,77 +132,9 @@ class EasyAccessTool:
             # and store it as a parquet file and csv file in the root dir
             self.retrieve_all_data()
         for func in self.functions:
+            info(f'running {func}')
             func()
 
-    def read_other_sheet(self) -> None:
-        """
-        Reads in the data from another sheet as the datasource, instead of using CopyRight data.
-        Sheet should be formatted in the same way as the faculty output sheets.
-        It will read in the first sheet in the .xlsx file.
-        It will do a quick check on the columns in the sheets to prevent the most basic errors.
-        """
-
-        info(f"Reading in data from {self.other_sheet.name}")
-        self.copyright_data = pl.read_excel(self.other_sheet.path)
-        self.latest_file_date = self.other_sheet.modified.strftime("%Y-%m-%d")
-        info(
-            f"Read {len(self.copyright_data)} items from {self.other_sheet.name}. Item was lasted changed on {self.latest_file_date}"
-        )
-
-        if "workflow_status" not in self.copyright_data.columns:
-            self.copyright_data = self.copyright_data.with_columns(
-                pl.Series("workflow_status", ["ToDo"] * len(self.copyright_data))
-            )
-        if "retrieved_from_copyright_on" not in self.copyright_data.columns:
-            if "added_to_sheet_on" not in self.copyright_data.columns:
-                self.copyright_data = self.copyright_data.with_columns(
-                    pl.Series(
-                        "retrieved_from_copyright_on",
-                        [self.latest_file_date] * len(self.copyright_data),
-                    )
-                )
-            else:
-                self.copyright_data = self.copyright_data.rename(
-                    {"added_to_sheet_on": "retrieved_from_copyright_on"}
-                )
-
-        self.latest_file_date = max(
-            self.copyright_data.select(pl.col("retrieved_from_copyright_on"))
-            .to_series()
-            .to_list()
-        )
-        self.copyright_data = self.copyright_data.select(self.COLUMN_ORDER)
-
-    def read_copyright_export(self) -> None:
-        """
-        Reads in data from the latest copyright export file in the copyright dir.
-
-        """
-        info(
-            f"Reading in newest Copyright Data from directory: {self.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
-        )
-        try:
-            all_files = self.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
-            self.latest_file = max(all_files, key=lambda x: x.created)
-            self.latest_file_date = self.latest_file.created.strftime("%Y-%m-%d")
-            info(
-                f"Selected newest copyright export file:\n          {self.latest_file.name}\n          created @ {self.latest_file_date}"
-            )
-            self.raw_copyright_data = pl.read_excel(self.latest_file.path)
-            # cast all columns to str
-            self.raw_copyright_data = self.raw_copyright_data.with_columns(
-                pl.exclude(pl.Utf8).cast(str)
-            )
-
-        except FileNotFoundError:
-            warn(f"No files found in {self.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
-            raise typer.Exit(code=1)
-        except PermissionError:
-            warn(f"Permission denied to read {self.latest_file.name}")
-            raise typer.Exit(code=1)
-        except ValueError:
-            warn(f"No files found in {self.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
-            raise typer.Exit(code=1)
 
     def process_copyright_export(self) -> None:
         """
@@ -220,36 +144,14 @@ class EasyAccessTool:
         If 'only_changes' it will compare this data to the items present in the faculty sheets,
         and only include new items in the export.
         """
-        if self.raw_copyright_data.is_empty():
+        if self.copyright_data.is_empty():
             if self.other_sheet:
-                self.read_other_sheet()
+                self.latest_file_date, self.copyright_data = read_other_sheet(self.other_sheet)
             else:
-                self.read_copyright_export()
-            if self.raw_copyright_data.is_empty():
+                self.latest_file_date, self.copyright_data = read_copyright_export()
+            if self.copyright_data.is_empty():
                 warn("No new Copyright data found to process! Exiting...")
                 raise typer.Exit(code=1)
-
-        if self.copyright_data.is_empty():
-            self.copyright_data = self.raw_copyright_data.rename(
-                lambda col: col.replace(" ", "_")
-                .replace("#", "count_")
-                .replace("*", "x")
-                .lower()
-            ).with_columns(
-                pl.Series(
-                    "retrieved_from_copyright_on",
-                    [self.latest_file_date] * len(self.raw_copyright_data),
-                ),
-                pl.Series("workflow_status", ["ToDo"] * len(self.raw_copyright_data)),
-                pl.col("last_change")
-                .str.replace(r"^-$", "")
-                .str.strip_chars()
-                .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-                .dt.strftime("%Y-%m-%d"),
-                faculty=pl.col("department").replace_strict(
-                    DEPARTMENT_MAPPING, default="Unmapped"
-                ),
-            )
 
 
         # enrich copyright_data with OSIRIS data if bool is set
@@ -689,6 +591,9 @@ class EasyAccessTool:
             if not self.faculties:
                 warn(f'No faculties detected in current data. Cannot produce overviews.')
                 return
+
+        # store the full current data used to create the overviews to self.import_data as well
+        self.import_sheet_data = pl.DataFrame()
         for faculty in self.faculties:
             if not faculty or faculty == "" or faculty == "Unmapped":
                 continue
@@ -696,8 +601,10 @@ class EasyAccessTool:
             if data.is_empty():
                 continue
             enrich_df_with_osiris_data(data, faculty)
+            self.import_sheet_data = pl.concat([self.import_sheet_data, data], how="diagonal_relaxed")
             faculty_dict[faculty] = data
         self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter)
+
 
     def retrieve_all_data(self) -> pl.DataFrame:
         """
@@ -1012,3 +919,6 @@ class EasyAccessTool:
         self.clean_and_validate_df(df_merged)
         df_merged.write_parquet(SETTINGS.files.get(FileSetting.FULL_DATA_PARQUET).path)
         df_merged.write_csv(SETTINGS.files.get(FileSetting.FULL_DATA_CSV).path)
+
+    def create_export_sheet(self) -> None:
+        create_export_sheet(self.import_sheet_data)
