@@ -243,6 +243,9 @@ class Settings:
         if self.raw_settings:
             self.parse_settings()
 
+        # these are here to indicate they need to be implemented
+        self.dump()
+        self.create_defaults()
     def load(self) -> None:
         """Load the settings from the settings.yaml file"""
         try:
@@ -251,7 +254,20 @@ class Settings:
         except Exception as e:
             logger.error(f"Error while loading settings from {self.settings_file}: {e}")
             self.raw_settings = {}
-
+    def dump(self) -> None:
+        """
+        Store the current settings in the settings.yaml file
+        """
+        ...
+        # parse all attributes back into single dict for yaml dump
+        warn("settings.dump not yet implemented")
+    def create_defaults(self) -> None:
+        """
+        Create the default settings.yaml file
+        """
+        # ask for confirmation before overwriting the file
+        ...
+        warn("settings.create_defaults not yet implemented")
     def parse_settings(self) -> None:
         """Parse the settings into the dataclass"""
         for key, value in self.raw_settings.items():

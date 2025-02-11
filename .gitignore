@@ -1,3 +1,5 @@
+compare/
+compare/*.*
 # datafiles
 *.xls
 *.xlsx
