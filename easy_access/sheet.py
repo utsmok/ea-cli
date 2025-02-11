@@ -178,3 +178,30 @@ def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
     data = data.select(selectcols)
     data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
     info(f'Stored {data.shape[0]} rows to {file}')
+
+def create_export_sheet(data: pl.DataFrame) -> None:
+    """
+    Create an export sheet to import back into CopyRight tool
+
+
+    Will store an excel sheet with the following columns:
+    Material id
+    Filename
+    Manual classification
+    Owner
+    Remarks
+    Scope
+
+    """
+
+    col_names = ["Material id","Filename","Manual classification","Owner","Remarks","Scope"]
+
+    # first translate the colnames to the ones used in the script
+    # extract the cols from data
+    # only select items with workflow status 'Done'
+    # rename the cols
+    # clean up where required
+    # store as an excel sheet in the output file dir with the date in the name
+
+    # todo: also include reading in existing sheets
+    # todo: add field to overview sheets 'exported_to_surf' t/f, and 'exported_date' or something
