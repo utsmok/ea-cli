@@ -16,6 +16,7 @@
 #     "loguru",
 #     "nameparser",
 #     "levenshtein",
+#     "selenium",
 # ]
 # ///
 
@@ -42,8 +43,8 @@ from easy_access.utils import cool, warn
 from easy_access.settings import Functions, EasyAccessSettings, SETTINGS
 from easy_access.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
 from pathlib import Path
-from easy_access.easy_access_cli import EasyAccessTool
-
+from easy_access.main import EasyAccessTool
+from easy_access.downloader import Downloader
 
 cli_app = typer.Typer()
 
@@ -123,6 +124,13 @@ def cli(
             rich_help_panel="Backup/Restore",
         ),
     ] = RestoreStrategy.REPLACE.value,
+    download_files: Annotated[
+        bool,
+        typer.Option(
+            help="Download pdfs from canvas.",
+            rich_help_panel="Functions",
+        ),
+    ] = False
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
 
@@ -159,6 +167,13 @@ def cli(
 
     # Initialize and run tool with settings
     tool = EasyAccessTool(ea_settings)
+
+    if download_files:
+        print(f'downloading files')
+        downloader = Downloader()
+        downloader.download_file("https://utwente.instructure.com/files/4659492?")
+        print(f'done downloading')
+        return
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")

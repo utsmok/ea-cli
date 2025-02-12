@@ -156,6 +156,11 @@ class Directory:
             info(text='Overwrite set to True, copying all files.')
             shutil.copytree(src=self.full, dst=target, dirs_exist_ok=True)
 
+    def rename_latest_file(self, new_name: str) -> None:
+        newest_file = self.newest_file()
+        if newest_file:
+            newest_file.rename(new_name)
+
     def __eq__(self, other) -> bool:
         return self.full == other.full
 
@@ -249,8 +254,8 @@ class File:
         return File(path=new_path)
 
     def rename(self, new_name: str) -> "File":
+        os.rename(src=self._path, dst=self._dir.full / new_name)
         self._path = self._dir.full / new_name
-        return File(path=self._path)
 
     def delete(self) -> None:
         os.remove(path=self._path)

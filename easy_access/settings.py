@@ -86,6 +86,7 @@ class DirSetting(Enum):
     OVERVIEWS_BACKUP = "overviews_backup"
     SCRIPT_DATA = "script_data"
     FULL_BACKUPS = "full_backups"
+    PDF_DOWNLOADS = "pdf_downloads"
 
 class FileSetting(Enum):
     """Enum for files expected by the script"""
