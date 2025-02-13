@@ -5,7 +5,15 @@
 unsorted:
 # values that don't (yet) fit anywhere else
   fine_amount: 0.3 # fine amount per page per item per student
-
+  classification_options:
+    - open access
+    - eigen materiaal - powerpoint
+    - eigen materiaal - overig
+    - lange overname
+    - eigen materiaal - titelindicatie
+    - anders
+    - korte overname
+    - middellange overname
 backup:
   # backup all sheets in selected directories before starting? (bool)
   backup_all: true

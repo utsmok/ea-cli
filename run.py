@@ -17,6 +17,7 @@
 #     "nameparser",
 #     "levenshtein",
 #     "selenium",
+#     "docling",
 # ]
 # ///
 
@@ -37,6 +38,7 @@ quickstart:
 3. > uv run run.py --help
 """
 
+import time
 import typer
 from typing import Annotated
 from easy_access.utils import cool, warn
@@ -167,14 +169,17 @@ def cli(
 
     # Initialize and run tool with settings
     tool = EasyAccessTool(ea_settings)
-
+    driver = None
     if download_files:
         print(f'downloading files')
         downloader = Downloader()
-        downloader.download_file("https://utwente.instructure.com/files/4659492?")
-        print(f'done downloading')
-        return
-    tool.run()
+        driver = downloader.download_pdfs()
+        print(f'done downloading, waiting for download to finish...')
+        time.sleep(5)
+        if driver:
+            driver.close()
+    else:
+        tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
 

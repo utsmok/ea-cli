@@ -289,65 +289,61 @@ def read_export_sheets() -> pl.DataFrame:
             returndata = pl.concat([returndata, pl.read_csv(file.path)], how="diagonal_relaxed")
     return returndata
 
-def create_export_sheet(data: pl.DataFrame) -> list[str]:
+def create_export_sheet(data: pl.DataFrame, print_overview: bool = True) -> list[str]:
     """
-    Create an export sheet to import back into CopyRight tool
+    Create an export sheet to import back into CopyRight tool.
+    Specifications:
+
+        - .xlsx file with 1 sheet
+        - utf-8 encoding
+        - Column info:
+        OutputExcelField        --	QlikField               --  Notes
+----------------------------------------------------------------------------------------------------------------
+        MaterialID              --	Material id	            --  Formatted as Number
+        Filename                --	Filename	            --  n/a
+        Manual_classification   --	Manual classification   --  Classification of the item
+        Manual_identifier       --	Manual identifier	    --  e.g. for ISBN/DOI/...
+        Owner                   --	Owner	                --  E-mail adress of whomever classified the item aanpasser
+        Remarks                 --	Remarks	                --  Free text field
+        Scope                   --	Scope                   --  Pick between:  Altijd / Eenmaal / DezePeriode
 
 
-    Will store an excel sheet with the following columns:
-    Material id
-    Filename
-    Manual classification
-    Owner
-    Remarks
-    Scope
+    Also store a full details sheet with all the data available for each entry.
 
-    And also store a full details sheet with all the data available for each entry.
+    Returns a list of material_ids for the items that were exported, for further processing.
 
-    Returns a list of material_ids for the items that were exported.
+    #TODO: Determine if for 'Owner' the actual 'Owner' field in copyright data should be used, or if it should be 'auditor' instead??
+
     """
-
-    col_name_mapping: dict[str, str] = {
-        'material_id':"Material id",
-        'filename':"Filename",
-        'manual_classification':"Manual classification",
-        'owner':"Owner",
-        'remarks':"Remarks",
-        'scope':"Scope"
-    }
-
-    alt_col_names: dict[str, str] = { # 'expected field name':'alternative name'
-        'owner':'uploaded_by',
-    }
-
-
-    # extract the cols from data using col_name_mapping
-    # if any cols are missing, try using alt_col_names
-    final_selected_colnames: dict[str,str] = {}
-    for col in col_name_mapping:
-        if col not in data.columns:
-            if col not in alt_col_names:
-                raise Exception(f"While building export sheet:Could not find column {col} in data: {data.head(n=5)} with columns {data.columns}")
-            if alt_col_names[col] in data.columns:
-                final_selected_colnames[alt_col_names[col]] = col_name_mapping[col]
-            else:
-                raise Exception(f"While building export sheet:Could not find alternative column name {alt_col_names[col]} in data: {data.head(n=5)} with columns {data.columns}")
-        else:
-            final_selected_colnames[col] = col_name_mapping[col]
+    COL_NAMES = ['material_id', 'filename', 'manual_classification', 'owner', 'remarks', 'scope']
+    TODAY: str = datetime.now().strftime(format="%Y-%m-%d_%H-%M-%S")
 
     data = data.filter(pl.col(name='workflow_status') == 'Done')
-
     full_data: pl.DataFrame = copy(x=data)
-    data = data.select(final_selected_colnames.keys()).rename(mapping=final_selected_colnames)
-    existing: pl.DataFrame = read_export_sheets()
-    if not existing.is_empty():
-        data = data.join(other=existing, on='Material id', how='anti')
+
+    data = data.select([col for col in COL_NAMES if col in data.columns])
+    data = data.rename(mapping={col: col.replace("_", "").lower() for col in data.columns})
+
+    existing_data: pl.DataFrame = read_export_sheets()
+    if not existing_data.is_empty():
+        data = data.join(other=existing_data, on='materialid', how='anti')
 
     if data.is_empty():
         warn(text="No new data found to export!")
 
-    full_data = full_data.filter((pl.col(name='material_id').is_in(other=data['Material id'])) & (pl.col(name='workflow_status') == 'Done'))
+    full_data = full_data.filter((pl.col(name='material_id').is_in(other=data['materialid'])) & (pl.col(name='workflow_status') == 'Done'))
+    material_ids_exported: list[str] = data["Material id"].to_list()
 
+
+    export_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
+    data.write_excel(workbook=export_file_path)
+    full_details_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
+    full_data.write_excel(workbook=full_details_file_path)
+
+    if not print_overview:
+        return material_ids_exported
+
+    # messy code to print some data on what is being exported
     overview = {
 
         "Number of items per faculty": full_data.group_by("faculty").len().sort("len", descending=True).to_dicts(),
@@ -390,13 +386,5 @@ def create_export_sheet(data: pl.DataFrame) -> list[str]:
                     value = results[2][1]
                 print(f"      {key}{" "*(maxgap-len(key)+3)} |     {value}")
 
-    material_ids_exported: list[str] = data["Material id"].to_list()
-
-    today: str = datetime.now().strftime(format="%Y-%m-%d_%H-%M-%S")
-
-    export_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{today}_{data.shape[0]}_items_copyright_import.xlsx"
-    data.write_excel(workbook=export_file_path)
-    full_details_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{today}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
-    full_data.write_excel(workbook=full_details_file_path)
 
     return material_ids_exported

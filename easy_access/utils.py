@@ -261,6 +261,8 @@ class File:
         os.remove(path=self._path)
 
     def __eq__(self, other: "File") -> bool:
+        if isinstance(other, str):
+            return any([self._path == pathlib.Path(other), self._name == other])
         return self._path == other.path
 
     def __str__(self) -> str:

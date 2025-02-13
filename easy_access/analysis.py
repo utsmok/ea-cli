@@ -5,7 +5,6 @@ from easy_access.utils import info, Directory, File
 from easy_access.sheet import finalize_sheet, store_complete_data
 from datetime import datetime
 import locale
-from loguru import logger
 from rich.console import Console
 from rich.table import Table
 from rich.terminal_theme import SVG_EXPORT_THEME

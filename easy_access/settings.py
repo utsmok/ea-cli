@@ -456,3 +456,12 @@ DEPARTMENT_MAPPING: dict[str, str] = SETTINGS.university_settings.department_map
 COURSE_MAPPING: dict[str, dict[str, str]] = SETTINGS.university_settings.course_mapping
 FINE_AMOUNT: float = SETTINGS.fine_amount
 OSIRIS_DATA: dict[str,str] | None = load_osiris_data()
+PUBLISHER_NAMES: set[str] | set[None] = set()
+try:
+    with open(file=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / 'publishers.yaml') as f:
+        PUBLISHER_NAMES = yaml.load(stream=f, Loader=yaml.FullLoader)
+except Exception as e:
+    logger.error(f"Error while loading publishers.yaml: {e}")
+
+if isinstance((PUBLISHER_NAMES), dict):
+    PUBLISHER_NAMES = set(PUBLISHER_NAMES.values())
