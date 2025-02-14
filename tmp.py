@@ -5,9 +5,6 @@ import easy_access.settings
 import asyncio
 
 if __name__ == "__main__":
-    delete_files()
-    downloader = Downloader()
-    downloader.download_pdfs(subset=[])
-    deduplicate_pdfs()
-
+    #deduplicate_pdfs()
+    asyncio.run(main())
 

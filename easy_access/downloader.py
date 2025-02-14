@@ -8,6 +8,9 @@ import time
 from datetime import datetime
 import Levenshtein
 
+default_download_dir = r"C:\Users\MokS\Downloads"
+default_profile_path = r"C:\Users\MokS\AppData\Local\Google\Chrome\User Data"
+
 class Downloader:
     driver: webdriver.Chrome
     def __init__(self) -> None:
@@ -16,7 +19,7 @@ class Downloader:
         cool(f'setting up selenium')
 
         my_options = webdriver.ChromeOptions()
-        profile_path = r"C:\Users\MokS\AppData\Local\Google\Chrome\User Data"
+        profile_path = default_profile_path
         profile_name = "Default" # Use "Profile N" if you have other accounts in Chrome
         my_options.add_argument(f"--user-data-dir={profile_path}")
         my_options.add_argument(f"--profile-directory={profile_name}")
@@ -82,7 +85,7 @@ class Downloader:
         urls = urls.to_dicts()
 
         start_time = time.time()
-        step_len = max(len(urls) // 20, 100)
+        step_len = min(len(urls) // 20, 100)
         results = []
         first_datetime = None
         try:
@@ -96,14 +99,16 @@ class Downloader:
                 if not first_datetime:
                     first_datetime = item['created']
                 results.append(item)
-
+                print(f'.', end='')
                 items_per_sec = index / (time.time() - start_time)
                 if items_per_sec > 1:
                     time.sleep(5)
                 if max_amount and index >= max_amount:
+                    print(f'\n')
                     info(f'[{index}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
                     break
                 if index % step_len == 0:
+                    print(f'\n')
                     info(f'[{index}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
         except Exception as e:
             warn(f'Error downloading file: {e}')
@@ -129,19 +134,19 @@ class Downloader:
                 results = sorted(results, key=lambda x: x.get('created'))
                 skipped = 0
                 for result in results:
+                    print(f'.', end='')
                     file: File | None = selected_files.get(result['filename'])
                     if not file:
-                        warn(f'Could not find {result["filename"]} in download dir.')
                         closest_match = max(selected_files.keys(), key=lambda x: Levenshtein.ratio(result['filename'], x, processor=lambda x: x.lower()), default=None)
                         if closest_match:
                             ratio = Levenshtein.ratio(result["filename"], closest_match)
                             if ratio < 0.9:
-                                warn(f'Closest match has ratio below 0.9. Skipping.')
                                 skipped += 1
                                 continue
                             file = selected_files.get(closest_match)
                     if file:
                         file.rename(f'{result["material_id"]}_{result["filename"]}_{result["created"].strftime("%Y-%m-%d_%H-%M-%S")}.pdf')
+                print(f'\n')
                 if skipped:
                     if skipped == missing:
                         cool("Number of skipped files matches number of missing files. All good.")
@@ -154,7 +159,7 @@ class Downloader:
         my_options = webdriver.ChromeOptions()
 
         my_options.add_experimental_option("prefs", {
-            "download.default_directory":r"C:\Users\Sam\Downloads",
+            "download.default_directory":default_download_dir,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
             "plugins.always_open_pdf_externally": False
@@ -185,7 +190,6 @@ class Downloader:
         download_url = f'https://utwente.instructure.com/users/66733/files/{material_id}/download?download_frd=1'
 
 
-        info(f'downloading {material_id} from {download_url}')
         now = datetime.now()
         result_done = self.driver.get(download_url)
         self.driver.implicitly_wait(20) # is this necessary?
