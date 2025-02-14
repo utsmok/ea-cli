@@ -234,6 +234,9 @@ class File:
     def modified(self) -> datetime:
         return datetime.fromtimestamp(timestamp=self._path.stat().st_mtime)
 
+    @property
+    def size(self) -> int:
+        return self._path.stat().st_size
     def copy(self, new_path: str) -> "File":
         shutil.copy(src=self._path, dst=new_path)
         return File(path=new_path)

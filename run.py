@@ -17,7 +17,8 @@
 #     "nameparser",
 #     "levenshtein",
 #     "selenium",
-#     "docling",
+#     "pydantic",
+#     "google-genai"
 # ]
 # ///
 
@@ -132,7 +133,14 @@ def cli(
             help="Download pdfs from canvas.",
             rich_help_panel="Functions",
         ),
-    ] = False
+    ] = False,
+    max_amount_to_download: Annotated[
+        int,
+        typer.Option(
+            help="Maximum amount of files to download.",
+            rich_help_panel="Functions",
+        ),
+    ] = None
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
 
@@ -173,7 +181,7 @@ def cli(
     if download_files:
         print(f'downloading files')
         downloader = Downloader()
-        driver = downloader.download_pdfs()
+        driver = downloader.download_pdfs(subset=None, max_amount=max_amount_to_download)
         print(f'done downloading, waiting for download to finish...')
         time.sleep(5)
         if driver:

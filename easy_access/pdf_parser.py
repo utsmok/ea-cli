@@ -3,7 +3,7 @@ This module reads/parsers/transforms pdfs in SETTINGS.dirs[DirSetting.PDF_DOWNLO
 to prepare them for NLP analysis.
 """
 
-
+import hashlib
 from _collections_abc import dict_keys
 from easy_access.downloader import Downloader
 from easy_access.utils import File, Directory, cool, warn, info
@@ -17,10 +17,10 @@ import spacy
 from spacy_layout import spaCyLayout
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from typing import Dict, List, Tuple, Any
-import numpy as np
+from typing import Any
+from difflib import SequenceMatcher
+
 from dataclasses import dataclass
-import evaluate
 
 def retrieve_files() -> list[File] | list[None]:
     """
@@ -82,8 +82,8 @@ def get_manual_classification_for_files() -> dict[str, dict[str, str|Path]] | di
 @dataclass
 class PDFDataset(Dataset):
     """Dataset for training the model"""
-    texts: List[str]
-    labels: List[int]
+    texts: list[str]
+    labels: list[int]
     tokenizer: Any
     max_length: int = 512
 
@@ -108,7 +108,7 @@ class PDFDataset(Dataset):
             'labels': torch.tensor(label)
         }
 
-def extract_text_from_pdfs_batch(file_paths: List[Path]) -> Dict[Path, str]:
+def extract_text_from_pdfs_batch(file_paths: list[Path]) -> dict[Path, str]:
     """
     Extract text content from multiple PDF files using spacy_layout's batch processing
     First checks for cached text files, processes only uncached PDFs
@@ -172,184 +172,48 @@ def extract_text_from_pdf(file_path: Path) -> str:
     results = extract_text_from_pdfs_batch([file_path])
     return results.get(file_path, "")
 
-def prepare_dataset(data_dict: Dict[str, Dict[str, Any]]) -> Tuple[List[str], List[str]]:
-    """Prepare texts and labels from the data dictionary"""
-    # Get all file paths
-    file_paths = [item['file_path'] for item in data_dict.values()]
 
-    # Extract text from all PDFs in batch
-    extracted_texts = extract_text_from_pdfs_batch(file_paths)
-
-    texts = []
-    labels = []
-    for material_id, item in data_dict.items():
-        text = extracted_texts.get(item['file_path'])
-        if text:  # Only include if we successfully extracted text
-            texts.append(text)
-            labels.append(item['classification'])
-
-    return texts, labels
-
-def compute_metrics(eval_pred):
-    """Compute metrics for model evaluation"""
-    metric = evaluate.load("accuracy")
-    predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis=1)
-    return metric.compute(predictions=predictions, references=labels)
-
-def train_model(training_data: Dict[str, Dict[str, Any]], model_save_path: str = "pdf_classifier") -> Tuple[Any, Any, LabelEncoder]:
+def deduplicate_pdfs() -> None:
     """
-    Train a ModernBERT model on the PDF dataset
+    Deduplicates PDFs in SETTINGS.dirs[DirSetting.PDF_DOWNLOADS] based on their hash or embedding or something
+    make sure to store this somehow that it can be incorporated into the main data
 
-    Args:
-        training_data: Dictionary with material_ids as keys and dicts containing 'classification' and 'file_path' as values
-        model_save_path: Where to save the trained model
+    e.g. if a duplicate is found, link the material ids and show this in the sheets
 
-    Returns:
-        Tuple of (trained model, tokenizer, label encoder)
     """
-    info("Preparing dataset for training...")
-    texts, labels = prepare_dataset(training_data)
-
-    if not texts:
-        raise ValueError("No valid text data extracted from PDFs")
-
-    # Encode labels
-    label_encoder = LabelEncoder()
-    encoded_labels = label_encoder.fit_transform(labels)
-
-    # Split dataset
-    train_texts, val_texts, train_labels, val_labels = train_test_split(
-        texts, encoded_labels, test_size=0.2, random_state=42
-    )
-
-    # Initialize tokenizer and model
-    model_id = "answerdotai/ModernBERT-large"
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_id,
-        num_labels=len(label_encoder.classes_)
-    )
-
-    # Create datasets
-    train_dataset = PDFDataset(train_texts, train_labels, tokenizer)
-    val_dataset = PDFDataset(val_texts, val_labels, tokenizer)
-
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=model_save_path,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        learning_rate=2e-5,
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
-        num_train_epochs=3,
-        weight_decay=0.01,
-        load_best_model_at_end=True,
-    )
-
-    # Initialize trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        compute_metrics=compute_metrics,
-    )
-
-    # Train the model
-    info("Starting model training...")
-    trainer.train()
-
-    # Save the model
-    trainer.save_model(model_save_path)
-    tokenizer.save_pretrained(model_save_path)
-
-    # Evaluate the model
-    eval_results = trainer.evaluate()
-    info(f"Evaluation results: {eval_results}")
-
-    return model, tokenizer, label_encoder
-
-def predict_classifications(
-    data_dict: Dict[str, Dict[str, Any]],
-    model_path: str = "pdf_classifier"
-) -> Dict[str, Dict[str, Any]]:
-    """
-    Predict classifications for new PDFs
-
-    Args:
-        data_dict: Dictionary with material_ids as keys and dicts containing 'file_path' as values
-        model_path: Path to the saved model
-
-    Returns:
-        Dictionary with predictions and confidence scores added
-    """
-    # Load model, tokenizer, and label encoder
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-
-    # Process each PDF
-    result_dict = {}
-    for material_id, item in data_dict.items():
-        # Extract text from PDF
-        text = extract_text_from_pdf(item['file_path'])
-        if not text:
-            warn(f"Could not extract text from PDF for material_id {material_id}")
-            continue
-
-        # Tokenize
-        inputs = tokenizer(
-            text,
-            truncation=True,
-            max_length=512,
-            padding='max_length',
-            return_tensors='pt'
-        )
-
-        # Get prediction
-        with torch.no_grad():
-            outputs = model(**inputs)
-            probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
-
-        # Get predicted class and confidence
-        predicted_class_idx = torch.argmax(probabilities).item()
-        confidence = probabilities[0][predicted_class_idx].item()
-        predicted_class = model.config.id2label[predicted_class_idx]
-
-        # Store results
-        result_dict[material_id] = {
-            **item,
-            'predicted_classification': predicted_class,
-            'confidence': confidence
-        }
-
-    return result_dict
-
-def main():
-    """Example usage of the training and prediction functions"""
-    # Get training data
-    training_data = get_manual_classification_for_files()
-    if not training_data:
-        warn("No training data available")
+    pdf_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
+    if not pdf_dir or not pdf_dir.files:
+        info("No PDF files found for deduplication.")
         return
 
-    # Train model
-    try:
-        model, tokenizer, label_encoder = train_model(training_data)
-        cool("Model training completed successfully")
+    file_hashes = {}
+    pdf_texts = {}
+    for file in pdf_dir.files:
+        if file.extension.lower() == ".pdf":
+            pdf_texts[file.path] = extract_text_from_pdf(file.path) or ""
 
-        # Example prediction
-        new_data = {
-            'test_id': {
-                'file_path': Path('path/to/test.pdf')
-            }
-        }
-        predictions = predict_classifications(new_data)
-        info(f"Predictions: {predictions}")
+    # print exact duplicates (same hash)
+    for pdf_hash, paths in file_hashes.items():
+        if len(paths) > 1:
+            info(f"Duplicate PDF files found with hash {pdf_hash}: {paths}")
+            # do something with the duplicate files
 
-    except Exception as e:
-        warn(f"Error during model training: {e}")
+    # find near-duplicates (different hash but highly similar text)
+    paths_list = list(pdf_texts.keys())
+    n = len(paths_list)
+    checked_pairs = set()
+    for i in range(n):
+        for j in range(i+1, n):
+            pair = tuple(sorted([paths_list[i], paths_list[j]]))
+            if pair in checked_pairs:
+                continue
+            checked_pairs.add(pair)
 
-if __name__ == "__main__":
-    main()
+            text_a = pdf_texts[paths_list[i]]
+            text_b = pdf_texts[paths_list[j]]
+            similarity = SequenceMatcher(None, text_a, text_b).ratio()
+
+            # adjust threshold as needed
+            if similarity > 0.95:
+                info(f"Near-duplicate PDF files (text similarity > 95%): {pair}")
+                # do something with near-duplicate files

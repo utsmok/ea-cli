@@ -16,7 +16,7 @@ class Downloader:
         cool(f'setting up selenium')
 
         my_options = webdriver.ChromeOptions()
-        profile_path = r"C:\Users\Sam\AppData\Local\Google\Chrome\User Data"
+        profile_path = r"C:\Users\MokS\AppData\Local\Google\Chrome\User Data"
         profile_name = "Default" # Use "Profile N" if you have other accounts in Chrome
         my_options.add_argument(f"--user-data-dir={profile_path}")
         my_options.add_argument(f"--profile-directory={profile_name}")
@@ -54,17 +54,19 @@ class Downloader:
         all_item_len = len(all_items)
 
         material_ids_downloaded = self.get_already_downloaded_material_ids()
-        all_items = all_items.filter(all_items['workflow_status']!= 'Done')
+        amount_done = len(all_items.filter(all_items['workflow_status'] == 'Done'))
+        amount_downloaded = len(all_items.filter(all_items['material_id'].is_in(material_ids_downloaded)))
+        #all_items = all_items.filter(all_items['workflow_status']!= 'Done')
         all_items = all_items.filter(~all_items['material_id'].is_in(material_ids_downloaded))
 
         urls = all_items.with_columns(
             pl.col('url').replace(old="-",new=None).replace("", None)
         ).select(['url', 'material_id', 'filename'])
         urls = urls.drop_nulls('url').unique('url')
-        info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files.')
+        info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) and files marked as done ({amount_done}).')
         return urls
 
-    def download_pdfs(self, subset: list[str]) -> webdriver.Chrome:
+    def download_pdfs(self, subset: list[str], max_amount: int = None) -> webdriver.Chrome:
 
         urls: pl.DataFrame = self.get_urls_from_full_data()
         if subset:
@@ -72,9 +74,9 @@ class Downloader:
         if urls.is_empty():
             warn(f'No urls to download.')
             return
-        return self.download(urls=urls)
+        return self.download(urls=urls, max_amount=max_amount)
 
-    def download(self, urls: pl.DataFrame) -> None:
+    def download(self, urls: pl.DataFrame, max_amount: int = None) -> None:
         self.setup_selenium()
         info(f'Downloading {len(urls)} files')
         urls = urls.to_dicts()
@@ -98,10 +100,11 @@ class Downloader:
                 items_per_sec = index / (time.time() - start_time)
                 if items_per_sec > 1:
                     time.sleep(5)
-
+                if max_amount and index >= max_amount:
+                    info(f'[{index}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
+                    break
                 if index % step_len == 0:
                     info(f'[{index}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
-                    break
         except Exception as e:
             warn(f'Error downloading file: {e}')
         finally:

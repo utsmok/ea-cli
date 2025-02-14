@@ -238,6 +238,7 @@ class Settings:
     data_settings: DataSettings = field(default_factory=DataSettings, init=False)
     university_settings: UniversitySettings = field(default_factory=UniversitySettings, init=False)
     backup_settings: BackupSettings = field(default_factory=BackupSettings, init=False)
+    classification_options: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.settings_file = File(path=self.input_file_path)
