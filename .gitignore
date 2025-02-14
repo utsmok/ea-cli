@@ -9,6 +9,7 @@ compare/*.*
 *.db
 *.parquet
 
+easy_access/api_keys.py
 
 # documents
 *.doc

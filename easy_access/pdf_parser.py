@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from typing import Any
 from difflib import SequenceMatcher
-
+import os
 from dataclasses import dataclass
 
 def retrieve_files() -> list[File] | list[None]:
@@ -186,19 +186,49 @@ def deduplicate_pdfs() -> None:
         info("No PDF files found for deduplication.")
         return
 
-    file_hashes = {}
-    pdf_texts = {}
+    file_hashes:dict[str, list[Path]] = {}
+    pdf_texts:dict[Path, str] = {}
+
     for file in pdf_dir.files:
-        if file.extension.lower() == ".pdf":
-            pdf_texts[file.path] = extract_text_from_pdf(file.path) or ""
+        if file.extension.lower() != ".pdf":
+            continue
+        try:
+            with open(file.path, "rb") as f:
+                contents = f.read()
+            file_hash = hashlib.md5(contents).hexdigest()
+            file_hashes.setdefault(file_hash, []).append(file.path)
+        except Exception as e:
+            warn(f"Error hashing {file.name}: {e}")
+    """
+        for file in pdf_dir.files:
+            if file.extension.lower() == ".pdf":
+                pdf_texts[file.path] = extract_text_from_pdf(file.path) or ""
+    """
 
     # print exact duplicates (same hash)
     for pdf_hash, paths in file_hashes.items():
         if len(paths) > 1:
-            info(f"Duplicate PDF files found with hash {pdf_hash}: {paths}")
-            # do something with the duplicate files
-
+            try:
+                info(f"Duplicate PDF files found with hash {pdf_hash}: {paths}")
+                filenames = [file.name for file in paths]
+                filenames.sort()
+                main_mat_id = filenames[0].split('_')[0]
+                for i, path in enumerate(paths):
+                    if i == 0:
+                        continue
+                    orig_mat_id = path.name.split('_')[0]
+                    new_file = f"{orig_mat_id}_{main_mat_id}.replace"
+                    # create new_file
+                    new_file_path = pdf_dir.full / new_file
+                    with open(new_file_path, "w") as f:
+                        f.write(f"{orig_mat_id} {main_mat_id}")
+                    # delete original file
+                    os.remove(path)
+            except Exception as e:
+                warn(f"Error deduplicating PDF files with paths {paths}: {e}")
+                continue
     # find near-duplicates (different hash but highly similar text)
+    """
     paths_list = list(pdf_texts.keys())
     n = len(paths_list)
     checked_pairs = set()
@@ -217,3 +247,4 @@ def deduplicate_pdfs() -> None:
             if similarity > 0.95:
                 info(f"Near-duplicate PDF files (text similarity > 95%): {pair}")
                 # do something with near-duplicate files
+    """

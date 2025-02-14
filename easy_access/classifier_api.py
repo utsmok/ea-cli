@@ -10,7 +10,8 @@ from pydantic import BaseModel, TypeAdapter
 import asyncio
 import time
 from rich.console import Console
-
+import re
+from easy_access.api_keys import gemini
 console = Console(emoji=True, markup=True)
 
 class CopyrightStatus(str, Enum):
@@ -58,14 +59,12 @@ class Classification(BaseModel):
     license: list[str]  # the license(s) for the item if included in the document itself
     topic: str # the topic of the item, what it covers
     remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
-api_key_gemini = "AIzaSyAcOjbjnHDtv6Q4oJ1mK7YoBvLnSI8RuHI"
-client = genai.Client(api_key=api_key_gemini)
+client = genai.Client(api_key=gemini)
 
 
 
 async def classify_pdf(file: File) -> Classification:
     mat_id =file.name.split('_')[0]
-    console.print(f'Classifying {file.name} (mat_id: {mat_id})...')
     pdf = client.files.upload(
         file=file.path,
         config= {'mime_type': 'application/pdf',
@@ -125,7 +124,6 @@ The requested output class contains hints & instructions as well, replicated her
     )
 
     parsed = response.parsed
-    console.print(parsed)
     client.files.delete(name=mat_id)
 
     if parsed:
@@ -133,7 +131,6 @@ The requested output class contains hints & instructions as well, replicated her
             parsed.pdf_name = file.name
             return parsed
 
-    console.print(f'Could not classify {file.name}')
     return
 
 
@@ -151,22 +148,33 @@ async def classify_items(files: list[File]) -> int:
     classifications: list[Classification] = [c for c in classifications if c]
     console.print(f'{len(classifications)} files classified. Storing results as json files.')
     for classification in classifications:
-        with open(SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / f'{classification.pdf_name.rstrip('.pdf')}_gemini_classification.json', 'w') as f:
-            f.write(classification.model_dump_json(indent=2, warnings='warn'))
+        console.print(classification)
+        name = classification.pdf_name.rstrip('.pdf')
+        name = "".join([c for c in name if re.match(r'\w', c)])
+        classification.pdf_name = name+".pdf"
+        json_name = name+"_gemini_classification.json"
+        console.print(f'Storing results as {json_name}')
+        try:
+            with open(SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / f'{json_name}_gemini_classification.json', 'w') as f:
+                f.write(classification.model_dump_json(indent=2, warnings='warn'))
+        except Exception as e:
+            console.print(f'Could not store {json_name}: {e}')
+            continue
     return 1
 async def main():
-
 
     all_files = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
     pdfs = [f for f in all_files if f.extension == '.pdf']
     pdfs_found = len(pdfs)
-    existing_classifications = [f.name.rstrip('.json')+'.pdf' for f in all_files if f.extension == '.json']
+    existing_classifications = [f.name.rstrip('_gemini_classification.json')+'.pdf' for f in all_files if f.extension == '.json']
     if existing_classifications:
         pdfs = [f for f in pdfs if f.name not in existing_classifications]
     # filter out all files larger than 10 MB (in bytes)
-    pdfs = [f for f in pdfs if f.size < 10*1024*1024]
-    console.print(f'{pdfs_found} files found, with {len(existing_classifications)} already classified. Starting classification of {len(pdfs)} files which need to be classified with size < 10 MB.')
+    console.print(f'{pdfs_found} files found, with {len(existing_classifications)} already classified. Starting classification of {len(pdfs)} files.')
 
+    pdfs = [f for f in pdfs if f.size < 10*1024*1024]
+    pdfs = [f for f in pdfs if not any(['scipy' in f.name, 'numpy' in f.name])]
+    console.print(f'Also removed items > 10MB and some specifically selected items. {len(pdfs)} items remaining.')
     pdf_batch = []
     batch_start_time = time.time()
     batch_size = 0
