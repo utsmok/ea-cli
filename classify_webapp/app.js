@@ -36,41 +36,77 @@ async function loadPdfList() {
 
 async function loadPdf(filename) {
     currentPdfPath = filename;
-    const pdfContainer = document.getElementById('pdf-container');
-    pdfContainer.innerHTML = ''; // Clear existing content
+    const pdfContainer = document.getElementById('pdf-pages');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    pdfContainer.innerHTML = '';
+    loadingIndicator.style.display = 'flex';
 
     try {
-        // Load PDF using PDF.js
         const loadingTask = pdfjsLib.getDocument(`/pdf_downloads/${filename}`);
         const pdf = await loadingTask.promise;
         const jsonname = String(filename).slice(0, -4) + '_gemini_classification.json';
 
-        // Render all pages
+        // Create viewport observer for lazy loading
+        const viewportObserver = new IntersectionObserver((entries, observer) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const pageNum = parseInt(entry.target.dataset.pageNum);
+                    renderPage(pdf, pageNum, entry.target);
+                    observer.unobserve(entry.target);
+                }
+            });
+        }, { rootMargin: '100px' });
+
+        // Create placeholder divs for all pages
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-            const page = await pdf.getPage(pageNum);
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-
-            // Use a larger scale for better readability
-            const viewport = page.getViewport({ scale: 1.5 });
-
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            canvas.style.marginBottom = '20px'; // Add space between pages
-
-            await page.render({
-                canvasContext: context,
-                viewport: viewport
-            }).promise;
-
-            pdfContainer.appendChild(canvas);
+            const placeholder = document.createElement('div');
+            placeholder.className = 'pdf-page-placeholder';
+            placeholder.dataset.pageNum = pageNum;
+            placeholder.style.height = '1000px'; // Approximate height
+            placeholder.style.width = '100%';
+            placeholder.style.display = 'flex';
+            placeholder.style.justifyContent = 'center';
+            pdfContainer.appendChild(placeholder);
+            viewportObserver.observe(placeholder);
         }
 
-        // Load JSON if exists
+        loadingIndicator.style.display = 'none';
         const json = await loadJson(jsonname);
     } catch (error) {
         console.error('Error loading PDF:', error);
         pdfContainer.innerHTML = '<p>Error loading PDF</p>';
+        loadingIndicator.style.display = 'none';
+    }
+}
+
+async function renderPage(pdf, pageNum, container) {
+    try {
+        const page = await pdf.getPage(pageNum);
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+
+        // Calculate scale to fit width
+        const containerWidth = container.clientWidth;
+        const viewport = page.getViewport({ scale: 1 });
+        const scale = containerWidth / viewport.width;
+        const scaledViewport = page.getViewport({ scale });
+
+        canvas.height = scaledViewport.height;
+        canvas.width = scaledViewport.width;
+        canvas.style.maxWidth = '100%';
+        canvas.style.height = 'auto';
+
+        await page.render({
+            canvasContext: context,
+            viewport: scaledViewport
+        }).promise;
+
+        container.innerHTML = '';
+        container.style.height = 'auto';
+        container.appendChild(canvas);
+    } catch (error) {
+        console.error(`Error rendering page ${pageNum}:`, error);
+        container.innerHTML = `<p>Error loading page ${pageNum}</p>`;
     }
 }
 
@@ -111,7 +147,7 @@ function escapeHtml(unsafe) {
     if (unsafe === null || unsafe === undefined) return '';
     return String(unsafe)
         .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
+        .replace(/<//g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
