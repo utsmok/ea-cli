@@ -25,6 +25,7 @@ body {
     border-right: 1px solid var(--border-color);
     padding: 20px;
     background: var(--bg-color);
+    overflow-y: auto;
 }
 
 #file-list-panel h2 {
@@ -53,6 +54,7 @@ body {
     flex-direction: column;
     align-items: center;
     background: white;
+    overflow-y: auto;
 }
 
 #pdf-container canvas {
@@ -102,7 +104,7 @@ select {
 }
 
 #save-changes:hover {
-    background: #1d4ed8;
+    background: #127035;
 }
 
 .pdf-link {
@@ -125,6 +127,14 @@ select {
     background-color: #eff6ff;
     border-color: var(--primary-color);
     color: var(--primary-color);
+}
+
+.pdf-link-green {
+    color: #047857; /* Tailwind's Emerald-800 */
+}
+
+.pdf-link-red {
+    color: #b91c1c; /* Tailwind's Red-700 */
 }
 
 .json-field {
@@ -162,4 +172,100 @@ select {
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
+}
+
+.toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    background: var(--bg-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.toolbar button {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: white;
+    cursor: pointer;
+}
+
+.two-page-view .pdf-page-placeholder {
+    width: 48%;
+    margin-right: 2%;
+}
+
+.two-page-view .pdf-page-placeholder:nth-child(2n) {
+    margin-right: 0;
+}
+
+.collapsed-left #file-list-panel {
+    display: none;
+}
+
+.collapsed-right #metadata-panel {
+    display: none;
+}
+
+#file-list-panel, #metadata-panel, #pdf-container {
+    overflow-y: auto;
+}
+
+.zoom-controls {
+    position: relative;
+    z-index: 500; /* ensure above side panel */
+    display: flex;
+    gap: 8px;
+
+}
+
+.zoom-btn {
+    margin-top: 1.5rem;
+    padding: 10px 20px;
+    background-color: #edf4bf;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+.zoom-btn:hover {
+    background: #127035;
+}
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+::-webkit-scrollbar-thumb {
+    background-color: #888;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+    background-color: #f1f1f1;
+}
+
+.two-page-view #pdf-pages {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+}
+
+.toggle-left-btn,
+.toggle-right-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--primary-color);
+    color: #fff;
+    border: none;
+    border-radius: 0 6px 6px 0;
+    padding: 8px 12px;
+    cursor: pointer;
+    z-index: 999;
+}
+.toggle-right-btn {
+    right: 0;
+    border-radius: 6px 0 0 6px;
 }

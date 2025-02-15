@@ -4,20 +4,40 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 console.log('App.js loaded');
 
 let currentPdfPath = null;
+let currentScale = 1.0; // track zoom level
+
+function getColorClassForStatus(status) {
+  if (status === 'own material' || status === 'open access') return 'pdf-link-green';
+  if (status === 'copyrighted material') return 'pdf-link-red';
+  return '';
+}
 
 async function loadPdfList() {
     try {
         console.log('Fetching PDF list...');
         const response = await fetch('/list-pdfs');
         const files = await response.json();
-        console.log('PDF files:', files);
+        //files is a json object with a list of items
+        // each item has 2 keys: pdf, json
+        // pdf has the pdf filename
+        // json has the json filename
+        console.log('PDF list:', files);
+        // split the files into pdfs and jsons
+        let pdfs = [];
+        let jsons = [];
+        files.forEach(file => {
+            pdfs.push(file.pdf);
+            jsons.push(file.json);
+        });
+
+        console.log('PDF files:', pdfs);
         const fileList = document.getElementById('file-list');
         fileList.innerHTML = '';
 
         files.forEach(file => {
             const div = document.createElement('div');
-            div.className = 'pdf-link';
-            div.textContent = file;
+            div.className = `pdf-link ${getColorClassForStatus(file.json_data?.copyright_status)}`;
+            div.textContent = file.pdf;
             div.onclick = () => {
                 // Remove active class from all items
                 document.querySelectorAll('.pdf-link').forEach(item => {
@@ -25,17 +45,20 @@ async function loadPdfList() {
                 });
                 // Add active class to clicked item
                 div.classList.add('active');
-                loadPdf(file);
+                loadPdf(file.pdf, file.json);
             };
             fileList.appendChild(div);
         });
+
+
     } catch (e) {
         console.error('Error loading PDF list:', e);
     }
 }
 
-async function loadPdf(filename) {
+async function loadPdf(filename, jsonfilename) {
     currentPdfPath = filename;
+    currentjsonpath = jsonfilename;
     const pdfContainer = document.getElementById('pdf-pages');
     const loadingIndicator = document.getElementById('loading-indicator');
     pdfContainer.innerHTML = '';
@@ -44,7 +67,7 @@ async function loadPdf(filename) {
     try {
         const loadingTask = pdfjsLib.getDocument(`/pdf_downloads/${filename}`);
         const pdf = await loadingTask.promise;
-        const jsonname = String(filename).slice(0, -4) + '_gemini_classification.json';
+
 
         // Create viewport observer for lazy loading
         const viewportObserver = new IntersectionObserver((entries, observer) => {
@@ -55,7 +78,7 @@ async function loadPdf(filename) {
                     observer.unobserve(entry.target);
                 }
             });
-        }, { rootMargin: '100px' });
+        }, { root: null, rootMargin: '100px' });
 
         // Create placeholder divs for all pages
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -71,7 +94,7 @@ async function loadPdf(filename) {
         }
 
         loadingIndicator.style.display = 'none';
-        const json = await loadJson(jsonname);
+        await loadJson();
     } catch (error) {
         console.error('Error loading PDF:', error);
         pdfContainer.innerHTML = '<p>Error loading PDF</p>';
@@ -84,21 +107,15 @@ async function renderPage(pdf, pageNum, container) {
         const page = await pdf.getPage(pageNum);
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-
-        // Calculate scale to fit width
-        const containerWidth = container.clientWidth;
-        const viewport = page.getViewport({ scale: 1 });
-        const scale = containerWidth / viewport.width;
-        const scaledViewport = page.getViewport({ scale });
-
-        canvas.height = scaledViewport.height;
-        canvas.width = scaledViewport.width;
+        const viewport = page.getViewport({ scale: currentScale });
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
         canvas.style.maxWidth = '100%';
         canvas.style.height = 'auto';
 
         await page.render({
             canvasContext: context,
-            viewport: scaledViewport
+            viewport: viewport
         }).promise;
 
         container.innerHTML = '';
@@ -110,9 +127,9 @@ async function renderPage(pdf, pageNum, container) {
     }
 }
 
-async function loadJson(jsonFile) {
+async function loadJson() {
     try {
-        const response = await fetch(`/pdf_downloads/${jsonFile}`);
+        const response = await fetch(`/pdf_downloads/${currentjsonpath}`);
         const data = await response.json();
 
         document.getElementById('item-type').value = data.item_type;
@@ -125,38 +142,58 @@ async function loadJson(jsonFile) {
             .map(([key, value]) => {
                 const formattedValue = Array.isArray(value)
                     ? `<div class="array-content">
-                         ${value.map(v => `<div class="array-item">${escapeHtml(v)}</div>`).join('')}
+                         ${value.map(v => `<div class="array-item">${v}</div>`).join('')}
                        </div>`
-                    : escapeHtml(value || '(empty)');
+                    : value || '(empty)';
 
                 return `
                     <div class="json-field">
-                        <strong>${escapeHtml(key)}:</strong>
+                        <strong>${key.replace('_', ' ')}:</strong><br>
                         ${formattedValue}
                     </div>
                 `;
             }).join('');
+        console.log('JSON data:', data);
         return data;
     } catch (e) {
         console.error('Error loading JSON:', e);
     }
 }
 
-// Add HTML escaping function
-function escapeHtml(unsafe) {
-    if (unsafe === null || unsafe === undefined) return '';
-    return String(unsafe)
-        .replace(/&/g, "&amp;")
-        .replace(/<//g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+document.getElementById('zoom-in').onclick = () => {
+    currentScale += 0.2;
+    reloadPages();
+};
+
+document.getElementById('zoom-out').onclick = () => {
+    currentScale = Math.max(0.2, currentScale - 0.2);
+    reloadPages();
+};
+
+function reloadPages() {
+    const pdfContainer = document.getElementById('pdf-pages');
+    // Clear existing
+    pdfContainer.innerHTML = '';
+    // Re-load with updated scale
+    if (currentPdfPath) {
+        loadPdf(currentPdfPath, currentjsonpath);
+    }
 }
+
+
+
+// Collapse sidebars
+document.getElementById('collapse-left').onclick = () => {
+    document.body.classList.toggle('collapsed-left');
+};
+document.getElementById('collapse-right').onclick = () => {
+    document.body.classList.toggle('collapsed-right');
+};
 
 document.getElementById('save-changes').onclick = async () => {
     if (!currentPdfPath) return;
 
-    const jsonPath = String(currentPdfPath).slice(0, -4) + '_gemini_classification.json';
+    const jsonPath = currentjsonpath;
 
     const data = {
         item_type: document.getElementById('item-type').value,
@@ -170,10 +207,17 @@ document.getElementById('save-changes').onclick = async () => {
             body: JSON.stringify(data)
         });
         alert('Changes saved successfully!');
+        const activeLink = document.querySelector('.pdf-link.active');
+        if (activeLink) {
+            const newStatus = data.copyright_status;
+            activeLink.className = `pdf-link active ${getColorClassForStatus(newStatus)}`;
+        }
     } catch (e) {
         alert('Error saving changes');
         console.error(e);
     }
+
+    loadPdfList();
 };
 
 // Initial load

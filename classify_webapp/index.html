@@ -8,12 +8,20 @@
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+    <button id="collapse-left" class="toggle-left-btn">◀</button>
+    <button id="collapse-right" class="toggle-right-btn">▶</button>
     <div class="container">
         <div id="file-list-panel">
             <h2>Documents</h2>
             <div id="file-list"></div>
         </div>
         <div id="pdf-viewer">
+
+            <div class="zoom-controls">
+                <button id="zoom-in" class="zoom-btn">🔍+</button>
+                <button id="zoom-out" class="zoom-btn">🔍-</button>
+            </div>
+
             <div id="pdf-container">
                 <div id="loading-indicator" style="display: none;">
                     <div class="spinner"></div>
@@ -24,7 +32,6 @@
         </div>
         <div id="metadata-panel">
             <h2>Metadata</h2>
-            <div id="json-content"></div>
             <div class="edit-controls">
                 <div class="form-group">
                     <label for="item-type">Item Type:</label>
@@ -51,6 +58,10 @@
                 </div>
                 <button id="save-changes">Save Changes</button>
             </div>
+            <p>
+                <hr>
+            </p>
+            <div id="json-content"></div>
         </div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>

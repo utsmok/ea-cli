@@ -33,4 +33,5 @@ dependencies = [
     "aiometer>=0.5.0",
     "uvicorn>=0.34.0",
     "fastapi>=0.115.8",
+    "pdfminer-six>=20240706",
 ]
