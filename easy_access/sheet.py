@@ -3,11 +3,11 @@ import polars as pl
 
 from easy_access.settings import SETTINGS, ColInfo, DirSetting, DEPARTMENT_MAPPING
 from dataclasses import dataclass, field
-from easy_access.utils import File, info, warn, cool
+from easy_access.utils import File, info, warn, cool, Directory
 from pathlib import Path
 from datetime import datetime
 from itertools import batched
-
+import json
 import openpyxl
 from openpyxl.styles import NamedStyle, Alignment
 import openpyxl.worksheet
@@ -261,6 +261,11 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     )
 
     sheet.add_data(data)
+    info(f'Added data entry sheet to {file.name}')
+    llm_classification_data = enrich_with_llm_classifications(data)
+    llm_sheet_path = file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
+    llm_classification_data.write_excel(workbook=llm_sheet_path, worksheet="llm_classification_data")
+    info(f'Stored llm_classification_data sheet to {llm_sheet_path.name}')
     return style_iter
 
 def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
@@ -388,3 +393,100 @@ def create_export_sheet(data: pl.DataFrame, print_overview: bool = True) -> list
 
 
     return material_ids_exported
+
+
+def retrieve_all_classifications() -> pl.DataFrame:
+    """
+    -> read all .json files in script_data / classifications /
+    -> each json file has name {material_id}_.......json
+    -> open each json, use key as colname, contents as values, add material_id col with material_id from filename as value
+    -> if a json is not found, check if a .replace file is present --> should have format {input_mat_id}_{replacement_mat_id}.replace
+        -> if a .replace file exists, read the replacement mat_id instead and add that row data
+    -> return as dataframe
+    """
+    all_files = Directory(SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "classifications").files
+    all_jsons = [file for file in all_files if file.extension == ".json"]
+    all_replacements = [file.name.replace(".replace","") for file in all_files if file.extension == ".replace"]
+
+    # rename all jsons to {material_id}.json --> split filename on _ and take first part
+    all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
+    all_files = Directory(SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "classifications").files
+    all_jsons = [file for file in all_files if file.extension == ".json"]
+    # read all jsons
+    data = {}
+    for file in all_jsons:
+        with open(file.path, "r") as f:
+            try:
+                data[file.name.replace(".json", "")] = json.load(f)
+            except json.JSONDecodeError:
+                continue
+
+    final_data = []
+    final_data_dict = {}
+    for mat_id, mat_data in data.items():
+        tmp = {}
+        for key, value in mat_data.items():
+            if isinstance(value, list):
+                value = "\n".join(value)
+            if not value:
+                value = None
+            tmp[key+"_llm"] = value
+        tmp['material_id'] = mat_id
+        final_data.append(tmp)
+        final_data_dict[mat_id] = tmp
+
+    for replace in all_replacements:
+        old, new = replace.split("_")
+        if old not in final_data_dict:
+            if new not in final_data_dict:
+                continue
+            replace_data = final_data_dict[new]
+            replace_data['material_id'] = old
+            final_data.append(replace_data)
+
+    return pl.from_dicts(final_data, infer_schema_length=None)
+
+
+def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
+    """
+    Create a dataframe with llm classification data for a set of material ids(see classifier_api or classifier_local for more details).
+    call retrieve_all_classifications first
+    join data with that dataframe on material_id
+    select only the relevant columns
+    return the joined dataframe
+    """
+
+    llm_data = retrieve_all_classifications()
+    joined_data = data.join(llm_data, on="material_id", how="left")
+    # set col_order
+    col_order = [
+        "material_id",
+        "url",
+        "filename",
+        "manual_classification",
+        "remarks",
+        "ml_prediction",
+        "copyright_status_llm",
+        "copyright_classification_reason_llm",
+        "item_type_llm",
+        "item_type_classification_reason_llm",
+        "remarks_llm",
+        "author",
+        "author_names_llm",
+        "title",
+        "item_title_llm",
+        "publisher",
+        "publisher_name_llm",
+        "copyright_holder_llm",
+        "doi",
+        "doi_llm",
+        "isbn",
+        "isbn_llm",
+        "source_url_llm",
+        "license_llm",
+        "course_name",
+        "topic_llm",
+        "pagecount",
+        "pdf_page_count_llm"
+    ]
+    return joined_data.select(col_order)

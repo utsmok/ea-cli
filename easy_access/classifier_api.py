@@ -131,10 +131,12 @@ async def classify_pdf(file: File, full_pdf:bool = True) -> Classification:
         else:
             print(f'Extracting text from {file.name}')
             pdf: str = extract_text(pdf_file=file.path)
+            if len(pdf)> 1_000_000:
+                pdf = pdf[:1_000_000]
             contents = f"\n | text content of pdf file {file.name} is as follows: |\n".join([prompt,pdf])
         print(f'sent request for {mat_id}')
         response = client.models.generate_content(
-            model='gemini-2.0-flash-lite-preview-02-05',
+            model='gemini-2.0-flash',
             contents=contents,
             config={
                 'response_mime_type': 'application/json',
@@ -219,8 +221,8 @@ async def main():
 
     for pdf in pdfs:
         pdf_batch.append(pdf)
-        if len(pdf_batch) == 30: # rate limit to 30 requests per minute
-            print('awaiting results for a batch of 30 files...')
+        if len(pdf_batch) == 15: # rate limit to 30 requests per minute
+            print('awaiting results for a batch of 15 files...')
             result = await classify_items(pdf_batch)
             while result != 1:
                 pass
