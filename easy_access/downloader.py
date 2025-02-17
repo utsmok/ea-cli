@@ -73,22 +73,23 @@ class Downloader:
 
         urls: pl.DataFrame = self.get_urls_from_full_data()
         all_files = list(self.download_dir.files)
-        all_files: list[File] = sorted(all_files, key=lambda x: x.created)
         selected_files: dict[str, File] = {file.name:file for file in all_files}
         file_info: list[dict[str, str|datetime]] = urls.to_dicts()
         for result in file_info:
             print(f'.', end='')
             file: File | None = selected_files.get(result['filename'])
             if not file:
-                closest_match = max(selected_files.keys(), key=lambda x: Levenshtein.ratio(result['filename'], x, processor=lambda x: x.lower()), default=None)
-                if closest_match:
-                    ratio = Levenshtein.ratio(result["filename"], closest_match)
-                    if ratio < 0.9:
-                        continue
-                    file = selected_files.get(closest_match)
+                file = selected_files.get(result['filename'].rstrip('.pdf')+' (1).pdf')
+                if not file:
+                    closest_match = max(selected_files.keys(), key=lambda x: Levenshtein.ratio(result['filename'], x, processor=lambda x: x.lower()), default=None)
+                    if closest_match:
+                        ratio = Levenshtein.ratio(result["filename"], closest_match)
+                        if ratio < 0.9:
+                            continue
+                        file = selected_files.get(closest_match)
             if file:
                 try:
-                    file.rename(f'{result["material_id"]}_{result["filename"].rstrip('.pdf').replace(":","")}_{result["created"].strftime("%Y-%m-%d_%H-%M-%S")}.pdf')
+                    file.rename(f'{result["material_id"]}_{result["filename"].rstrip('.pdf').replace(":","")}.pdf')
                 except Exception as e:
                     warn(f'Error renaming file with info {result}: {e}')
 

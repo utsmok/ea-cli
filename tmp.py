@@ -6,6 +6,4 @@ import easy_access.settings
 import asyncio
 
 if __name__ == "__main__":
-    downloader = Downloader()
-    downloader.rename_pdfs()
-    downloader.reset_chrome()
+    asyncio.run(main())

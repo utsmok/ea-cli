@@ -1,6 +1,8 @@
 """
 This module uses an api-based service to classify documents.
 """
+import datetime
+import os
 from easy_access.settings import SETTINGS, DirSetting
 from google import genai
 from easy_access.utils import  File
@@ -25,6 +27,15 @@ class CopyrightStatus(str, Enum):
     COPYRIGHTED_MATERIAL = "copyrighted material" # not free to use, owned by a publisher for instance
     OTHER = "other" # should not be used? maybe if unable to classify otherwise.
 
+class AllowedUsageByUT(str, Enum):
+    """
+    These possible classifications denote if the item is allowed to be shared with students in the context of the University of Twente learning environment.
+    """
+    ALLOWED = "allowed" # the item can be shared with students without further limitations, e.g. it is open access or own material by a UT employee.
+    RESTRICTED = "restricted" # the item has limitations on sharing; e.g. only this year, only if the uploader is the author, or only with specific permissions/acknowledgements etc.
+    NOT_ALLOWED = "not allowed" # the item cannot be shared without further permissions, e.g. it is fully copyrighted without any other routes to obtain permission
+    UNDETERMINED = "undetermined" # the item cannot be classified as allowed or not allowed, e.g. if the classification is not possible due to missing or conflicting information.
+
 class ItemType(str, Enum):
     """
     Possible item types of the item
@@ -42,8 +53,10 @@ class ItemType(str, Enum):
 
 class Classification(BaseModel):
     """
-    contains the itemtype and copyright status of a pdf file.
+    contains the allowed usage status, itemtype, and copyright status of a pdf file.
     """
+    allowed_usage: AllowedUsageByUT = AllowedUsageByUT.UNDETERMINED
+    allowed_usage_reasoning: str # add a 1 to 2 sentence explanation on why this allowed usage was chosen
     copyright_status: CopyrightStatus = CopyrightStatus.OTHER
     copyright_classification_reason: str  # add a 1 to 2 sentence explanation on why this copyright status was chosen
     item_type: ItemType = ItemType.UNKNOWN
@@ -66,11 +79,13 @@ class Classification(BaseModel):
 
 client = genai.Client(api_key=gemini)
 prompt = """From the included document, first extract and determine a list of metadata, then determine the copyright status and item type for this item.
-Use the metadata (e.g. the author name, publisher name, and copyright holder name, license statements, etc.) to help determine the copyright status and item type.
-The copyright status should be focused on the overall document. You can ignore any possible copyrighted elements included inside the work. Take into account that the works are being used by a public institute for educational purposes in a closed environment.
+Finally determine the most important classification: if the item is allowed to be shared with students in the context of the University of Twente learning environment.
+Use all available (meta)data in the file or that you extracted earlier (e.g. the author name, publisher name, and copyright holder name, license statements, etc.) to help determine these statuses.
+The copyright status should be focused on the overall document. You can ignore any possible copyrighted elements included inside the work.
+For determining allowed use, take into account that the works are being shared internally at the University of Twente, a Dutch public institute, for educational purposes only, in a closed environment.
 There is never any commercial use, and attribution is always given.
-If the detected 'publisher' is the University of Twente, or an 'author' is employed by the University of Twente, please consider the work as OWN_MATERIAL.
-Include your reasoning for the classification in the response in the corresponding fields.
+If the detected 'publisher' is the University of Twente, or an 'author' is employed by the University of Twente, the work should be classified as OWN_MATERIAL.
+Include reasoning for the classification in the response in the corresponding fields.
 
 The requested output format is replicated here as a set of Python classes, including additional details, hints, and suggestions.
     class ItemType(str, Enum):
@@ -90,7 +105,15 @@ The requested output format is replicated here as a set of Python classes, inclu
         OWN_MATERIAL = "own material" # made for or by an employee of the university of Twente
         COPYRIGHTED_MATERIAL = "copyrighted material" # not free to use, owned by a publisher for instance
         OTHER = "other" # should not be used? maybe if unable to classify otherwise.
+    class AllowedUsageByUT(str, Enum):
+        These possible classifications denote if the item is allowed to be shared with students in the context of the University of Twente learning environment.
+        ALLOWED = "allowed" # the item can be shared with students without further limitations, e.g. it is open access or own material by a UT employee.
+        RESTRICTED = "restricted" # the item has limitations on sharing; e.g. only this year, only if the uploader is the author, or only with specific permissions/acknowledgements etc.
+        NOT_ALLOWED = "not allowed" # the item cannot be shared without further permissions, e.g. it is fully copyrighted without any other routes to obtain permission
+        UNDETERMINED = "undetermined" # the item cannot be classified as allowed or not allowed, e.g. if the classification is not possible due to missing or conflicting information.
     class Classification(BaseModel):
+        allowed_usage: AllowedUsageByUT = AllowedUsageByUT.UNDETERMINED
+        allowed_usage_reasoning: str # add a 1 to 2 sentence explanation on why this allowed usage was chosen
         copyright_status: CopyrightStatus = CopyrightStatus.OTHER
         copyright_classification_reason: str  # add a 1 to 2 sentence explanation on why this copyright status was chosen
         item_type: ItemType = ItemType.UNKNOWN
@@ -123,15 +146,15 @@ async def classify_pdf(file: File, full_pdf:bool = True) -> Classification:
                     config= {'mime_type': 'application/pdf',
                             'name': mat_id},
                 )
-                contents = [pdf,f"You received the complete contents of the pdf file {file.name}.\n"+prompt]
+                contents = [pdf,f"You received either the first 20 pages (or complete contents if =< 20 pgs) of the pdf file {file.name}.\n"+prompt]
             except Exception as e:
                 print(e)
                 ...
         else:
             print(f'Extracting text from {file.name}')
-            pdf: str = extract_text(pdf_file=file.path)
-            if len(pdf)> 1_000_000:
-                pdf = pdf[:1_000_000]
+            pdf: str = extract_text(pdf_file=file.path, maxpages=20, codec='utf-8')
+            if len(pdf)> 10_000:
+                pdf = pdf[:10_000]
             contents = f"\n | text content of pdf file {file.name} is as follows: |\n".join([prompt,pdf])
         print(f'sent request for {mat_id}')
         response = client.models.generate_content(
@@ -181,6 +204,10 @@ async def classify_items(files: list[File]) -> int:
             mat_id = classification.pdf_name.split('_')[0]
             json_name = f'{mat_id}.json'
             console.print(f'Storing results as {json_name}')
+            if os.path.exists(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}'):
+                os.rename(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}',
+                          SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name.rstrip(".json")}_old.json')
+
             try:
                 with open(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}', 'w', encoding='utf-8') as f:
                     f.write(classification.model_dump_json(indent=2, warnings='warn'))
@@ -206,12 +233,14 @@ async def main():
 
 
     pdfs_for_mat_ids = [f for f in pdfs if "_" in f.name]
-    pdf_material_ids: dict[str, File] = {f.name.split('_')[0]:f for f in pdfs_for_mat_ids}
-    existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json']
+    pdf_material_ids: dict[str, File] = {f.name.split(sep='_')[0]:f for f in pdfs_for_mat_ids}
 
+
+
+    # existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json']
+    existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json' and f.created >= datetime.datetime(year=2025,month=2,day=17, hour=11)]
     if existing_classifications:
-        pdfs = [pdf_material_ids.get(f) for f in existing_classifications if pdf_material_ids.get(f)]
-
+        pdfs = [pdf_material_ids.get(f) for f in pdf_material_ids if f not in existing_classifications]
 
     console.print(f'{pdfs_found} files found, with {len(existing_classifications)} already classified. {len(pdfs)} files remaining.')
     pdf_batch = []
@@ -233,3 +262,4 @@ async def main():
             batch_start_time = time.time()
 
     result = await classify_items(pdf_batch)
+20509240

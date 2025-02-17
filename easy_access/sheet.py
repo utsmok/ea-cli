@@ -264,7 +264,7 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     info(f'Added data entry sheet to {file.name}')
     llm_classification_data = enrich_with_llm_classifications(data)
     llm_sheet_path = file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
-    llm_classification_data.write_excel(workbook=llm_sheet_path, worksheet="llm_classification_data")
+    llm_classification_data.write_excel(workbook=llm_sheet_path, worksheet="llm_classification_data", table_name="llm_classification_data", table_style="TableStyleMedium3", autofit = True)
     info(f'Stored llm_classification_data sheet to {llm_sheet_path.name}')
     return style_iter
 
@@ -405,19 +405,23 @@ def retrieve_all_classifications() -> pl.DataFrame:
     -> return as dataframe
     """
     all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
-    all_jsons = [file for file in all_files if file.extension == ".json"]
+    all_jsons = [file for file in all_files if all([file.extension == ".json",'_' not in file.name, file.name.rstrip('.json').isdigit()])]
     all_replacements = [file.name.replace(".replace","") for file in all_files if file.extension == ".replace"]
-
+    info(f'Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full}')
     # rename all jsons to {material_id}.json --> split filename on _ and take first part
-    all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
-    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
-    all_jsons = [file for file in all_files if file.extension == ".json"]
+
+    #all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
+    #all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
+    #all_jsons = [file for file in all_files if file.extension == ".json"]
     # read all jsons
+
     data = {}
+
     for file in all_jsons:
-        with open(file.path, "r") as f:
+        with open(file.path, "r", encoding='utf-8', errors='replace') as f:
+            read_str = f.read()
             try:
-                data[file.name.replace(".json", "")] = json.load(f)
+                data[file.name.replace(".json", "")] = json.loads(read_str)
             except json.JSONDecodeError:
                 continue
 
@@ -466,6 +470,8 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
         "manual_classification",
         "remarks",
         "ml_prediction",
+        "allowed_usage_llm",
+        "allowed_usage_reasoning_llm",
         "copyright_status_llm",
         "copyright_classification_reason_llm",
         "item_type_llm",
@@ -489,4 +495,9 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
         "pagecount",
         "pdf_page_count_llm"
     ]
+    col_order = [col for col in col_order if col in joined_data.columns]
+    # print missing expected columns
+    missing_cols = [col for col in col_order if col not in joined_data.columns]
+    if missing_cols:
+        warn(f"Missing expected columns in llm classification data: {missing_cols}")
     return joined_data.select(col_order)
