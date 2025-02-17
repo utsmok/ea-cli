@@ -560,20 +560,23 @@ class EasyAccessTool:
             all_faculty_data = all_faculty_data.unique(subset="material_id")
 
         overview_fac_dir = Directory(self.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty)
-
+        overview_file_name = None
         if del_overview:
             if overview_file:
+                overview_file_name = overview_file.name
                 if SETTINGS.backup_settings.backup_overviews:
                     overview_file.move(overview_fac_dir.full / overview_file.name)
                 else:
                     overview_file.delete()
-            else:
-                for file in faculty_files:
-                    if "total_overview" in file.name and faculty in file.name:
-                        if SETTINGS.backup_settings.backup_overviews:
-                            file.move(overview_fac_dir.full / file.name)
-                        else:
-                            file.delete()
+
+            for file in faculty_files:
+                if file.name == overview_file_name:
+                    continue
+                if "total_overview" in file.name and faculty in file.name:
+                    if SETTINGS.backup_settings.backup_overviews and "llm" not in file.name:
+                        file.move(overview_fac_dir.full / file.name)
+                    else:
+                        file.delete()
 
         return self.clean_and_validate_df(all_faculty_data)
 

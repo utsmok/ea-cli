@@ -41,13 +41,16 @@ directories:
 # additional specific file paths. Will be stored in script_data directory defined above.
 files:
   # folder where all these files will be stored/retrieved from. If blank/null, use working dir
-  file_folder: script_data
-  # Enrichment related files
-  full_data_csv: full_data.csv
-  full_data_parquet: full_data.parquet
-  osiris_data: osiris_data.json
-  osiris_data_w_contacts: osiris_data_w_contacts.json
-  person_data: person_data.json
+  folder: script_data
+  subfolders:
+    classifications: classifications # json files with classifications
+  files:
+    # Enrichment related files
+    full_data_csv: full_data.csv
+    full_data_parquet: full_data.parquet
+    osiris_data: osiris_data.json
+    osiris_data_w_contacts: osiris_data_w_contacts.json
+    person_data: person_data.json
 
 # settings for data input/output/processing
 data_settings:

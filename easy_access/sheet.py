@@ -404,13 +404,13 @@ def retrieve_all_classifications() -> pl.DataFrame:
         -> if a .replace file exists, read the replacement mat_id instead and add that row data
     -> return as dataframe
     """
-    all_files = Directory(SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "classifications").files
+    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
     all_jsons = [file for file in all_files if file.extension == ".json"]
     all_replacements = [file.name.replace(".replace","") for file in all_files if file.extension == ".replace"]
 
     # rename all jsons to {material_id}.json --> split filename on _ and take first part
     all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
-    all_files = Directory(SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "classifications").files
+    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
     all_jsons = [file for file in all_files if file.extension == ".json"]
     # read all jsons
     data = {}

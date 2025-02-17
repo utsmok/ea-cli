@@ -123,7 +123,7 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
         fac_data['items_without_man_cl'] = str(all_faculty_data.filter(pl.col("infringement") == "undetermined").shape[0])
         fac_data['items_to_do'] = str(all_faculty_data.filter(pl.col("workflow_status") == "ToDo").shape[0])
         overview_data.append(fac_data)
-        fac_file = File(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
+        fac_file = File(path=SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
         info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
         store_complete_data(fac_file, all_faculty_data)
         style_iter = finalize_sheet(fac_file, all_faculty_data, style_iter)

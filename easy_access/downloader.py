@@ -8,8 +8,8 @@ import time
 from datetime import datetime
 import Levenshtein
 
-default_download_dir = r"C:\Users\MokS\Downloads"
-default_profile_path = r"C:\Users\MokS\AppData\Local\Google\Chrome\User Data"
+default_download_dir = r"C:\Users\Sam\Downloads"
+default_profile_path = r"C:\Users\Sam\AppData\Local\Google\Chrome\User Data"
 
 class Downloader:
     driver: webdriver.Chrome
@@ -69,6 +69,31 @@ class Downloader:
         info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) and files marked as done ({amount_done}).')
         return urls
 
+    def rename_pdfs(self) -> None:
+
+        urls: pl.DataFrame = self.get_urls_from_full_data()
+        all_files = list(self.download_dir.files)
+        all_files: list[File] = sorted(all_files, key=lambda x: x.created)
+        selected_files: dict[str, File] = {file.name:file for file in all_files}
+        file_info: list[dict[str, str|datetime]] = urls.to_dicts()
+        for result in file_info:
+            print(f'.', end='')
+            file: File | None = selected_files.get(result['filename'])
+            if not file:
+                closest_match = max(selected_files.keys(), key=lambda x: Levenshtein.ratio(result['filename'], x, processor=lambda x: x.lower()), default=None)
+                if closest_match:
+                    ratio = Levenshtein.ratio(result["filename"], closest_match)
+                    if ratio < 0.9:
+                        continue
+                    file = selected_files.get(closest_match)
+            if file:
+                try:
+                    file.rename(f'{result["material_id"]}_{result["filename"].rstrip('.pdf').replace(":","")}_{result["created"].strftime("%Y-%m-%d_%H-%M-%S")}.pdf')
+                except Exception as e:
+                    warn(f'Error renaming file with info {result}: {e}')
+
+            print(f'\n')
+
     def download_pdfs(self, subset: list[str], max_amount: int = None) -> webdriver.Chrome:
 
         urls: pl.DataFrame = self.get_urls_from_full_data()
@@ -76,7 +101,7 @@ class Downloader:
             urls = urls.filter(urls['material_id'].is_in(subset))
         if urls.is_empty():
             warn(f'No urls to download.')
-            return
+            return True
         return self.download(urls=urls, max_amount=max_amount)
 
     def download(self, urls: pl.DataFrame, max_amount: int = None) -> None:
@@ -156,6 +181,10 @@ class Downloader:
                 warn(f'No files downloaded.')
 
         cool(f'Done! Downloaded {len(urls)} files in {time.time() - start_time:.2f} seconds')
+
+        return True
+
+    def reset_chrome(self) -> None:
         my_options = webdriver.ChromeOptions()
 
         my_options.add_experimental_option("prefs", {
@@ -169,9 +198,6 @@ class Downloader:
             options = my_options,
         )
         self.driver.close()
-
-        return self.driver
-
 
     def download_file(self, url: str) -> None:
         """

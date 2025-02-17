@@ -65,14 +65,14 @@ class Classification(BaseModel):
     remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
 
 client = genai.Client(api_key=gemini)
-prompt = """First extract and determine a list of metadata, then determine the copyright status and item type for the included pdf file or plain text parsed from pdf file.
-The metadata should help determine the copyright status and item type,  e.g. the author name, publisher name, and copyright holder name, license statements, etc.
-The copyright status should be focused on the overall document, please ignore any possible copyrighted elements included inside the work.
+prompt = """From the included document, first extract and determine a list of metadata, then determine the copyright status and item type for this item.
+Use the metadata (e.g. the author name, publisher name, and copyright holder name, license statements, etc.) to help determine the copyright status and item type.
+The copyright status should be focused on the overall document. You can ignore any possible copyrighted elements included inside the work. Take into account that the works are being used by a public institute for educational purposes in a closed environment.
+There is never any commercial use, and attribution is always given.
 If the detected 'publisher' is the University of Twente, or an 'author' is employed by the University of Twente, please consider the work as OWN_MATERIAL.
-Take into account that the works are being used by a public institute for educational purposes in a closed environment: there is never any commercial use, and attribution is always given.
-Include the final reason for the classification in the the response.
+Include your reasoning for the classification in the response in the corresponding fields.
 
-The requested output classes are replicated here including more details, hints, and suggestions:
+The requested output format is replicated here as a set of Python classes, including additional details, hints, and suggestions.
     class ItemType(str, Enum):
         Possible item types of the item.
         PRESENTATION = "presentation" # a powerpoint in pdf format for example. By definition, this should have CopyrightStatus.OWN_MATERIAL.
@@ -109,7 +109,6 @@ The requested output classes are replicated here including more details, hints, 
         topic: str # the topic of the item, what it covers
         pdf_page_count: int # the amount of pages in the pdf
         remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
-
 """
 
 
@@ -179,13 +178,11 @@ async def classify_items(files: list[File]) -> int:
             if not classification:
                 continue
             console.print(classification)
-            name = classification.pdf_name.rstrip('.pdf')
-            name = "".join([c for c in name if re.match(r'\w', c)])
-            classification.pdf_name = name+".pdf"
-            json_name = name+"_gemini_classification.json"
+            mat_id = classification.pdf_name.split('_')[0]
+            json_name = f'{mat_id}.json'
             console.print(f'Storing results as {json_name}')
             try:
-                with open(SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / f'{json_name}', 'w') as f:
+                with open(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}', 'w', encoding='utf-8') as f:
                     f.write(classification.model_dump_json(indent=2, warnings='warn'))
             except Exception as e:
                 console.print(f'Could not store {json_name}: {e}')
@@ -206,15 +203,17 @@ async def main():
     all_files = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
     pdfs = [f for f in all_files if f.extension == '.pdf']
     pdfs_found = len(pdfs)
-    existing_classifications = [f.name.rstrip('_gemini_classification.json')+'.pdf' for f in all_files if f.extension == '.json']
+
+
+    pdfs_for_mat_ids = [f for f in pdfs if "_" in f.name]
+    pdf_material_ids: dict[str, File] = {f.name.split('_')[0]:f for f in pdfs_for_mat_ids}
+    existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json']
+
     if existing_classifications:
-        pdfs = [f for f in pdfs if f.name not in existing_classifications]
-    # filter out all files larger than 10 MB (in bytes)
-    console.print(f'{pdfs_found} files found, with {len(existing_classifications)} already classified. Starting classification of {len(pdfs)} files.')
-    # remove pdfs with more than 1000 pages
-    pdfs = [f for f in pdfs if get_page_count(f) < 1000]
-    pdfs = [f for f in pdfs if not any(['scipy' in f.name, 'numpy' in f.name])]
-    console.print(f'Also removed items > 1000 pages and some specifically selected items. {len(pdfs)} items remaining.')
+        pdfs = [pdf_material_ids.get(f) for f in existing_classifications if pdf_material_ids.get(f)]
+
+
+    console.print(f'{pdfs_found} files found, with {len(existing_classifications)} already classified. {len(pdfs)} files remaining.')
     pdf_batch = []
     batch_start_time = time.time()
     batch_size = 0

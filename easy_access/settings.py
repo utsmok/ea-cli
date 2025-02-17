@@ -87,6 +87,7 @@ class DirSetting(Enum):
     SCRIPT_DATA = "script_data"
     FULL_BACKUPS = "full_backups"
     PDF_DOWNLOADS = "pdf_downloads"
+    CLASSIFICATIONS = "classifications"
 
 class FileSetting(Enum):
     """Enum for files expected by the script"""
@@ -389,24 +390,38 @@ class Settings:
         Parse the settings for the key 'files' in settings.yaml into the files attribute of the Settings dataclass
         """
 
-        if 'file_folder' in raw_file_strs:
-            self.dirs[DirSetting.SCRIPT_DATA] = Directory(path=raw_file_strs['file_folder'])
+        if 'folder' in raw_file_strs:
+            self.dirs[DirSetting.SCRIPT_DATA] = Directory(path=raw_file_strs['folder'])
         else:
             self.dirs[DirSetting.SCRIPT_DATA] = Directory(path=os.getcwd())
 
         file_dir_path: Path = self.dirs[DirSetting.SCRIPT_DATA].full
         for key, path in raw_file_strs.items():
-            if key == 'file_folder':
+            if key == 'folder':
                 continue
-            try:
-                key = FileSetting(value=key)
-            except ValueError:
-                logger.error(f"Unrecognized file type {key} (with path: {path}). Skipping.")
-                continue
-            try:
-                self.files[key] = File(path=file_dir_path / path)
-            except Exception as e:
-                logger.error(f"Error while adding file {key} with path {path}: {e}")
+            if key == 'files':
+                for key, file in path.items():
+                    try:
+                        key = FileSetting(value=key)
+                    except ValueError:
+                        logger.error(f"Unrecognized file type {key}. Skipping.")
+                        continue
+                    try:
+                        self.files[key] = File(path=file_dir_path / file)
+                    except Exception as e:
+                        logger.error(f"Error while adding file {key}: {e}")
+            if key == 'subfolders':
+                for subfolder in path:
+                    try:
+                        key = DirSetting(value=subfolder)
+                    except ValueError:
+                        logger.error(f"Unrecognized subfolder type {subfolder}. Skipping.")
+                        continue
+                    try:
+                        self.dirs[key] = Directory(path=file_dir_path / subfolder)
+                    except Exception as e:
+                        logger.error(f"Error while adding subfolder {subfolder}: {e}")
+
 
     def parse_unsorted(self, rest_values) -> None:
         """
