@@ -37,7 +37,6 @@ directories:
   full_backups: full_backups # Backup folder for entire faculty dir backups, see 'backup' section
   script_data: script_data # Data directly used by the script, such as 'full_data.csv' and 'ea-cli.log'
   pdf_downloads: pdf_downloads # Directory for pdf downloads
-
 # additional specific file paths. Will be stored in script_data directory defined above.
 files:
   # folder where all these files will be stored/retrieved from. If blank/null, use working dir
