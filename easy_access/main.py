@@ -29,18 +29,10 @@ from easy_access.settings import (
 
 class EasyAccessTool:
     """
-    This class contains all the actual functionality of the script.
-    For an overview see the comments & docstrings per function, plus readme.md.
+    Main class to run the entire app.
+    Runs functions based on settings (see settings.yaml and settings.py) & cli input (see run.py)
+
     """
-
-    files: dict[FileSetting, File] = SETTINGS.files
-    faculties: list[str] = []
-
-    # latest copyright export file & when it was created
-    latest_file_date: str
-
-    # debug option: completely disables all new file writes
-    disable_writes = False
 
     def __init__(self, settings: EasyAccessSettings) -> None:
         """
@@ -61,8 +53,13 @@ class EasyAccessTool:
                 A list of paths to additional .xlsx files to ingest instead the raw data from CopyRight.
         """
 
+        self.files: dict[FileSetting, File] = SETTINGS.files
+        self.faculties: list[str] = []
+        # latest copyright export file & when it was created
+        self.latest_file_date: str = ""
+
         self.settings = settings
-        self.functions:list[callable] = []
+        self.functions: list[callable] = []
         self.dirs = settings.dirs
 
         # Initialize data structures
@@ -417,6 +414,7 @@ class EasyAccessTool:
         self, faculty: str, del_overview: bool = False, include_overview: bool = True
     ) -> pl.DataFrame:
         """
+        TODO: Change merge algorithm.Now it's on sheet-by-sheet basis. Change to a item-by-item comparison.
         for a given faculty, read in all available faculty sheets
         and merge the 'complete data' and 'data entry' sheets for each one.
         concat all the data into a single dataframe and return it.
@@ -482,7 +480,7 @@ class EasyAccessTool:
         for file in faculty_files:
             if file.extension not in [".xls", ".xlsx"]:
                 continue
-            elif "overview" in file.name:
+            elif "overview" in file.name or 'llm_classification' in file.name:
                 continue
             else:
                 latest_mod_date = (
