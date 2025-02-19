@@ -405,15 +405,23 @@ def retrieve_all_classifications() -> pl.DataFrame:
     -> return as dataframe
     """
     all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
+    names = set([file.name for file in all_files])
+    if any(['_' in name for name in names]):
+        for file in all_files:
+            if all(['_' in file.name, file.extension == ".json"]):
+                new_name = file.name.split("_")[0].strip() + ".json"
+                if new_name in names:
+                    i=0
+                    while new_name in names:
+                        i+=1
+                        new_name = new_name.rstrip('.json')+f'-{i}'+'.json'
+                file.rename(new_name)
+                names.add(new_name)
+
+    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
     all_jsons = [file for file in all_files if all([file.extension == ".json",'_' not in file.name, file.name.rstrip('.json').isdigit()])]
     all_replacements = [file.name.replace(".replace","") for file in all_files if file.extension == ".replace"]
-    info(f'Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full}')
-    #rename all jsons to {material_id}.json --> split filename on _ and take first part
 
-    all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
-    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
-    all_jsons = [file for file in all_files if file.extension == ".json"]
-    # read all jsons
 
     data = {}
 
