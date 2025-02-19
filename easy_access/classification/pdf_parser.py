@@ -5,7 +5,7 @@ to prepare them for NLP analysis.
 
 import hashlib
 from _collections_abc import dict_keys
-from easy_access.downloader import Downloader
+from easy_access.classification.downloader import Downloader
 from easy_access.utils import File, Directory, cool, warn, info
 from easy_access.settings import SETTINGS, DirSetting
 import polars as pl

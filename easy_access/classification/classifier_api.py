@@ -12,7 +12,7 @@ import asyncio
 import time
 from rich.console import Console
 import re
-from easy_access.api_keys import gemini
+from easy_access.classification.api_keys import gemini
 from aiometer import amap
 from pdfminer.high_level import extract_text
 from functools import partial
@@ -192,7 +192,7 @@ def delete_files():
 async def classify_items(files: list[File]) -> int:
     async with amap(
         partial(classify_pdf,
-        full_pdf=False),
+        full_pdf=True),
         files,
         max_at_once=5, # Limit maximum number of concurrently running tasks.
         max_per_second=1,  # Limit request rate to not overload the server.
@@ -231,11 +231,8 @@ async def main():
     pdfs = [f for f in all_files if f.extension == '.pdf']
     pdfs_found = len(pdfs)
 
-
     pdfs_for_mat_ids = [f for f in pdfs if "_" in f.name]
     pdf_material_ids: dict[str, File] = {f.name.split(sep='_')[0]:f for f in pdfs_for_mat_ids}
-
-
 
     # existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json']
     existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json' and f.created >= datetime.datetime(year=2025,month=2,day=17, hour=11)]

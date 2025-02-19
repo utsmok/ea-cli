@@ -162,7 +162,7 @@ class BackupSettings:
     backup_location: Directory | None = field(default=None)
 
 @dataclass(frozen=True)
-class Programme:
+class SettingsProgramme:
     name: str | None = None
     abbreviation: str | None = None
     programme_type: Literal['b', 'm', 'o'] = 'o'
@@ -172,10 +172,10 @@ class Programme:
 
 
 @dataclass
-class Faculty:
+class SettingsFaculty:
     name: str
     abbreviation: str = ""
-    programmes: list[Programme] = field(default_factory=list)
+    programmes: list[SettingsProgramme] = field(default_factory=list)
 
 
 
@@ -186,20 +186,20 @@ class UniversitySettings:
     lms: dict[str, str] = field(default_factory=dict, init=False)
     course_catalogue: dict[str, str] = field(default_factory=dict, init=False)
     employee_catalogue: dict[str, str] = field(default_factory=dict, init=False)
-    faculties: list[Faculty] = field(default_factory=list, init=False)
-    programmes: set[Programme] = field(default_factory=set, init=False)
+    faculties: list[SettingsFaculty] = field(default_factory=list, init=False)
+    programmes: set[SettingsProgramme] = field(default_factory=set, init=False)
 
     def make_programme_set(self) -> None:
         if self.faculties:
             for faculty in self.faculties:
-                programmes: list[Programme] = faculty.programmes
+                programmes: list[SettingsProgramme] = faculty.programmes
                 if not programmes:
                     continue
                 for programme in programmes:
                     prog_dict: dict[str, Any] = programme.__dict__
                     prog_dict['faculty_name'] = faculty.name
                     prog_dict['faculty_abbreviation'] = faculty.abbreviation
-                    self.programmes.add(Programme(**prog_dict))
+                    self.programmes.add(SettingsProgramme(**prog_dict))
 
     @property
     def faculty_abbreviations(self) -> set[str]:
@@ -304,8 +304,8 @@ class Settings:
         for faculty in value.get('faculties', []):
             name: str = faculty.get('name', "")
             abbreviation: str = faculty.get('abbreviation', "")
-            programmes: list[Programme] = [Programme(**programme) for programme in faculty.get('programmes', [])]
-            self.university_settings.faculties.append(Faculty(name=name, abbreviation=abbreviation, programmes=programmes))
+            programmes: list[SettingsProgramme] = [SettingsProgramme(**programme) for programme in faculty.get('programmes', [])]
+            self.university_settings.faculties.append(SettingsFaculty(name=name, abbreviation=abbreviation, programmes=programmes))
 
         self.university_settings.make_programme_set()
 

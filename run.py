@@ -47,7 +47,7 @@ from easy_access.settings import Functions, EasyAccessSettings, SETTINGS
 from easy_access.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
 from pathlib import Path
 from easy_access.main import EasyAccessTool
-from easy_access.downloader import Downloader
+from easy_access.classification.downloader import Downloader
 
 cli_app = typer.Typer()
 

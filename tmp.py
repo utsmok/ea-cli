@@ -1,7 +1,7 @@
-from easy_access import downloader
-from easy_access.classifier_api import main, delete_files
-from easy_access.downloader import Downloader
-from easy_access.pdf_parser import deduplicate_pdfs
+from easy_access.classification import downloader
+from easy_access.classification.classifier_api import main, delete_files
+from easy_access.classification.downloader import Downloader
+from easy_access.classification.pdf_parser import deduplicate_pdfs
 import easy_access.settings
 import asyncio
 

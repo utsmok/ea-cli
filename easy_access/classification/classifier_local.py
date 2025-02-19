@@ -1,4 +1,4 @@
-from easy_access.pdf_parser import extract_text_from_pdfs_batch, PDFDataset, extract_text_from_pdf, get_manual_classification_for_files
+from easy_access.classification.pdf_parser import extract_text_from_pdfs_batch, PDFDataset, extract_text_from_pdf, get_manual_classification_for_files
 from pathlib import Path
 from typing import Any
 import numpy as np
