@@ -392,7 +392,6 @@ def create_export_sheet(data: pl.DataFrame, print_overview: bool = True) -> list
 
     return material_ids_exported
 
-
 def retrieve_all_classifications() -> pl.DataFrame:
     """
     -> read all .json files in script_data / classifications /
@@ -447,7 +446,6 @@ def retrieve_all_classifications() -> pl.DataFrame:
             final_data.append(replace_data)
 
     return pl.from_dicts(final_data, infer_schema_length=None)
-
 
 def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     """

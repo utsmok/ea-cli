@@ -234,7 +234,7 @@ university:
         - abbreviation: M-PSY
           name: Psychology
           programme_type: m
-        - abbreviation: BMS
+        - abbreviation: O-BMS
           name: Behavioural, Management and Social Sciences
           programme_type: o
         - abbreviation: M-IEM
@@ -252,7 +252,7 @@ university:
         - abbreviation: M-PSTS
           name: Philosophy of Science, Technology and Society
           programme_type: m
-        - abbreviation: null
+        - abbreviation: M-RIS
           name: Master Risicomanagement
           programme_type: m
         - abbreviation: M-BA
@@ -276,7 +276,7 @@ university:
         - abbreviation: M-PA
           name: Public Administration
           programme_type: m
-        - abbreviation: null
+        - abbreviation: M-PUB
           name: Master Public Management
           programme_type: m
     - name: Faculty of Engineering Technology
@@ -306,13 +306,13 @@ university:
         - abbreviation: B-ME-VU
           name: Mechanical Engineering - Amsterdam (VU-UT)
           programme_type: b
-        - abbreviation: null
+        - abbreviation: O-ET-NOS
           name: ET niet-OSIRIS
           programme_type: o
         - abbreviation: M-SET
           name: Sustainable Energy Technology
           programme_type: m
-        - abbreviation: ET
+        - abbreviation: O-ET
           name: Engineering Technology
           programme_type: o
     - name: Faculty of Electrical Engineering, Mathematics and Computer Science
@@ -345,7 +345,7 @@ university:
         - abbreviation: B-EE
           name: Electrical Engineering
           programme_type: b
-        - abbreviation: EEMCS
+        - abbreviation: O-EEMCS
           name: Electrical Engineering, Mathematics and Computer Science
           programme_type: o
         - abbreviation: B-TCS
@@ -360,10 +360,10 @@ university:
         - abbreviation: B-CREA-VU
           name: Creative Technology - Amsterdam (VU-UT)
           programme_type: b
-        - abbreviation: null
+        - abbreviation: M-ROB-ELSE
           name: 2024-ELSE Aspects MSc Robotics
           programme_type: m
-        - abbreviation: null
+        - abbreviation: O-EEMCS-NOS
           name: EEMCS niet-OSIRIS
           programme_type: o
     - name: Faculty of Science and Technology
@@ -429,9 +429,9 @@ university:
         - abbreviation: M-SE
           name: Spatial Engineering
           programme_type: m
-    - name: null
-      abbreviation: null
+    - name: Unmapped
+      abbreviation: UNM
       programmes:
-        - abbreviation: null
+        - abbreviation: O-TEST
           name: Testcourses
           programme_type: o
