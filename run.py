@@ -17,8 +17,11 @@
 #     "nameparser",
 #     "levenshtein",
 #     "selenium",
+#     "google-genai",
+#     "tortoise-orm[accel]",
+#     "aiometer",
+#     "pdfminer-six",
 #     "pydantic",
-#     "google-genai"
 # ]
 # ///
 

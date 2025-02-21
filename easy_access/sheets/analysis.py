@@ -1,7 +1,7 @@
 import polars as pl
 from easy_access.settings import SETTINGS, DirSetting, COURSE_MAPPING, FINE_AMOUNT
 from easy_access.sheets.enrichment import enrich_df_with_osiris_data
-from easy_access.utils import info, Directory, File
+from easy_access.utils import info, Directory, File, warn
 from easy_access.sheets.sheet import finalize_sheet, store_complete_data
 from datetime import datetime
 import locale
@@ -10,7 +10,8 @@ from rich.table import Table
 from rich.terminal_theme import SVG_EXPORT_THEME
 import copy
 from collections import defaultdict
-
+from easy_access.orm.db import init, update_copyright_items, load_base_data, update_copyright_relations
+import asyncio
 def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, style_iter:int):
     """
     create an overview sheet for each programme of the given faculty, using the data in df.
@@ -73,6 +74,8 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
     # for each, read in all data and store
     overview_data: list[dict] = []
     today = datetime.now().strftime("%Y-%m-%d")
+    data_to_update = []
+
 
     for faculty, all_faculty_data in faculty_data.items():
         all_faculty_data = enrich_df_with_osiris_data(all_faculty_data, faculty)
@@ -129,6 +132,8 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
         style_iter = finalize_sheet(fac_file, all_faculty_data, style_iter)
         locale.setlocale(locale.LC_ALL, '')
 
+        #TODO: remove this once done with testing
+        data_to_update.append(all_faculty_data)
     # now we have the data for all faculties, and written the excel files to disk.
     # print the overview table to the console, and export it as an html file to the faculties/overviews dir.
     cons = Console(record=True)
@@ -187,6 +192,7 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
 
                     )
 
+
     # now save the complete table to all_items
 
     cons.print(datatable)
@@ -202,4 +208,18 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
             - [magenta bold]To do[/magenta bold]: Items in need of action by faculty, (% of total)
             ''')
     cons.save_html(SETTINGS.dirs[DirSetting.ALL_ITEMS_DIR].full / f'faculty_overview_{today}.html', theme=SVG_EXPORT_THEME)
+
+    asyncio.run(update_db(data_to_update))
     return style_iter
+
+async def update_db(datalist: list[pl.DataFrame]):
+
+    info('Moving updates into database.')
+
+    await load_base_data()
+    await update_copyright_relations()
+
+    for num, df in enumerate(datalist,1):
+        info(f'update df {num}/{len(datalist)}')
+        await update_copyright_items(df)
+        await update_copyright_relations()

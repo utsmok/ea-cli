@@ -58,56 +58,78 @@ def read_other_sheet(file: File) -> pl.DataFrame:
 
         return latest_file_date, copyright_data.select(SETTINGS.data_settings.complete_data_cols)
 
-def read_copyright_export() -> tuple[str, pl.DataFrame]:
+def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
         """
-        Reads in data from the latest copyright export file in the copyright dir.
+        Reads in data from the latest copyright export file in the copyright dir;
+        or if a file is given, reads in that file.
+        Input should be a direct export from the CopyRight tool without any changes.
         """
-
-        info(
-            f"Reading in newest Copyright Data from directory: {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
-        )
         try:
-            all_files = SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
-            latest_file = max(all_files, key=lambda x: x.created)
-            latest_file_date = latest_file.created.strftime("%Y-%m-%d")
-            info(
-                f"Selected newest copyright export file:\n          {latest_file.name}\n          created @ {latest_file_date}"
-            )
-            raw_copyright_data = pl.read_excel(latest_file.path)
-            # cast all columns to str
-            raw_copyright_data =  raw_copyright_data.with_columns(
-                pl.exclude(pl.Utf8).cast(str)
-            )
-            copyright_data =  raw_copyright_data.rename(
-                lambda col: col.replace(" ", "_")
-                .replace("#", "count_")
-                .replace("*", "x")
-                .lower()
-            ).with_columns(
-                pl.Series(
-                    "retrieved_from_copyright_on",
-                    [latest_file_date] * len(raw_copyright_data),
-                ),
-                pl.Series("workflow_status", ["ToDo"] * len(raw_copyright_data)),
-                pl.col("last_change")
-                .str.replace(r"^-$", "")
-                .str.strip_chars()
-                .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-                .dt.strftime("%Y-%m-%d"),
-                faculty=pl.col("department").replace_strict(
-                    DEPARTMENT_MAPPING, default="Unmapped"
-                ),
-            )
-            return latest_file_date, copyright_data
+            if not file:
+                info(
+                    f"Reading in newest Copyright Data from directory: {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
+                )
+                file = max(
+                        SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files,
+                        key=lambda x: x.created
+                    )
 
+            info(f"Reading in data from:\n            {file.name}\n")
+            latest_file_date = file.created.strftime("%Y-%m-%d")
+            raw_copyright_data = pl.read_excel(file.path)
+            copyright_data =  raw_copyright_data.with_columns(
+                    pl.exclude(pl.Utf8).cast(str)
+                ).rename(
+                    lambda col: col.replace(" ", "_")
+                        .replace("#", "count_")
+                        .replace("*", "x")
+                        .lower()
+                ).with_columns(
+                    pl.Series(
+                            "retrieved_from_copyright_on",
+                            [latest_file_date] * len(raw_copyright_data),
+                        ),
+                    pl.Series(
+                            "workflow_status",
+                            ["ToDo"] * len(raw_copyright_data)
+                        ),
+                    pl.col("last_change")
+                        .str.replace(r"^-$", "")
+                        .str.strip_chars()
+                        .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+                        .dt.strftime("%Y-%m-%d"),
+                    pl.col("classification")
+                        .str.to_lowercase(),
+                    faculty=pl.col("department")
+                        .replace_strict(
+                            DEPARTMENT_MAPPING,
+                            default="Unmapped"
+                        ),
+                )
+
+            # now drop rows we definitely do not want.
+            # - drop row if material_id is null, None, blank, or '-'
+            # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
+            info(f'Retrieved {len(copyright_data)} items from {file.name}.')
+
+            copyright_data = copyright_data.filter(
+                (pl.col("material_id").is_not_null())
+            )
+            copyright_data = copyright_data.filter(
+                (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) |
+                (pl.col("filetype").is_null())
+            )
+
+            info(f'{len(copyright_data)} items remaining from {file.name} after filtering out missing material_ids and specific filetypes.')
+            return latest_file_date, copyright_data
         except FileNotFoundError:
             warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
             raise typer.Exit(code=1)
         except PermissionError:
-            warn(f"Permission denied to read {SETTINGS.latest_file.name}")
+            warn(f"Permission denied to read {file.name}")
             raise typer.Exit(code=1)
         except ValueError:
-            warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
+            warn(f"No file found.")
             raise typer.Exit(code=1)
 @dataclass
 class DataEntrySheet:

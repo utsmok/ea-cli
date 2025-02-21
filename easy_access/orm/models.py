@@ -24,14 +24,14 @@ class Classification(Enum):
     EIGEN_MATERIAAL = "eigen materiaal"
 
     ONBEKEND = "onbekend"
-
+    NIET_GEANALYSEERD = "niet geanalyseerd"
     IN_ONDERZOEK = "in onderzoek"
     VERWIJDERVERZOEK_VERSTUURD = "verwijderverzoek verstuurd"
     LICENTIE_BESCHIKBAAR = "licentie beschikbaar"
 class Filetype(Enum):
     PDF = "pdf"
     PPT = "ppt"
-    DOCX = "docx"
+    DOC = "doc"
     XLSX = "xlsx"
     MP4 = "mp4"
     JPG = "jpg"
@@ -47,8 +47,9 @@ class WorkflowStatus(Enum):
     Done = "Done"
     InProgress = "InProgress"
 class Infringement(Enum):
-    NO = "no"
     YES = "yes"
+    NO = "no"
+    MAYBE = "maybe"
     UNDETERMINED = "undetermined"
 """
 Programatically generate enums for years between 2020 and 2030 for valid periods using one of these formats:
@@ -76,15 +77,15 @@ class CopyrightItem(Model, TimestampMixin):
     filename = fields.CharField(max_length=2048, db_index=True, null=True)
     title = fields.CharField(max_length=2048, null=True)
     owner = fields.CharField(max_length=2048, null=True)
-    filetype = fields.CharEnumField(enum_type=Filetype, max_length=255, default=Filetype.PDF)
+    filetype = fields.CharEnumField(enum_type=Filetype, max_length=255, default=Filetype.UNKNOWN)
     classification = fields.CharEnumField(enum_type=Classification, max_length=255, default=Classification.LANGE_OVERNAME)
-    ml_prediction = fields.CharEnumField(enum_type=Classification, max_length=255, db_index=True)
+    ml_prediction = fields.CharEnumField(enum_type=Classification, max_length=255, db_index=True, null=True)
     manual_classification = fields.CharField(max_length=2048, null=True, db_index=True)
     manual_identifier = fields.CharField(max_length=2048, null=True)
     scope = fields.CharField(max_length=255, null=True)
     remarks = fields.CharField(max_length=10000, null=True)
     auditor = fields.CharField(max_length=10000, null=True)
-    last_change = fields.DateField()
+    last_change = fields.DateField(null=True)
     status = fields.CharEnumField(enum_type=Status, max_length=255, default=Status.PUBLISHED, db_index=True)
     isbn = fields.CharField(max_length=255, null=True)
     doi = fields.CharField(max_length=255, null=True)
@@ -114,7 +115,7 @@ class CopyrightItem(Model, TimestampMixin):
         table = "copyright_data"
 
     def __str__(self):
-        return self.filename + " (" + self.material_id + ")"
+        return str(self.filename) + " (" + str(self.material_id) + ")"
 
 class MissingCourse(Model, TimestampMixin):
     """
@@ -169,6 +170,9 @@ class Person(Model, TimestampMixin):
     email = fields.CharField(max_length=2048, null=True)
     faculty = fields.ForeignKeyField('models.Faculty', related_name='faculty_employees', null=True, to_field='abbreviation')
     people_page_url = fields.CharField(max_length=2048, null=True)
+    orgs = fields.ManyToManyField('models.Organization', related_name='org_employees')
+    courses = fields.ManyToManyField('models.Course', related_name='course_employees')
+    programmes = fields.ManyToManyField('models.Programme', related_name='programme_employees')
 
     class Meta:
         table = "person_data"
@@ -201,9 +205,10 @@ class LLMClassification(Model, TimestampMixin):
     license = fields.JSONField()
     topic = fields.JSONField()
 
+    used_material_id = fields.IntField()
+
     class Meta:
         table = "llm_classification_data"
-
 
 class Organization(Model, TimestampMixin):
     """

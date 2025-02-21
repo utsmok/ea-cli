@@ -80,6 +80,7 @@ class ColInfo:
 class DirSetting(Enum):
     """Enum for directories expected by the script"""
     RAW_COPYRIGHT_DATA = "raw_copyright_data"
+    RAW_COPYRIGHT_DATA_FULL = "full_data"
     EXPORT_TO_SURF = "export_to_surf"
     FACULTIES_DIR = "faculties_dir"
     ALL_ITEMS_DIR = "all_items_dir"
@@ -384,6 +385,7 @@ class Settings:
         """
         Parse the settings for the key 'directories' in settings.yaml into the dirs attribute of the Settings dataclass
         """
+        tmp = {}
         for key, path in raw_dir_strs.items():
             # turn str key into DefaultDirs enum
             try:
@@ -392,10 +394,15 @@ class Settings:
                 logger.error(f"Unrecognized directory type {key} (with path: {path}). Skipping.")
                 continue
             try:
+                if key == DirSetting.RAW_COPYRIGHT_DATA_FULL:
+                    tmp[key] = path
                 self.dirs[key] = Directory(path=path)
-
             except Exception as e:
                 logger.error(f"Error while creating directory {key} with path {path}: {e}")
+
+        if tmp:
+            self.dirs[DirSetting.RAW_COPYRIGHT_DATA_FULL] = Directory(path=self.dirs[DirSetting.RAW_COPYRIGHT_DATA].full / tmp[DirSetting.RAW_COPYRIGHT_DATA_FULL])
+
     def parse_files(self, raw_file_strs:dict[str,str]) -> None:
         """
         Parse the settings for the key 'files' in settings.yaml into the files attribute of the Settings dataclass
