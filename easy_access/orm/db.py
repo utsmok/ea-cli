@@ -1,11 +1,12 @@
 """
 functions to manage the db, add items, cleanup, etc.
 """
+from sqlalchemy import create_engine
 from enum import Enum
 from collections import Counter
 from tortoise import Tortoise
 from easy_access.orm.models import (
-    Organization, Programme, Person, Course, Faculty, LLMClassification, MissingCourse, CopyrightItem,
+    Organization, Programme, Person, Course, Faculty, LLMClassification, MissingCourse, CopyrightItem, CourseEmployee,
     Infringement, WorkflowStatus, Filetype, Status, Classification, Period
     )
 from easy_access.settings import SETTINGS, DirSetting, SettingsFaculty, SettingsProgramme, FileSetting
@@ -152,7 +153,6 @@ async def load_base_data() -> None:
             warn(f"Error reading person_data.json: {e}")
             return
 
-        person_dicts = []
         existing_person_names = await Person().all().values("input_name")
         existing_person_names = {p['input_name'] for p in existing_person_names}
         for person in person_data:
@@ -196,39 +196,10 @@ async def load_base_data() -> None:
                 except Exception as e:
                     warn(f"Error adding org {org} to person: {e}")
                     continue
-            person_dict['orgs'] = orglist
 
-            courses: list[dict[str, str]] = person.get('courses', [])
-            course_list = []
-            for course in courses:
-                try:
-                    course_obj = await Course.get_or_none(cursuscode=course.get('course_code'))
-                    if course_obj:
-                        course_list.append(course_obj)
-                    else:
-                        await MissingCourse.get_or_create(defaults={"cursuscode":course.get('course_code')}, cursuscode=course.get('course_code'))
-                except Exception as e:
-                    warn(f"Error adding course to person: {e}")
-                    continue
-            if course_list:
-                person_dict['courses'] = course_list
-
-            programmes: list[dict[str, str]] = person.get('programmes', [])
-            programme_list = []
-            for programme in programmes:
-                name = programme.get('name').replace('Master', "").replace('Bachelor', "").strip()
-                if not name:
-                    continue
-                programme_obj = await Programme.get_or_none(name=name, abbreviation=programme.get('abbr'))
-                if programme_obj:
-                    programme_list.append(programme_obj)
-
-            if programme_list:
-                person_dict['programmes'] = programme_list
-
-            person_dicts.append(person_dict)
-
-        await Person.bulk_create(objects=[Person(**p) for p in person_dicts])
+            person = await Person.create(**person_dict)
+            if orglist:
+                await person.orgs.add(*orglist)
 
     async def link_persons_to_courses() -> Counter:
         """
@@ -254,47 +225,46 @@ async def load_base_data() -> None:
             if not course_obj:
                 continue
 
-
             teachers = course_data.get('teachers', [])
             for teacher_name in teachers:
                 teacher_obj = await Person.get_or_none(input_name=teacher_name)
                 if teacher_obj:
-                    await course_obj.teachers.add(teacher_obj)
+                    await CourseEmployee.get_or_create(course=course_obj, person=teacher_obj, role="teacher")
                     counter['teachers'] += 1
 
             contacts = course_data.get('contacts', [])
             for contact_name in contacts:
                 contact_obj = await Person.get_or_none(input_name=contact_name)
                 if contact_obj:
-                    await course_obj.contacts.add(contact_obj)
+                    await CourseEmployee.get_or_create(course=course_obj, person=contact_obj, role="contact")
                     counter['contacts'] += 1
 
             tutors = course_data.get('tutors', [])
             for tutor_name in tutors:
                 tutor_obj = await Person.get_or_none(input_name=tutor_name)
                 if tutor_obj:
-                    await course_obj.tutors.add(tutor_obj)
+                    await CourseEmployee.get_or_create(course=course_obj, person=tutor_obj, role="tutor")
                     counter['tutors'] += 1
 
             docenten = course_data.get('contacts', [])
             for docent_name in docenten:
                 docent_obj = await Person.get_or_none(input_name=docent_name)
                 if docent_obj:
-                    await course_obj.docenten.add(docent_obj)
+                    await CourseEmployee.get_or_create(course=course_obj, person=docent_obj, role="docent")
                     counter['docenten'] += 1
 
             examinators = course_data.get('examinators', [])
             for examinators_name in examinators:
                 examinator_obj = await Person.get_or_none(input_name=examinators_name)
                 if examinator_obj:
-                    await course_obj.examinators.add(examinator_obj)
+                    await CourseEmployee.get_or_create(course=course_obj, person=examinator_obj, role="examinator")
                     counter['examinators'] += 1
 
             unknown_roles = course_data.get('unknown_role', [])
             for unknown_role_name in unknown_roles:
                 unknown_role_obj = await Person.get_or_none(input_name=unknown_role_name)
                 if unknown_role_obj:
-                    await course_obj.unknown_roles.add(unknown_role_obj)
+                    await CourseEmployee.get_or_create(course=course_obj, person=unknown_role_obj, role="unknown_role")
                     counter['unknown_roles'] += 1
 
         return counter
@@ -695,6 +665,7 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
 
     cool(f'Done updating!')
     await Tortoise.close_connections()
+
 async def load_new_llm_classifications() -> None:
     """
     load llm classifications from .json files in the classifications dir
@@ -704,22 +675,41 @@ async def load_new_llm_classifications() -> None:
     existing_classifications = {int(m['used_material_id']) for m in existing_classifications}
     info(f'# of existing llm classifications: {len(existing_classifications)}')
     # load jsons to list of dicts
+    data_list: list[dict] = []
     try:
+        all_files = [f for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.name.endswith('.json')]
+        old_files = [f for f in all_files if '_old' in f.name]
+        if old_files:
+            info(f'Found {len(old_files)} old json files. Removing...')
+            for f in old_files:
+                f.delete()
+
         all_files = [f for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.name.endswith('.json')]
         json_mat_ids = {int(f.name.replace('.json','').strip()):f for f in all_files}
         info(f'# of jsons with data found: {len(json_mat_ids)}')
         remaining_jsons = [json_mat_ids.get(m) for m in json_mat_ids if m not in existing_classifications]
         info(f'# of jsons with data not in db: {len(remaining_jsons)}')
-        data_list:list[dict] = []
+        deletelist: list[File] = []
         for file in remaining_jsons:
-            with open(file.path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                data['used_material_id'] = int(file.name.replace('.json','').strip())
-                data_list.append(data)
+            try:
+                with open(file.path, 'r', encoding='utf-8', errors='ignore') as f:
+                    data = json.load(f)
+                    data['used_material_id'] = int(file.name.replace('.json','').strip())
+                    if not data.get('allowed_usage') or data.get('allowed_usage') == '':
+                        deletelist.append(file)
+                    else:
+                        data_list.append(data)
+            except Exception as e:
+                warn(f'Error loading json file {file.name}: {e}')
+                continue
 
         cool(f'Retrieved {len(data_list)} new llm classifications, now adding to db.')
+        if deletelist:
+            for f in deletelist:
+                f.delete()
     except Exception as e:
-        ...
+        warn(f'Error loading llm classifications: {e}')
+
 
     if not data_list:
         info('No new llm classifications found.')
@@ -750,7 +740,7 @@ async def load_new_llm_classifications() -> None:
                     used_material_id = int(d.get('used_material_id',0))
                 ))
             except Exception as e:
-                warn(f'error while trying to create llm classification object. Error: {e}. Input data: {d}.')
+                warn(f'error while trying to create llm classification object. Error: {e}.')
         try:
             await LLMClassification.bulk_create(new_objects)
         except Exception as e:
@@ -760,7 +750,7 @@ async def load_new_llm_classifications() -> None:
                     await item.save()
                 except Exception as e:
                     logger.error(e)
-                    warn(f'error {e} while trying to save item {item} with material_id {item.used_material_id}. Skipping for now.')
+                    warn(f'error {e} while trying to save item {item}. Skipping for now.')
 
         cool(f'Created {len(new_objects)} new llm classifications in db. Now linking to copyright items in db.')
     await link_llm_classifications_to_copyright_items()
@@ -772,7 +762,6 @@ async def link_llm_classifications_to_copyright_items() -> None:
     # get all copyright items that do not have a llm classification
     items_to_update = await CopyrightItem.filter(llm_classification=None).all()
     missing_classifications = []
-    savelist: list[CopyrightItem] = []
     # load dedupe info from .replace files
     replace_files = {f.name.split('_')[0]:f.name.split('_')[1] for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.name.endswith('.replace')}
 
@@ -784,23 +773,18 @@ async def link_llm_classifications_to_copyright_items() -> None:
             llm_classification = await LLMClassification.get_or_none(used_material_id=material_id)
             if llm_classification:
                 item.llm_classification = llm_classification
-                savelist.append(item)
+                await item.save()
             else:
                 missing_classifications.append(item.material_id)
         except Exception as e:
             warn(f'Error while trying to get llm classification for item {item.material_id}: {e}')
             continue
-    if savelist:
-        try:
-            await CopyrightItem.bulk_update(savelist, fields=["llm_classification"])
-        except Exception as e:
-            warn(f'Error while trying to bulk update items: {e}')
+
     info(f'Missing {len(missing_classifications)} llm classifications of {len(items_to_update)} total items.')
 async def link_courses_to_copyright_items() -> None:
 
     items_w_prefetch = await CopyrightItem.all().prefetch_related('courses')
     info(f'got {len(items_w_prefetch)} items from db')
-
 
     # for each of the items, extract the course code (see enrichment.py)
     # then match with existing course item in db
@@ -829,12 +813,9 @@ async def link_courses_to_copyright_items() -> None:
                         continue
                     await item.courses.add(course)
                     links_added += 1
-                else:
-                    warn(f'Could not find course {course_code} for item {item.material_id}.')
             except Exception as e:
                 warn(f'Error while trying to get course {course_code} for item {item.material_id}: {e}')
-    cool(f'Found {empty} items without any courses. Added {links_added} links, from {course_codes_found} found coursecodes.')
-    cool(f'Remaining courseless items: {await CopyrightItem.filter(courses=None).count()}')
+    cool(f'Found {empty} items without any courses. Added {links_added} links to one of the {course_codes_found} found coursecodes.')
 async def update_copyright_relations() -> None:
     """
     Go through the copyright items in the db
@@ -845,21 +826,89 @@ async def update_copyright_relations() -> None:
     await link_courses_to_copyright_items()
     await Tortoise.close_connections()
 
-async def retrieve_full_data() -> pl.DataFrame:
+def retrieve_full_data() -> pl.DataFrame:
     """
     Retrieve all copyright items from db
     includes all relevant data from other models linked to the items
     """
-
-    await init()
-    await update_copyright_relations()
-    all_items = await CopyrightItem.all().prefetch_related(
-        'courses',
-        'courses__contacts',
-        'courses__contacts__orgs',
-        'courses__contacts__faculty',
-        'llm_classification',
-        'faculty',
+    query="""WITH CourseDataAggregated AS (
+        SELECT
+            cdcd.copyright_data_id,
+            (SELECT GROUP_CONCAT(cursuscode, ' | ') FROM (SELECT DISTINCT CAST(cd.cursuscode AS TEXT) as cursuscode FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS cursuscodes,
+            (SELECT GROUP_CONCAT(programme, ' | ') FROM (SELECT DISTINCT cd.programme FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS programmes,
+            (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT DISTINCT cd.name FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS course_names
+        FROM copyright_data_course_data cdcd
+    ), PersonDataAggregated AS (
+        SELECT
+        ce.course_id,
+        (SELECT GROUP_CONCAT(email, ' | ') FROM (SELECT DISTINCT pd.email FROM person_data pd WHERE pd.id = ce.person_id)) as course_contacts_emails,
+        (SELECT GROUP_CONCAT(main_name, ' | ') FROM (SELECT DISTINCT pd.main_name FROM person_data pd WHERE pd.id = ce.person_id)) as course_contacts_names,
+        (SELECT GROUP_CONCAT(abbreviation, ' | ') FROM (SELECT DISTINCT f.abbreviation FROM faculty f LEFT JOIN person_data pd ON pd.faculty_id = f.abbreviation WHERE pd.id = ce.person_id)) as course_contacts_faculties,
+        (SELECT GROUP_CONCAT(full_abbreviation, ' | ') FROM (
+            SELECT DISTINCT org.full_abbreviation
+            FROM organization_data org
+            LEFT JOIN person_data_organization_data pdod on pdod.organization_id = org.id
+            LEFT JOIN person_data pd ON pd.id = pdod.person_data_id
+            WHERE pd.id = ce.person_id
+        )) as course_contacts_organizations
+        FROM course_employee ce
+        WHERE ce.role = 'contact'
+    )
+    SELECT
+        cd.*,
+        llm.allowed_usage as llm_allowed_usage,
+        llm.allowed_usage_reasoning as llm_allowed_usage_reason,
+        llm.copyright_status as llm_copyright,
+        llm.copyright_classification_reason as llm_copyright_reason,
+        llm.item_type as llm_item_type,
+        llm.remarks as llm_remarks,
+        llm.item_title as llm_title,
+        llm.copyright_holder as llm_copyright_holder,
+        llm.publisher_name as llm_publisher,
+        llm.isbn as llm_isbn,
+        llm.doi as llm_doi,
+        llm.source_url as llm_source_url,
+        llm.license as llm_license,
+        llm.author_names as llm_authors,
+        cda.cursuscodes,
+        cda.programmes,
+        cda.course_names,
+        pda.course_contacts_names,
+        pda.course_contacts_emails,
+        pda.course_contacts_faculties,
+        pda.course_contacts_organizations
+    FROM copyright_data cd
+    LEFT JOIN llm_classification_data llm ON cd.llm_classification_id = llm.id
+    LEFT JOIN CourseDataAggregated cda ON cd.material_id = cda.copyright_data_id
+    LEFT JOIN copyright_data_course_data cdcd ON cd.material_id = cdcd.copyright_data_id
+    LEFT JOIN PersonDataAggregated pda ON cdcd.course_id = pda.course_id;
+    """
+    engine = create_engine("sqlite:///db.sqlite3")
+    df: pl.DataFrame = pl.read_database(query=query, connection=engine.connect(), infer_schema_length=None)
+    df = df.drop(
+            [
+                "llm_classification_id",
+                'created_at',
+                'modified_at',
+                'possible_fine',
+                'infringement'
+            ]
+        ).rename(
+            mapping={
+                "faculty_id":"faculty"
+            }
+        ).with_columns(
+            [
+                pl.col(name=colname).
+                str.json_decode(infer_schema_length=None).
+                list.join(separator=' | ')
+                for colname in [
+                    "llm_isbn",
+                    "llm_doi",
+                    "llm_source_url",
+                    "llm_license",
+                    "llm_authors"
+                ]
+            ]
         )
-
-    # now extract the info, put into dataframe, return
+    return df

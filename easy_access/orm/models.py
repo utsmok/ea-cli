@@ -1,6 +1,8 @@
 """
 defines classes for the ORM to store data in a database
 """
+from typing import Any
+
 from tortoise.models import Model
 from tortoise import fields
 from enum import Enum
@@ -144,18 +146,30 @@ class Course(Model, TimestampMixin):
     programme = fields.CharField(max_length=2048, null=True) # try to turn into a relation to Programme later.
     notes = fields.CharField(max_length=10000, null=True)  # made null=True for optional notes
     category = fields.CharField(max_length=2048, null=True)  # made null=True for optional category
-    teachers = fields.ManyToManyField('models.Person', related_name='course_teacher')
-    contacts = fields.ManyToManyField('models.Person', related_name='course_contact')
-    docenten = fields.ManyToManyField('models.Person', related_name='course_docent')
-    examinators = fields.ManyToManyField('models.Person', related_name='course_examinator')
-    unknown_role = fields.ManyToManyField('models.Person', related_name='course_unknown_role')
-    tutors = fields.ManyToManyField('models.Person', related_name='course_tutor')
+    teachers = fields.ManyToManyField('models.Person',
+                                    through='models.CourseEmployee',
+                                    forward_key='person_id',
+                                    backward_key='course_cursuscode',
+                                    related_name='courses',
+                                    )
 
     class Meta:
         table = "course_data"
 
     def __str__(self):
         return self.name + " (" + str(self.cursuscode) + ")"
+
+class CourseEmployee(Model, TimestampMixin):
+    """
+    Many-to-many relation between Course and Person, to store the various types of teachers of a course.
+    """
+    id = fields.IntField(primary_key=True)
+    course = fields.ForeignKeyField('models.Course', related_name='course_employee')
+    person = fields.ForeignKeyField('models.Person', related_name='course_employee')
+    role = fields.CharField(max_length=2048, null=True)  # made null=True for optional role
+
+    class Meta:
+        table = "course_employee"
 
 class Person(Model, TimestampMixin):
     """
@@ -171,8 +185,6 @@ class Person(Model, TimestampMixin):
     faculty = fields.ForeignKeyField('models.Faculty', related_name='faculty_employees', null=True, to_field='abbreviation')
     people_page_url = fields.CharField(max_length=2048, null=True)
     orgs = fields.ManyToManyField('models.Organization', related_name='org_employees')
-    courses = fields.ManyToManyField('models.Course', related_name='course_employees')
-    programmes = fields.ManyToManyField('models.Programme', related_name='programme_employees')
 
     class Meta:
         table = "person_data"

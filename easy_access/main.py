@@ -126,7 +126,6 @@ class EasyAccessTool:
         Runs the functions as specified in the settings dict.
         """
 
-
         if self.retrieve_all:
             # will retrieve all data from the directories where users can enter data
             # and store it as a parquet file and csv file in the root dir
@@ -152,12 +151,13 @@ class EasyAccessTool:
                 warn("No new Copyright data found to process! Exiting...")
                 raise typer.Exit(code=1)
 
+        if self.refresh_osiris_data:
+            asyncio.get_event_loop().run_until_complete(update_osiris_data(self.copyright_data, self.only_retrieve_missing_osiris_data))
 
         # enrich copyright_data with OSIRIS data if bool is set
         if self.enrich_with_osiris_data:
             self.copyright_data = enrich_df_with_osiris_data(self.copyright_data,'full data')
             self.copyright_data = self.clean_and_validate_df(self.copyright_data)
-
 
         self.faculties = (
             self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
@@ -248,7 +248,6 @@ class EasyAccessTool:
             self.style_iter = finalize_sheet(
                 File(str(faculty_dir.full / filename)), faculty_data, self.style_iter
             )
-
 
     def create_programme_sheets(self, faculty: str) -> None:
         """
@@ -607,7 +606,6 @@ class EasyAccessTool:
             self.import_sheet_data = pl.concat([self.import_sheet_data, data], how="diagonal_relaxed")
             faculty_dict[faculty] = data
         self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter)
-
 
     def retrieve_all_data(self) -> None:
         warn(f'Retrieve all data removed because of errors.')

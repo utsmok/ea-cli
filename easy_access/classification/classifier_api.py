@@ -79,7 +79,7 @@ class Classification(BaseModel):
 
     remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
 
-client = genai.Client(api_key=gemini)
+client = None
 prompt = """From the included document, first extract and determine a list of metadata, then determine the copyright status and item type for this item.
 Finally determine the most important classification: if the item is allowed to be shared with students in the context of the University of Twente learning environment.
 Use all available (meta)data in the file or that you extracted earlier (e.g. the author name, publisher name, and copyright holder name, license statements, etc.) to help determine these statuses.
@@ -136,6 +136,9 @@ The requested output format is replicated here as a set of Python classes, inclu
         remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
 """
 
+def activate_client():
+    global client
+    client = genai.Client(api_key=gemini)
 
 async def classify_pdf(file: File, full_pdf:bool = True) -> Classification:
     try:
@@ -238,7 +241,7 @@ async def main():
     pdfs_for_mat_ids = [f for f in pdfs if "_" in f.name]
     pdf_material_ids: dict[str, File] = {f.name.split(sep='_')[0]:f for f in pdfs_for_mat_ids}
 
-
+    activate_client()
 
     # existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json']
     existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json' and f.created >= datetime.datetime(year=2025,month=2,day=17, hour=11) and "_old" not in f.name]
@@ -266,4 +269,3 @@ async def main():
             batch_start_time = time.time()
 
     result = await classify_items(pdf_batch)
-
