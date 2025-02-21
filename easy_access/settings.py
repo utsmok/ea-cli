@@ -208,7 +208,16 @@ class UniversitySettings:
     def department_mapping(self) -> dict[str, str]:
         if not self.programmes:
             self.make_programme_set()
-        return {f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}": programme.faculty_abbreviation if programme.faculty_abbreviation else "" for programme in self.programmes}
+        data = {f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}": programme.faculty_abbreviation if programme.faculty_abbreviation else "" for programme in self.programmes}
+        # manual additions here
+        tmp = {}
+        for key, value in data.items():
+            if 'Risicomanagement' in key:
+                tmp['Master Risicomanagement'] = value
+            if 'Public Management' in key:
+                tmp['Master Public Management'] = value
+        data.update(tmp)
+        return data
 
     @property
     def course_mapping(self) -> dict[str, dict[str, str]]:
@@ -223,6 +232,8 @@ class UniversitySettings:
                     data[f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}"] = programme.cluster
             if data:
                 course_mapping_dict[faculty_name] = data
+
+
         return course_mapping_dict
 
 

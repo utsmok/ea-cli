@@ -340,55 +340,80 @@ async def load_base_data() -> None:
 
     await Tortoise.close_connections()
 
+def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    rename cols to standard format
+    cast all cols to str
+    replace '-' with None
+    drop useless cols
+    """
+    df = df.with_columns(
+            pl.exclude(pl.String).cast(str)
+        ).rename(
+            lambda col: col.replace(" ", "_")
+            .replace("#", "count_")
+            .replace("*", "x")
+            .lower()
+        ).with_columns(
+            pl.when(pl.col(pl.String) != "-")
+            .then(pl.col(pl.String))
+            .name.keep()
+        )
+    if 'type' in df.columns:
+        df = df.drop('type')
+    if 'google_search_file' in df.columns:
+        df = df.drop('google_search_file')
+    return df
+async def parse_raw_copyright_item(item: dict[str, str]) -> CopyrightItem:
+    try:
+        if item.get('faculty') == 'Unmapped':
+            abbr = 'UNM'
+        else:
+            abbr = item.get('faculty')
+        faculty = await Faculty.get(abbreviation=abbr)
+    except Exception as e:
+        print(f"Error getting faculty with {item.get('faculty')}: {e}")
+    item['faculty'] = faculty
+    item['material_id'] = int(item.get('material_id'))
+    item['last_change'] = datetime.strptime(item.get('last_change'), "%Y-%m-%d")
+    item['retrieved_from_copyright_on'] = datetime.strptime(item.get('retrieved_from_copyright_on'), "%Y-%m-%d")
+    item['pagecount'] = int(item.get('pagecount'))
+    item['wordcount'] = int(item.get('wordcount'))
+    item['picturecount'] = int(item.get('picturecount'))
+    item['reliability'] = int(item.get('reliability'))
+    item['pages_x_students'] = int(item.get('pages_x_students'))
+    item['count_students_registered'] = int(item.get('count_students_registered'))
+    item['filetype'] = item.get('filetype', 'unknown') if item.get('filetype') else 'unknown'
+    try:
+        final_item = CopyrightItem(**item)
+        return final_item
+
+    except Exception as e:
+        print(f'Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}')
+        return None
 async def load_raw_items() -> None:
     """
-    Loads in the copyright data from raw exports.
+    Loads in new items from copyright export raw data
     """
     error = None
     info(f'# of items in db before loading raw items: {await CopyrightItem.all().count()}')
     try:
         file_date, df = read_copyright_export()
-        df = df.with_columns(pl.exclude(pl.String).cast(str))
-        # for all cells, if the content is '-', replace with None
-        df = df.with_columns(pl.when(pl.col(pl.String) != "-")
-        .then(pl.col(pl.String))
-        .name.keep())
-        if 'type' in df.columns:
-            df = df.drop('type')
-        if 'google_search_file' in df.columns:
-            df = df.drop('google_search_file')
+        items = standardize_dataframe(df).to_dicts()
 
-        items = df.to_dicts()
         item_list = []
+
         existing_mat_ids = await CopyrightItem.all().values("material_id")
         existing_mat_ids = {int(m['material_id']) for m in existing_mat_ids}
+
+        info(f'Read in {len(items)} raw copyright items. {len(existing_mat_ids)} items already in db.')
         for item in items:
             if int(item.get('material_id')) in existing_mat_ids:
                 continue
-            try:
-                try:
-                    if item.get('faculty') == 'Unmapped':
-                        abbr = 'UNM'
-                    else:
-                        abbr = item.get('faculty')
-                    faculty = await Faculty.get(abbreviation=abbr)
-                except Exception as e:
-                    print(f"Error getting faculty with {item.get('faculty')}: {e}")
-                item['faculty'] = faculty
-                item['material_id'] = int(item.get('material_id'))
-                item['last_change'] = datetime.strptime(item.get('last_change'), "%Y-%m-%d")
-                item['retrieved_from_copyright_on'] = datetime.strptime(item.get('retrieved_from_copyright_on'), "%Y-%m-%d")
-                item['pagecount'] = int(item.get('pagecount'))
-                item['wordcount'] = int(item.get('wordcount'))
-                item['picturecount'] = int(item.get('picturecount'))
-                item['reliability'] = int(item.get('reliability'))
-                item['pages_x_students'] = int(item.get('pages_x_students'))
-                item['count_students_registered'] = int(item.get('count_students_registered'))
-                item['filetype'] = item.get('filetype', 'unknown') if item.get('filetype') else 'unknown'
-                item_list.append(CopyrightItem(**item))
-            except Exception as e:
-                warn(f"Error adding item to db: {e}")
+            created_item: CopyrightItem = await parse_raw_copyright_item(item)
+            if not created_item:
                 continue
+            item_list.append(created_item)
 
         await CopyrightItem.bulk_create(objects=item_list)
     except Exception as e:
@@ -399,3 +424,16 @@ async def load_raw_items() -> None:
         if error:
             raise error
     await Tortoise.close_connections()
+
+
+async def update_copyright_items(data: pl.DataFrame) -> None:
+    """
+    for a given dataframe with copyright items, compare to db and update where needed
+    TODO: Determine when to update and when to keep existing data
+    """
+
+    # standardize df
+    # loop over items
+    # if item is not in db: add it
+    # else compare values in specific fields to determine if we need to update
+

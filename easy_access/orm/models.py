@@ -38,18 +38,14 @@ class Filetype(Enum):
     PNG = "png"
     UNKNOWN = "unknown"
     FILE = "file"
-
 class Status(Enum):
     PUBLISHED = "Published"
     UNPUBLISHED = "Unpublished"
     DELETED = "Deleted"
-
-
 class WorkflowStatus(Enum):
     ToDo = "ToDo"
     Done = "Done"
     InProgress = "InProgress"
-
 class Infringement(Enum):
     NO = "no"
     YES = "yes"
@@ -62,11 +58,7 @@ YYYY-SEM[12]{1} (eg. 2022-SEM1 or 2022-SEM2)
 YYYY-JAAR (eg. 2022-JAAR)
 """
 Period = Enum('Period', {f"{year}_{period}": f"{year}-{period}" for year in range(2020, 2031) for period in ["1A", "1B", "2A", "2B", "3", "SEM1", "SEM2", "JAAR"]})
-
-# get departments from settings
 Department = Enum('Department', {department: department for department in SETTINGS.university_settings.department_mapping.keys()})
-
-
 
 class CopyrightItem(Model, TimestampMixin):
     """
