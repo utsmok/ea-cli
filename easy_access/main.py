@@ -482,7 +482,7 @@ class EasyAccessTool:
         for file in faculty_files:
             if file.extension not in [".xls", ".xlsx"]:
                 continue
-            elif "overview" in file.name:
+            elif "overview" in file.name or "llm_classification" in file.name:
                 continue
             else:
                 latest_mod_date = (

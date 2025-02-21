@@ -1,6 +1,7 @@
 """
 This module uses an api-based service to classify documents.
 """
+import json
 import datetime
 import os
 from easy_access.settings import SETTINGS, DirSetting
@@ -16,6 +17,7 @@ from easy_access.classification.api_keys import gemini
 from aiometer import amap
 from pdfminer.high_level import extract_text
 from functools import partial
+
 console = Console(emoji=True, markup=True)
 
 class CopyrightStatus(str, Enum):
@@ -152,11 +154,14 @@ async def classify_pdf(file: File, full_pdf:bool = True) -> Classification:
                 ...
         else:
             print(f'Extracting text from {file.name}')
-            pdf: str = extract_text(pdf_file=file.path, maxpages=20, codec='utf-8')
+            pdf: str = extract_text(pdf_file=file.path, maxpages=8, codec='utf-8')
             if len(pdf)> 10_000:
                 pdf = pdf[:10_000]
             contents = f"\n | text content of pdf file {file.name} is as follows: |\n".join([prompt,pdf])
         print(f'sent request for {mat_id}')
+        if not mat_id:
+            print(f'Could not extract material id from {file.name}')
+            return
         response = client.models.generate_content(
             model='gemini-2.0-flash',
             contents=contents,
@@ -226,7 +231,6 @@ async def main():
         with open(file.path, "rb") as f:
             return len(regex.findall(f.read()))
 
-    delete_files()
     all_files = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
     pdfs = [f for f in all_files if f.extension == '.pdf']
     pdfs_found = len(pdfs)
@@ -234,8 +238,11 @@ async def main():
     pdfs_for_mat_ids = [f for f in pdfs if "_" in f.name]
     pdf_material_ids: dict[str, File] = {f.name.split(sep='_')[0]:f for f in pdfs_for_mat_ids}
 
+
+
     # existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json']
-    existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json' and f.created >= datetime.datetime(year=2025,month=2,day=17, hour=11)]
+    existing_classifications = [f.name.rstrip('.json') for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if f.extension == '.json' and f.created >= datetime.datetime(year=2025,month=2,day=17, hour=11) and "_old" not in f.name]
+
     if existing_classifications:
         pdfs = [pdf_material_ids.get(f) for f in pdf_material_ids if f not in existing_classifications]
 
@@ -246,17 +253,17 @@ async def main():
 
     for pdf in pdfs:
         pdf_batch.append(pdf)
-        if len(pdf_batch) == 15: # rate limit to 30 requests per minute
-            print('awaiting results for a batch of 15 files...')
+        if len(pdf_batch) == 10: # rate limit to 10 requests per minute
+            print('awaiting results for a batch of 10 files...')
             result = await classify_items(pdf_batch)
             while result != 1:
                 pass
-            if time.time()-batch_start_time < 60:
-                console.print(f'Sleeping for {60-(time.time()-batch_start_time)} seconds to avoid rate limit.')
-                await asyncio.sleep(60-(time.time()-batch_start_time))
+            if time.time()-batch_start_time < 120:
+                console.print(f'Sleeping for {120-(time.time()-batch_start_time)} seconds to avoid rate limit.')
+                await asyncio.sleep(120-(time.time()-batch_start_time))
             delete_files()
             pdf_batch = []
             batch_start_time = time.time()
 
     result = await classify_items(pdf_batch)
-20509240
+

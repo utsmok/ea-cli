@@ -255,7 +255,7 @@ class Settings:
     def load(self) -> None:
         """Load the settings from the settings.yaml file"""
         try:
-            with open(file=self.settings_file.path) as f:
+            with open(file=self.settings_file.path, mode="r", encoding="utf-8") as f:
                 self.raw_settings = yaml.load(stream=f, Loader=yaml.FullLoader)
         except Exception as e:
             logger.error(f"Error while loading settings from {self.settings_file}: {e}")
@@ -481,3 +481,4 @@ except Exception as e:
 
 if isinstance((PUBLISHER_NAMES), dict):
     PUBLISHER_NAMES = set(PUBLISHER_NAMES.values())
+

@@ -44,7 +44,7 @@ import typer
 from typing import Annotated
 from easy_access.utils import cool, warn
 from easy_access.settings import Functions, EasyAccessSettings, SETTINGS
-from easy_access.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
+from easy_access.sheets.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
 from pathlib import Path
 from easy_access.main import EasyAccessTool
 from easy_access.classification.downloader import Downloader

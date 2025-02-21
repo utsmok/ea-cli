@@ -8,8 +8,8 @@ import time
 from datetime import datetime
 import Levenshtein
 
-default_download_dir = r"C:\Users\Sam\Downloads"
-default_profile_path = r"C:\Users\Sam\AppData\Local\Google\Chrome\User Data"
+default_download_dir = r"C:\Users\MokS\Downloads"
+default_profile_path = r"C:\Users\MokS\AppData\Local\Google\Chrome\User Data"
 
 class Downloader:
     driver: webdriver.Chrome
@@ -24,12 +24,18 @@ class Downloader:
         my_options.add_argument(f"--user-data-dir={profile_path}")
         my_options.add_argument(f"--profile-directory={profile_name}")
         my_options.add_argument("--headless")
+        my_options.add_argument("--enable-downloads")
+        my_options.add_argument("--no-sandbox")
+        my_options.enable_downloads = True
 
         my_options.add_experimental_option("prefs", {
             "download.default_directory":str(self.download_dir.full),
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
-            "plugins.always_open_pdf_externally": True
+            "plugins.always_open_pdf_externally": True,
+            "safebrowsing.enabled": False,
+            "safebrowsing_for_trusted_sources_enabled": False,
+
         })
         cool(f'initiating chrome driver')
         self.driver = webdriver.Chrome(
@@ -40,6 +46,7 @@ class Downloader:
             js = f.read()
         cool(f'injecting stealth.js')
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {'source': js})
+        info(f'Download dir: {self.download_dir.full}. profile path: {profile_path}.')
         cool(text=f'done setting up selenium')
 
     def get_already_downloaded_material_ids(self) -> list[str]:
@@ -52,21 +59,27 @@ class Downloader:
                 warn(f'Could not extract material_id from {pdf}?')
         return material_ids_downloaded
 
+    def get_already_classified_material_ids(self) -> list[str]:
+        return [file.name.rstrip('.json') for file in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if file.extension == '.json' and '_old' not in file.name]
+
     def get_urls_from_full_data(self) -> pl.DataFrame:
         all_items: pl.DataFrame =pl.read_parquet(source=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / 'full_data.parquet', columns=['material_id', 'url', 'workflow_status', 'filename'])
         all_item_len = len(all_items)
 
         material_ids_downloaded = self.get_already_downloaded_material_ids()
+        material_ids_classified = self.get_already_classified_material_ids()
         amount_done = len(all_items.filter(all_items['workflow_status'] == 'Done'))
         amount_downloaded = len(all_items.filter(all_items['material_id'].is_in(material_ids_downloaded)))
+        amount_classified = len(all_items.filter(all_items['material_id'].is_in(material_ids_classified)))
         #all_items = all_items.filter(all_items['workflow_status']!= 'Done')
         all_items = all_items.filter(~all_items['material_id'].is_in(material_ids_downloaded))
+        all_items = all_items.filter(~all_items['material_id'].is_in(material_ids_classified))
 
         urls = all_items.with_columns(
             pl.col('url').replace(old="-",new=None).replace("", None)
         ).select(['url', 'material_id', 'filename'])
         urls = urls.drop_nulls('url').unique('url')
-        info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) and files marked as done ({amount_done}).')
+        info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) and files already classified ({amount_classified}).')
         return urls
 
     def rename_pdfs(self) -> None:
@@ -131,11 +144,11 @@ class Downloader:
                     time.sleep(5)
                 if max_amount and index >= max_amount:
                     print(f'\n')
-                    info(f'[{index}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
+                    info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
                     break
                 if index % step_len == 0:
                     print(f'\n')
-                    info(f'[{index}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
+                    info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
         except Exception as e:
             warn(f'Error downloading file: {e}')
         finally:
@@ -147,7 +160,10 @@ class Downloader:
                 info(f'Done! retrieved {len(results)} files in {time.time() - start_time:.2f} seconds')
                 all_files = list(self.download_dir.files)
                 all_files: list[File] = sorted(all_files, key=lambda x: x.created)
+                info(f"first_datetime: {first_datetime}. all_files len: {len(all_files)}")
+
                 selected_files: dict[str, File] = {file.name:file for file in all_files if file.created > first_datetime}
+                info(f"selected files len: {len(selected_files)}")
                 if selected_files:
                     info(f'# of files found in dir: {len(selected_files)}')
                     if len(selected_files) < len(results):
@@ -159,6 +175,7 @@ class Downloader:
                 # sort results by 'created' datetime
                 results = sorted(results, key=lambda x: x.get('created'))
                 skipped = 0
+                info(f'Now renaming {len(results)} files')
                 for result in results:
                     print(f'.', end='')
                     file: File | None = selected_files.get(result['filename'])
@@ -171,8 +188,9 @@ class Downloader:
                                 continue
                             file = selected_files.get(closest_match)
                     if file:
+                        info(f'renaming {file.name} to standard format (material_id: {result["material_id"]})')
                         file.rename(f'{result["material_id"]}_{result["filename"]}_{result["created"].strftime("%Y-%m-%d_%H-%M-%S")}.pdf')
-                print(f'\n')
+                        print(f'\n')
                 if skipped:
                     if skipped == missing:
                         cool("Number of skipped files matches number of missing files. All good.")

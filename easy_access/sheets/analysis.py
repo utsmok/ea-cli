@@ -1,8 +1,8 @@
 import polars as pl
 from easy_access.settings import SETTINGS, DirSetting, COURSE_MAPPING, FINE_AMOUNT
-from easy_access.enrichment import enrich_df_with_osiris_data
+from easy_access.sheets.enrichment import enrich_df_with_osiris_data
 from easy_access.utils import info, Directory, File
-from easy_access.sheet import finalize_sheet, store_complete_data
+from easy_access.sheets.sheet import finalize_sheet, store_complete_data
 from datetime import datetime
 import locale
 from rich.console import Console
