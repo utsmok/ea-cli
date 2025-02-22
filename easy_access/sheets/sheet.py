@@ -18,46 +18,6 @@ from openpyxl.worksheet.table import TableStyleInfo
 from openpyxl.worksheet.table import Table as ExcelTable
 import typer
 
-def read_other_sheet(file: File) -> pl.DataFrame:
-        """
-        Reads in the data from another sheet as the datasource, instead of using CopyRight data.
-        Sheet should be formatted in the same way as the faculty output sheets.
-        It will read in the first sheet in the .xlsx file.
-        It will do a quick check on the columns in the sheets to prevent the most basic errors.
-        """
-
-        info(f"Reading in data from {file.name}")
-        copyright_data = pl.read_excel(file.path)
-        latest_file_date = file.modified.strftime("%Y-%m-%d")
-        info(
-            f"Read {len(copyright_data)} items from {file.name}. Item was lasted changed on {latest_file_date}"
-        )
-
-        if "workflow_status" not in copyright_data.columns:
-            copyright_data = copyright_data.with_columns(
-                pl.Series("workflow_status", ["ToDo"] * len(copyright_data))
-            )
-        if "retrieved_from_copyright_on" not in copyright_data.columns:
-            if "added_to_sheet_on" not in copyright_data.columns:
-                copyright_data = copyright_data.with_columns(
-                    pl.Series(
-                        "retrieved_from_copyright_on",
-                        [latest_file_date] * len(copyright_data),
-                    )
-                )
-            else:
-                copyright_data = copyright_data.rename(
-                    {"added_to_sheet_on": "retrieved_from_copyright_on"}
-                )
-
-        latest_file_date = max(
-            copyright_data.select(pl.col("retrieved_from_copyright_on"))
-            .to_series()
-            .to_list()
-        )
-
-        return latest_file_date, copyright_data.select(SETTINGS.data_settings.complete_data_cols)
-
 def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
         """
         Reads in data from the latest copyright export file in the copyright dir;
@@ -131,6 +91,7 @@ def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
         except ValueError:
             warn(f"No file found.")
             raise typer.Exit(code=1)
+
 @dataclass
 class DataEntrySheet:
     """

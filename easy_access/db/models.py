@@ -1,7 +1,6 @@
 """
-defines classes for the ORM to store data in a database
+ORM models for the database.
 """
-from typing import Any
 
 from tortoise.models import Model
 from tortoise import fields
