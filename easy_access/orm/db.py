@@ -755,6 +755,7 @@ async def load_new_llm_classifications() -> None:
         cool(f'Created {len(new_objects)} new llm classifications in db. Now linking to copyright items in db.')
     await link_llm_classifications_to_copyright_items()
     await Tortoise.close_connections()
+
 async def link_llm_classifications_to_copyright_items() -> None:
     """
     Link llm classifications to copyright items
@@ -783,7 +784,7 @@ async def link_llm_classifications_to_copyright_items() -> None:
     info(f'Missing {len(missing_classifications)} llm classifications of {len(items_to_update)} total items.')
 async def link_courses_to_copyright_items() -> None:
 
-    items_w_prefetch = await CopyrightItem.all().prefetch_related('courses')
+    items_w_prefetch = await CopyrightItem.all()
     info(f'got {len(items_w_prefetch)} items from db')
 
     # for each of the items, extract the course code (see enrichment.py)
@@ -791,13 +792,10 @@ async def link_courses_to_copyright_items() -> None:
     # if missing, add to list to retrieve later
     links_added = 0
     course_codes_found = 0
-    empty = 0
     for item in items_w_prefetch:
-        if not item.courses:
-            empty += 1
         course_codes = determine_course_code(item.course_code, item.course_name)
         if not course_codes or len(course_codes) == 0:
-            warn(f'Could not determine course code for item {item["material_id"]} with input course code {item["course_code"]} and course name {item["course_name"]}.')
+            warn(f'Could not determine course code for item {item.material_id} with input course code {item.course_code} and course name {item.course_name}.')
         course_codes = list(course_codes)
 
         for course_code in course_codes:
@@ -809,13 +807,11 @@ async def link_courses_to_copyright_items() -> None:
 
                 course = await Course.get_or_none(cursuscode=cursuscode)
                 if course:
-                    if course in item.courses:
-                        continue
                     await item.courses.add(course)
                     links_added += 1
             except Exception as e:
                 warn(f'Error while trying to get course {course_code} for item {item.material_id}: {e}')
-    cool(f'Found {empty} items without any courses. Added {links_added} links to one of the {course_codes_found} found coursecodes.')
+    cool(f'Added {links_added} links to {course_codes_found} found coursecodes.')
 async def update_copyright_relations() -> None:
     """
     Go through the copyright items in the db
