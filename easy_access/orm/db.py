@@ -1,22 +1,22 @@
 """
 functions to manage the db, add items, cleanup, etc.
 """
+from typing import Any
 from sqlalchemy import create_engine
 from enum import Enum
 from collections import Counter
 from tortoise import Tortoise
 from easy_access.orm.models import (
-    Organization, Programme, Person, Course, Faculty, LLMClassification, MissingCourse, CopyrightItem, CourseEmployee,
+    Organization, Programme, Person, Course, Faculty, LLMClassification, MissingCourse, CopyrightItem, CourseEmployee, ItemUpdate,
     Infringement, WorkflowStatus, Filetype, Status, Classification, Period
     )
 from easy_access.settings import SETTINGS, DirSetting, SettingsFaculty, SettingsProgramme, FileSetting
 import json
-from easy_access.utils import warn, info, cool, File
+from easy_access.utils import warn, info, cool, File, determine_course_code
 from easy_access.sheets.sheet import read_copyright_export
 import polars as pl
 from datetime import datetime, timezone
 from loguru import logger
-from easy_access.sheets.enrichment import determine_course_code
 
 async def init() -> None:
     await Tortoise.init(
@@ -25,250 +25,251 @@ async def init() -> None:
     )
 async def create() -> None:
     await Tortoise.generate_schemas(safe=True)
+
+async def load_osiris_data() -> None:
+    """
+    Creates Courses from the osiris_data.json file.
+    Staff data is added later once people data has been loaded.
+    """
+    if not SETTINGS.files[FileSetting.OSIRIS_DATA].exists:
+        warn("No osiris_data.json file found; data not loaded to DB.")
+        return
+
+    try:
+        with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, 'r', encoding='utf-8') as f:
+            osiris_data: dict[str, dict[str,str|list[str]]] = json.load(f)
+    except Exception as e:
+        warn(f"Error reading osiris_data.json: {e}")
+        return
+
+
+    course_dicts = []
+    existing_course_codes = await Course().all().values("cursuscode")
+    existing_course_codes = {int(c['cursuscode']) for c in existing_course_codes}
+    for course_data in osiris_data.values():
+        if int(course_data.get('cursuscode',0)) in existing_course_codes or not course_data.get('cursuscode'):
+            continue
+        course_dict: dict[str, str | list[str] | None] = {
+            "cursuscode": int(course_data.get('cursuscode')),
+            "internal_id": int(course_data.get('internal_id')),
+            "name": course_data.get('name', None),
+            "short_name": course_data.get('short_name', None),
+            "ec": int(round(float(course_data.get('ec',0).replace(',','.')),0)),
+            "programme": course_data.get('programme', None),
+            "notes": course_data.get('notes', None),
+            "category": course_data.get('category', None),
+        }
+
+        existing_course_codes.add(int(course_data.get('cursuscode')))
+
+        year: str = course_data.get('year')
+        if '-' in year:
+            year = int(year.split('-')[0])
+            course_dict['year'] = year
+
+        faculty = await Faculty.get_or_none(abbreviation=course_data.get('faculty'))
+        if faculty:
+            course_dict['faculty'] = faculty
+
+        course_dicts.append(course_dict)
+
+    await Course.bulk_create(objects=[Course(**c) for c in course_dicts])
+
+async def load_org_data() -> None:
+    """
+    From SETTINGS.university_settings.faculties, create Faculty and Programme objects.
+    """
+    faculties: list[SettingsFaculty] = SETTINGS.university_settings.faculties
+    # first retrieve or create the university org
+    university, _ = await Organization.get_or_create(defaults={"name":"University of Twente", "abbreviation":"UT", "full_abbreviation":"UT", "parent_organization":None, "hierarchy_level":0}, abbreviation="UT")
+
+    for faculty in faculties:
+        faculty_obj, _ = await Faculty.get_or_create(defaults={
+                "name": faculty.name,
+                "abbreviation": faculty.abbreviation,
+                "full_abbreviation": faculty.abbreviation,
+                "parent_organization": university,
+                "hierarchy_level": 1
+            }, abbreviation=faculty.abbreviation
+        )
+        progamme_list = []
+        existing_programme_names = await Programme().all().values("name")
+        existing_programme_names = {p['name'] for p in existing_programme_names}
+        for programme in faculty.programmes:
+            if programme.name in existing_programme_names:
+                continue
+            if programme.abbreviation:
+                abbr = programme.abbreviation
+            else:
+                abbr = ""
+                if "master" in programme.name.lower():
+                    abbr = "M-"
+                elif "bachelor" in programme.name.lower():
+                    abbr = "B-"
+                else:
+                    abbr = "O-"
+
+                removed_prefix = programme.name.lower().replace('bachelor', '').replace('master', '').strip()
+                if " " in removed_prefix:
+                    parts = removed_prefix.split(' ')
+                    if len(parts) == 2:
+                        abbr += parts[0][0] + parts[1][0]
+                    elif len(parts) >= 3:
+                        abbr += parts[0][0] + parts[1][0] + parts[2][0]
+                else:
+                    abbr += removed_prefix[:3]
+
+
+            programme_dict = {
+                "name": programme.name,
+                "abbreviation": abbr,
+                "programme_type": programme.programme_type if programme.programme_type else None,
+                "faculty": faculty_obj,
+                "cluster": programme.cluster if programme.cluster else None
+            }
+            progamme_list.append(programme_dict)
+
+
+
+        await Programme.bulk_create(objects=[Programme(**p) for p in progamme_list])
+
+async def load_person_data() -> None:
+    """
+    Load data from the person_data.json file into the db.
+    Adds Persons and Orgs, creates MissingCourses where necessary.
+    """
+
+
+    if not SETTINGS.files[FileSetting.PERSON_DATA].exists:
+        warn("No person_data.json file found; data not loaded to DB.")
+        return
+    try:
+        with open(SETTINGS.files[FileSetting.PERSON_DATA].path, 'r', encoding='utf-8') as f:
+            person_data: list[dict[str, str | float | list[str]]] = json.load(f)
+    except Exception as e:
+        warn(f"Error reading person_data.json: {e}")
+        return
+
+    existing_person_names = await Person().all().values("input_name")
+    existing_person_names = {p['input_name'] for p in existing_person_names}
+    for person in person_data:
+        if person.get('input_name') in existing_person_names:
+            continue
+        person_dict = {
+            "input_name": person.get('input_name').strip(),
+            "main_name": person.get('main_name', None),
+            "match_confidence": person.get('match_confidence', None),
+            "first_name": person.get('other_names', [None])[0],
+            "email": person.get('email', None),
+            "faculty": await Faculty.get_or_none(abbreviation=person.get('faculty', None)),
+            "people_page_url": person.get('people_page_url', None)
+        }
+        for k, v in person_dict.items():
+            if isinstance(v, str):
+                person_dict[k] = v.strip()
+        orgs: list[dict[str, str]] = person.get('orgs', [])
+        orgs.sort(key=lambda x: x.get('abbr').count('-'))
+        orglist = []
+        for org in orgs:
+            try:
+                hierarchy_level = org.get('abbr').count('-')+1
+                orgname = org.get('name').strip()
+                org_sole_abbr = org.get('abbr').split('-')[-1].strip()
+                org_full_abbr = org.get('abbr').strip()
+                org_obj, _ = await Organization.get_or_create(defaults={
+                    "name":orgname,
+                    "abbreviation":org_sole_abbr,
+                    "full_abbreviation": org_full_abbr,
+                    "hierarchy_level": hierarchy_level,
+                    }, full_abbreviation=org_full_abbr)
+                if hierarchy_level == 1:
+                    org_obj.parent_organization, _ = await Organization.get_or_create(defaults={"name":"University of Twente", "abbreviation":"UT", "full_abbreviation":"UT", "parent_organization":None, "hierarchy_level":0}, abbreviation="UT")
+                elif hierarchy_level >= 2:
+                    parent_org_abbr = org_full_abbr.split('-')[-2].strip()
+                    parent_org_full_abbreviation = org_full_abbr.rsplit('-',1)[0].strip()
+                    org_obj.parent_organization = await Organization.get(abbreviation=parent_org_abbr, full_abbreviation=parent_org_full_abbreviation, hierarchy_level=hierarchy_level-1)
+                await org_obj.save()
+                orglist.append(org_obj)
+            except Exception as e:
+                warn(f"Error adding org {org} to person: {e}")
+                continue
+
+        person = await Person.create(**person_dict)
+        if orglist:
+            await person.orgs.add(*orglist)
+
+async def link_persons_to_courses() -> Counter:
+    """
+    Link the Persons to the Courses they are involved in.
+    """
+
+    # load osiris data
+    if not SETTINGS.files[FileSetting.OSIRIS_DATA].exists:
+        warn("No osiris_data.json file found; data not loaded to DB.")
+        return
+
+    try:
+        with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, 'r', encoding='utf-8') as f:
+            osiris_data: dict[str, dict[str,str|list[str]]] = json.load(f)
+    except Exception as e:
+        warn(f"Error reading osiris_data.json: {e}")
+        return
+
+    counter = Counter()
+
+    for course_data in osiris_data.values():
+        course_obj = await Course.get_or_none(cursuscode=course_data.get('cursuscode'))
+        if not course_obj:
+            continue
+
+        teachers = course_data.get('teachers', [])
+        for teacher_name in teachers:
+            teacher_obj = await Person.get_or_none(input_name=teacher_name)
+            if teacher_obj:
+                await CourseEmployee.get_or_create(course=course_obj, person=teacher_obj, role="teacher")
+                counter['teachers'] += 1
+
+        contacts = course_data.get('contacts', [])
+        for contact_name in contacts:
+            contact_obj = await Person.get_or_none(input_name=contact_name)
+            if contact_obj:
+                await CourseEmployee.get_or_create(course=course_obj, person=contact_obj, role="contact")
+                counter['contacts'] += 1
+
+        tutors = course_data.get('tutors', [])
+        for tutor_name in tutors:
+            tutor_obj = await Person.get_or_none(input_name=tutor_name)
+            if tutor_obj:
+                await CourseEmployee.get_or_create(course=course_obj, person=tutor_obj, role="tutor")
+                counter['tutors'] += 1
+
+        docenten = course_data.get('contacts', [])
+        for docent_name in docenten:
+            docent_obj = await Person.get_or_none(input_name=docent_name)
+            if docent_obj:
+                await CourseEmployee.get_or_create(course=course_obj, person=docent_obj, role="docent")
+                counter['docenten'] += 1
+
+        examinators = course_data.get('examinators', [])
+        for examinators_name in examinators:
+            examinator_obj = await Person.get_or_none(input_name=examinators_name)
+            if examinator_obj:
+                await CourseEmployee.get_or_create(course=course_obj, person=examinator_obj, role="examinator")
+                counter['examinators'] += 1
+
+        unknown_roles = course_data.get('unknown_role', [])
+        for unknown_role_name in unknown_roles:
+            unknown_role_obj = await Person.get_or_none(input_name=unknown_role_name)
+            if unknown_role_obj:
+                await CourseEmployee.get_or_create(course=course_obj, person=unknown_role_obj, role="unknown_role")
+                counter['unknown_roles'] += 1
+
+    return counter
+
 async def load_base_data() -> None:
     """
     Load the base data into the db: orgs, courses, persons.
     """
-    async def load_org_data() -> None:
-        """
-        From SETTINGS.university_settings.faculties, create Faculty and Programme objects.
-        """
-        faculties: list[SettingsFaculty] = SETTINGS.university_settings.faculties
-        # first retrieve or create the university org
-        university, _ = await Organization.get_or_create(defaults={"name":"University of Twente", "abbreviation":"UT", "full_abbreviation":"UT", "parent_organization":None, "hierarchy_level":0}, abbreviation="UT")
-
-        for faculty in faculties:
-            faculty_obj, _ = await Faculty.get_or_create(defaults={
-                    "name": faculty.name,
-                    "abbreviation": faculty.abbreviation,
-                    "full_abbreviation": faculty.abbreviation,
-                    "parent_organization": university,
-                    "hierarchy_level": 1
-                }, abbreviation=faculty.abbreviation
-            )
-            progamme_list = []
-            existing_programme_names = await Programme().all().values("name")
-            existing_programme_names = {p['name'] for p in existing_programme_names}
-            for programme in faculty.programmes:
-                if programme.name in existing_programme_names:
-                    continue
-                if programme.abbreviation:
-                    abbr = programme.abbreviation
-                else:
-                    abbr = ""
-                    if "master" in programme.name.lower():
-                        abbr = "M-"
-                    elif "bachelor" in programme.name.lower():
-                        abbr = "B-"
-                    else:
-                        abbr = "O-"
-
-                    removed_prefix = programme.name.lower().replace('bachelor', '').replace('master', '').strip()
-                    if " " in removed_prefix:
-                        parts = removed_prefix.split(' ')
-                        if len(parts) == 2:
-                            abbr += parts[0][0] + parts[1][0]
-                        elif len(parts) >= 3:
-                            abbr += parts[0][0] + parts[1][0] + parts[2][0]
-                    else:
-                        abbr += removed_prefix[:3]
-
-
-                programme_dict = {
-                    "name": programme.name,
-                    "abbreviation": abbr,
-                    "programme_type": programme.programme_type if programme.programme_type else None,
-                    "faculty": faculty_obj,
-                    "cluster": programme.cluster if programme.cluster else None
-                }
-                progamme_list.append(programme_dict)
-
-
-
-            await Programme.bulk_create(objects=[Programme(**p) for p in progamme_list])
-
-    async def load_osiris_data() -> None:
-        """
-        Creates Courses from the osiris_data.json file.
-        Staff data is added later once people data has been loaded.
-        """
-        if not SETTINGS.files[FileSetting.OSIRIS_DATA].exists:
-            warn("No osiris_data.json file found; data not loaded to DB.")
-            return
-
-        try:
-            with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, 'r', encoding='utf-8') as f:
-                osiris_data: dict[str, dict[str,str|list[str]]] = json.load(f)
-        except Exception as e:
-            warn(f"Error reading osiris_data.json: {e}")
-            return
-
-
-        course_dicts = []
-        existing_course_codes = await Course().all().values("cursuscode")
-        existing_course_codes = {int(c['cursuscode']) for c in existing_course_codes}
-        for course_data in osiris_data.values():
-            if int(course_data.get('cursuscode',0)) in existing_course_codes or not course_data.get('cursuscode'):
-                continue
-            course_dict: dict[str, str | list[str] | None] = {
-                "cursuscode": int(course_data.get('cursuscode')),
-                "internal_id": int(course_data.get('internal_id')),
-                "name": course_data.get('name', None),
-                "short_name": course_data.get('short_name', None),
-                "ec": int(round(float(course_data.get('ec',0).replace(',','.')),0)),
-                "programme": course_data.get('programme', None),
-                "notes": course_data.get('notes', None),
-                "category": course_data.get('category', None),
-            }
-
-            existing_course_codes.add(int(course_data.get('cursuscode')))
-
-            year: str = course_data.get('year')
-            if '-' in year:
-                year = int(year.split('-')[0])
-                course_dict['year'] = year
-
-            faculty = await Faculty.get_or_none(abbreviation=course_data.get('faculty'))
-            if faculty:
-                course_dict['faculty'] = faculty
-
-            course_dicts.append(course_dict)
-
-        await Course.bulk_create(objects=[Course(**c) for c in course_dicts])
-
-    async def load_person_data() -> None:
-        """
-        Load data from the person_data.json file into the db.
-        Adds Persons and Orgs, creates MissingCourses where necessary.
-        """
-
-
-        if not SETTINGS.files[FileSetting.PERSON_DATA].exists:
-            warn("No person_data.json file found; data not loaded to DB.")
-            return
-        try:
-            with open(SETTINGS.files[FileSetting.PERSON_DATA].path, 'r', encoding='utf-8') as f:
-                person_data: list[dict[str, str | float | list[str]]] = json.load(f)
-        except Exception as e:
-            warn(f"Error reading person_data.json: {e}")
-            return
-
-        existing_person_names = await Person().all().values("input_name")
-        existing_person_names = {p['input_name'] for p in existing_person_names}
-        for person in person_data:
-            if person.get('input_name') in existing_person_names:
-                continue
-            person_dict = {
-                "input_name": person.get('input_name').strip(),
-                "main_name": person.get('main_name', None),
-                "match_confidence": person.get('match_confidence', None),
-                "first_name": person.get('other_names', [None])[0],
-                "email": person.get('email', None),
-                "faculty": await Faculty.get_or_none(abbreviation=person.get('faculty', None)),
-                "people_page_url": person.get('people_page_url', None)
-            }
-            for k, v in person_dict.items():
-                if isinstance(v, str):
-                    person_dict[k] = v.strip()
-            orgs: list[dict[str, str]] = person.get('orgs', [])
-            orgs.sort(key=lambda x: x.get('abbr').count('-'))
-            orglist = []
-            for org in orgs:
-                try:
-                    hierarchy_level = org.get('abbr').count('-')+1
-                    orgname = org.get('name').strip()
-                    org_sole_abbr = org.get('abbr').split('-')[-1].strip()
-                    org_full_abbr = org.get('abbr').strip()
-                    org_obj, _ = await Organization.get_or_create(defaults={
-                        "name":orgname,
-                        "abbreviation":org_sole_abbr,
-                        "full_abbreviation": org_full_abbr,
-                        "hierarchy_level": hierarchy_level,
-                        }, full_abbreviation=org_full_abbr)
-                    if hierarchy_level == 1:
-                        org_obj.parent_organization, _ = await Organization.get_or_create(defaults={"name":"University of Twente", "abbreviation":"UT", "full_abbreviation":"UT", "parent_organization":None, "hierarchy_level":0}, abbreviation="UT")
-                    elif hierarchy_level >= 2:
-                        parent_org_abbr = org_full_abbr.split('-')[-2].strip()
-                        parent_org_full_abbreviation = org_full_abbr.rsplit('-',1)[0].strip()
-                        org_obj.parent_organization = await Organization.get(abbreviation=parent_org_abbr, full_abbreviation=parent_org_full_abbreviation, hierarchy_level=hierarchy_level-1)
-                    await org_obj.save()
-                    orglist.append(org_obj)
-                except Exception as e:
-                    warn(f"Error adding org {org} to person: {e}")
-                    continue
-
-            person = await Person.create(**person_dict)
-            if orglist:
-                await person.orgs.add(*orglist)
-
-    async def link_persons_to_courses() -> Counter:
-        """
-        Link the Persons to the Courses they are involved in.
-        """
-
-        # load osiris data
-        if not SETTINGS.files[FileSetting.OSIRIS_DATA].exists:
-            warn("No osiris_data.json file found; data not loaded to DB.")
-            return
-
-        try:
-            with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, 'r', encoding='utf-8') as f:
-                osiris_data: dict[str, dict[str,str|list[str]]] = json.load(f)
-        except Exception as e:
-            warn(f"Error reading osiris_data.json: {e}")
-            return
-
-        counter = Counter()
-
-        for course_data in osiris_data.values():
-            course_obj = await Course.get_or_none(cursuscode=course_data.get('cursuscode'))
-            if not course_obj:
-                continue
-
-            teachers = course_data.get('teachers', [])
-            for teacher_name in teachers:
-                teacher_obj = await Person.get_or_none(input_name=teacher_name)
-                if teacher_obj:
-                    await CourseEmployee.get_or_create(course=course_obj, person=teacher_obj, role="teacher")
-                    counter['teachers'] += 1
-
-            contacts = course_data.get('contacts', [])
-            for contact_name in contacts:
-                contact_obj = await Person.get_or_none(input_name=contact_name)
-                if contact_obj:
-                    await CourseEmployee.get_or_create(course=course_obj, person=contact_obj, role="contact")
-                    counter['contacts'] += 1
-
-            tutors = course_data.get('tutors', [])
-            for tutor_name in tutors:
-                tutor_obj = await Person.get_or_none(input_name=tutor_name)
-                if tutor_obj:
-                    await CourseEmployee.get_or_create(course=course_obj, person=tutor_obj, role="tutor")
-                    counter['tutors'] += 1
-
-            docenten = course_data.get('contacts', [])
-            for docent_name in docenten:
-                docent_obj = await Person.get_or_none(input_name=docent_name)
-                if docent_obj:
-                    await CourseEmployee.get_or_create(course=course_obj, person=docent_obj, role="docent")
-                    counter['docenten'] += 1
-
-            examinators = course_data.get('examinators', [])
-            for examinators_name in examinators:
-                examinator_obj = await Person.get_or_none(input_name=examinators_name)
-                if examinator_obj:
-                    await CourseEmployee.get_or_create(course=course_obj, person=examinator_obj, role="examinator")
-                    counter['examinators'] += 1
-
-            unknown_roles = course_data.get('unknown_role', [])
-            for unknown_role_name in unknown_roles:
-                unknown_role_obj = await Person.get_or_none(input_name=unknown_role_name)
-                if unknown_role_obj:
-                    await CourseEmployee.get_or_create(course=course_obj, person=unknown_role_obj, role="unknown_role")
-                    counter['unknown_roles'] += 1
-
-        return counter
-
     await init()
     await create()
     try:
@@ -315,6 +316,7 @@ async def load_base_data() -> None:
         warn(f"Error loading base data: {e}")
 
     await Tortoise.close_connections()
+
 def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     """
     rename cols to standard format
@@ -347,6 +349,7 @@ def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     if 'google_search_file' in df.columns:
         df = df.drop('google_search_file')
     return df
+
 async def dict_to_copyright_item(item: dict[str, str]) -> CopyrightItem:
     copyright_item_keys = {
         "material_id",
@@ -417,6 +420,7 @@ async def dict_to_copyright_item(item: dict[str, str]) -> CopyrightItem:
     except Exception as e:
         warn(f'Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}')
         return None
+
 async def load_raw_items(file: File | None = None) -> None:
     """
     Loads in new items from copyright export raw data.
@@ -462,6 +466,7 @@ async def load_raw_items(file: File | None = None) -> None:
         if error:
             raise error
     await Tortoise.close_connections()
+
 async def update_copyright_items(data: pl.DataFrame) -> None:
     """
     Update the db with copyrightitems from the dataframe.
@@ -469,75 +474,63 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
     For updates, see `compare_items` and the dicts added_fields, changeable_fields, core_fields for details
     """
 
-    def compare_fields(new_item:dict, db_item:CopyrightItem, fielddict: dict, changed:bool, changed_fields:set) -> tuple[bool, set, CopyrightItem]:
+    def compare_fields(new_item:dict, db_item:CopyrightItem, fielddict: dict, changes:dict) -> tuple[dict, CopyrightItem]:
+        def change(changes:dict, field:str, new_value:Any, old_value:Any, reason:str) -> dict:
+            logger.debug(f'[{reason}] [{field}] {old_value} --> {new_value}')
+            changes[field] = {"old": str(old_value), "new": str(new_value)}
+            setattr(db_item, field, new_value)
+            return changes
+
+        if not changes:
+            changes = {"material_id": new_item.get('material_id'), "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
         for field, ordering in fielddict.items():
             new_value = new_item.get(field)
             old_value = getattr(db_item, field)
-            try:
 
+            try:
                 if isinstance(old_value, datetime):
-                        new_value = datetime.strptime(new_value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                        new_value = datetime.strptime(new_value, "%Y-%m-%d").replace(tzinfo=timezone.utc) if new_value else None
                         old_value = old_value.replace(tzinfo=timezone.utc)
                 if isinstance(old_value, Enum):
                     old_value = old_value.value
                 if isinstance(old_value, float):
-                    new_value = round(float(new_value),2)
+                    new_value = round(float(new_value),2) if new_value else None
                     old_value = round(old_value,2)
                 if isinstance(old_value, int):
-                    new_value = int(new_value)
+                    new_value = int(new_value) if new_value else None
             except Exception as e:
                 logger.debug(f'error {e} while typecasting data for field comparison of {field}')
                 continue
             if new_value:
                 if old_value == new_value:
                     continue
-
                 if not old_value:
-                    logger.debug(f'[No old value] [{field}] {old_value} --> {new_value}')
-                    setattr(db_item, field, new_value)
-                    changed = True
-                    changed_fields.add(field)
-
+                    changes = change(changes, field, new_value, old_value, "no old value")
                 elif isinstance(ordering,list):
-
                     new_rank = 20
                     old_rank = 20
                     if new_value in ordering:
                         new_rank = ordering.index(new_value)
                     if old_value in ordering:
                         old_rank = ordering.index(old_value)
-
                     if new_rank < old_rank:
-                        logger.debug(f'[new rank > old rank] [{field}] {old_value} --> {new_value}')
-
-                        setattr(db_item, field, new_value)
-                        changed = True
-                        changed_fields.add(field)
-
+                        changes = change(changes, field, new_value, old_value, "new rank < old rank")
                 else:
                     if isinstance(new_value, str) and isinstance(old_value, str):
                         new_value = new_value.strip()
                         old_value = old_value.strip()
                         if len(new_value) > len(old_value):
-                            logger.debug(f'[len(new str) > len(old str)] [{field}] {old_value} --> {new_value}')
-
-                            setattr(db_item, field, new_value)
-                            changed = True
-                            changed_fields.add(field)
-
+                            changes = change(changes, field, new_value, old_value, "new len > old len")
                     else:
-                        if type(new_value) == type(old_value):
+                        if type(new_value) is type(old_value):
                             if new_value > old_value:
-                                logger.debug(f'[new > old] [{field}] {old_value} --> {new_value}')
-
-                                setattr(db_item, field, new_value)
-                                changed = True
-                                changed_fields.add(field)
+                                changes = change(changes, field, new_value, old_value, "new > old")
                         else:
                             logger.debug(f'[incomparable types] [{field}] {type(new_value)=}, {type(old_value)=}')
 
 
-        return changed,changed_fields, db_item
+        return changes, db_item
 
     await init()
     # Fields added by script.
@@ -624,14 +617,14 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
     update_items = data.with_columns(pl.col('material_id').cast(int)).filter(pl.col('material_id').is_in(existing_mat_ids)).to_dicts()
     info(f'Updating {len(update_items)} existing items.')
     changelist = []
-    changed_fields = set()
+    updates = {}
+
     for new_item in update_items:
-        changed = False
         try:
             db_item = await CopyrightItem.get(material_id=new_item.get('material_id'))
-
-            changed, changed_fields, db_item = compare_fields(new_item, db_item, added_fields, changed, changed_fields)
-            changed, changed_fields, db_item = compare_fields(new_item, db_item, changeable_fields, changed, changed_fields)
+            changes = {}
+            changes, db_item = compare_fields(new_item, db_item, added_fields, changes)
+            changes, db_item = compare_fields(new_item, db_item, changeable_fields, changes)
 
             if new_item.get('last_change'):
                 # if new_item has a newer last_change value, we need to update the core CopyRight fields
@@ -649,19 +642,35 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
                         for field in core_fields:
                             if new_item.get('field'):
                                 if new_item.get('field') != getattr(db_item, field):
-                                    setattr(db_item, field, new_item.get(field))
-                                    changed = True
-                                    changed_fields.add(field)
                                     logger.debug(f'[core field] Changing field {field} for item {db_item.material_id} from {getattr(db_item, field)} to {new_item.get(field)}')
+                                    changes[field] = {"old": getattr(db_item, field), "new": str(new_item.get(field))}
+                                    setattr(db_item, field, new_item.get(field))
         except Exception as e:
             warn(f'Could not update item {new_item.get("material_id")}: {e}')
         finally:
-            if changed:
+            if len(list(changes.keys())) >= 3:
+                updates[new_item.get('material_id')] = changes
                 changelist.append(db_item)
 
     if changelist:
-        info(f'Updating {len(changelist)} items in db for fields: {changed_fields}.')
+        # get all values from 'updates'
+        # then get list of all distinct keys from all those dicts
+        # then drop keys 'material_id' and 'update_time'
+        # then add all those keys to the fields to update
+        all_keys = {key for item in updates.values() for key in item.keys()}
+        all_keys.discard('material_id')
+        all_keys.discard('update_time')
+        changed_fields = list(all_keys)
+        info(f'Updating {len(changelist)} items in db for fields {changed_fields}.')
+        info(f'Updating {len(updates)} changelog items in db.')
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)
+        await ItemUpdate.bulk_create([ItemUpdate(change_details=changes, material_id=mat_id) for mat_id, changes in updates.items()])
+
+        # now add each ItemUpdate as a m2m relation to the corresponding CopyrightItem
+        for mat_id in updates.keys():
+            item = await CopyrightItem.get(material_id=mat_id)
+            update = await ItemUpdate.filter(material_id=mat_id).order_by('-created_at').first()
+            await item.changes.add(update)
 
     cool(f'Done updating!')
     await Tortoise.close_connections()
@@ -782,6 +791,7 @@ async def link_llm_classifications_to_copyright_items() -> None:
             continue
 
     info(f'Missing {len(missing_classifications)} llm classifications of {len(items_to_update)} total items.')
+
 async def link_courses_to_copyright_items() -> None:
 
     items_w_prefetch = await CopyrightItem.all()
@@ -812,6 +822,7 @@ async def link_courses_to_copyright_items() -> None:
             except Exception as e:
                 warn(f'Error while trying to get course {course_code} for item {item.material_id}: {e}')
     cool(f'Added {links_added} links to {course_codes_found} found coursecodes.')
+
 async def update_copyright_relations() -> None:
     """
     Go through the copyright items in the db
@@ -824,9 +835,11 @@ async def update_copyright_relations() -> None:
 
 def retrieve_full_data() -> pl.DataFrame:
     """
-    Retrieve all copyright items from db
-    includes all relevant data from other models linked to the items
+    Retrieve all copyright items from db enriched with data from other tables
+    returns a flat dataframe ready for .xlsx export
+
     """
+
     query="""WITH CourseDataAggregated AS (
         SELECT
             cdcd.copyright_data_id,

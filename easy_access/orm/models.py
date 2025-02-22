@@ -112,12 +112,23 @@ class CopyrightItem(Model, TimestampMixin):
     courses = fields.ManyToManyField('models.Course', related_name='course_items')
     faculty = fields.ForeignKeyField('models.Faculty', related_name='faculty_items', to_field='abbreviation')
     llm_classification = fields.OneToOneField('models.LLMClassification', related_name='item', null=True)
-
+    changes = fields.ManyToManyField('models.ItemUpdate', related_name='item')
     class Meta:
         table = "copyright_data"
 
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"
+
+class ItemUpdate(Model, TimestampMixin):
+    """
+    Stores changes made to a copyright item.
+    """
+    id = fields.IntField(primary_key=True)
+    change_details = fields.JSONField()
+    material_id = fields.IntField()
+
+    class Meta:
+        table = "item_updates"
 
 class MissingCourse(Model, TimestampMixin):
     """

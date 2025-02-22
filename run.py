@@ -22,6 +22,7 @@
 #     "aiometer",
 #     "pdfminer-six",
 #     "pydantic",
+#     "sqlalchemy",
 # ]
 # ///
 

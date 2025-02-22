@@ -1,4 +1,4 @@
-from easy_access.utils import info, warn, print
+from easy_access.utils import info, warn, print, determine_course_code
 from easy_access.settings import SETTINGS, FileSetting, OSIRIS_DATA
 import polars as pl
 import json
@@ -10,10 +10,9 @@ from dataclasses import dataclass, field
 from loguru import logger
 from nameparser import HumanName
 import Levenshtein
+from easy_access.orm.db import load_base_data
+
 # Dataclasses for osiris_contact parsing / matching
-
-
-
 @dataclass(frozen=True)
 class Faculty:
     abbreviation: str = field(default="", compare=True)
@@ -160,8 +159,6 @@ class Contact:
             "contact_faculties": list(self.faculties.values()),
             }
 
-
-
 @dataclass
 class ItemContacts:
     """
@@ -201,98 +198,6 @@ class ItemContacts:
 
         return final_data
 
-def determine_course_code(code: str, name: str) -> set[str|None]:
-    """
-    For a given course code and name (cols of a copyright item; canvas data), determine the correct osiris course code(s).
-    Returns a set of course codes; if no valid course code could be found it will be empty.
-    Heuristic is as follows:
-
-    STEP 1: attempt to parse canvas course code into osiris course code(s)
-        - from column 'course_code', get the course code as a string
-        - Should look like YYYY - XXXXXXXXXXX - 1A, where YYYY is the year, XXXXXXXXXXX is the course code, and 1A is the period.
-        - split on '-', select the second part.
-        - course code should be numeric and (probably?) 9 digits long.
-        - period is (probably) one value from: JAAR, 1A, 1B, 2A, 2B, 3A, SEM1, SEM2, SEM3
-
-        EXAMPLES:
-            should result in extracted course code + period:
-                2024-191158500-JAAR
-                    --> Course code: 191158500, Period: JAAR
-                    --> return {191158500}
-                2024-201800005-1A
-                    --> Course code: 201800005, Period: 1A
-                    --> return {201800005}
-                2024-202400157-1A
-                    --> Course code: 202400157, Period: 1A
-                    --> return {202400157}
-                2024-201800236-SEM1
-                    --> Course code: 201800236, Period: SEM1
-                    --> return {201800236}
-
-            should be processed further:
-                2024-IDVWI-1A
-                    --> Course code: IDVWI, Period: 1A
-                    --> ERROR: not a valid course code
-                    --> continue to step 2
-                2024-ELECMSE-1B
-                    --> Course code: ELECMSE, Period: 1B
-                    --> ERROR: not a valid course code
-                    --> continue to step 2
-
-    If step 1 fails:
-    STEP 2: attempt to parse canvas course name into osiris course code(s)
-    in cases where the 'course code' is a string with only letters, it is likely this course has multiple course codes attached to it.
-    in this case, the set of related course codes should be extracted from the 'course name' column.
-        1. retrieve the string to parse from the 'course name' column.
-        2. split the string on ';'. Split the second item of result on '(', select the first item of that result. This should give a string of course codes separated by commas.
-        3. split on ',' and loop over results
-        4. For each: if str with only digits and len >= 8: add to result set, set found to True.
-
-        EXAMPLES:
-            should result in extracted course codes:
-                Circuit Analysis 1 and 2; 202001116,202200163 (2024-JAAR)
-                    --> return {202001116, 202200163}
-                Characterization of Nanostructures 2023; 193700010,201600043 (2024-1A)
-                    --> return {193700010, 201600043}
-
-            should not result in extracted course codes:
-                Circuit Analysis 1 and 2; CA12,CA34 (2024-JAAR)
-                    --> Course codes found: [CA12, CA34]
-                    --> ERROR: invalid course codes
-                    --> return empty list
-
-    """
-    def is_valid_course_code(check_code) -> bool:
-        try:
-            check_code = str(check_code).strip()
-
-            if check_code.isdigit() and len(check_code) >= 8:
-                return True
-            else:
-                return False
-        except Exception as e:
-            return False
-
-    tempresults = set()
-    first_try = ""
-    second_try = ""
-
-    try:
-        first_try = code.split("-")[1].strip()
-        tempresults.add(first_try) if is_valid_course_code(first_try) else None
-        if (';' in name) and ('(' in name):
-            second_try = name.split(";")[1].split("(")[0]
-            [tempresults.add(c.strip()) for c in second_try.split(",") if is_valid_course_code(c)]
-
-        if not tempresults:
-            warn(f"No valid course code found for {code} - {name}")
-            info(
-                f"code extraction results: {first_try}, name extraction results: {second_try}"
-            )
-        return tempresults
-    except Exception as e:
-        warn(f"Error in determine_course_code for input: code={code}, name={name}: {e}")
-        return tempresults
 
 def enrich_df_with_osiris_data(df: pl.DataFrame, group:str = "all items") -> pl.DataFrame:
     """
@@ -1147,3 +1052,7 @@ async def update_osiris_data(df: pl.DataFrame, only_retrieve_missing: bool = Fal
     info(
         f"Done. Stored data in json files:\n    {SETTINGS.files[FileSetting.OSIRIS_DATA]}\n    {SETTINGS.files[FileSetting.PERSON_DATA]}\n    {SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}"
     )
+
+    # now update the database with the new data
+
+    await load_base_data()

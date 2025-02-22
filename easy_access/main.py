@@ -1,7 +1,5 @@
-from collections import defaultdict
 import asyncio
 import os
-from datetime import datetime
 import polars as pl
 import typer
 from loguru import logger
@@ -24,6 +22,7 @@ from easy_access.settings import (
     COURSE_MAPPING
 )
 
+from easy_access.orm.db import update_copyright_items
 
 class EasyAccessTool:
     """
@@ -151,6 +150,12 @@ class EasyAccessTool:
                 warn("No new Copyright data found to process! Exiting...")
                 raise typer.Exit(code=1)
 
+        self.copyright_data = self.clean_and_validate_df(self.copyright_data)
+
+        # update db with new copyright export data
+        info('updating db with new copyright export data')
+        asyncio.get_event_loop().run_until_complete(update_copyright_items(self.copyright_data))
+
         if self.refresh_osiris_data:
             asyncio.get_event_loop().run_until_complete(update_osiris_data(self.copyright_data, self.only_retrieve_missing_osiris_data))
 
@@ -162,7 +167,8 @@ class EasyAccessTool:
         self.faculties = (
             self.copyright_data.select(pl.col("faculty").unique()).to_series().sort().to_list()
         )
-        self.copyright_data = self.clean_and_validate_df(self.copyright_data)
+
+
         if self.only_changes:
             self.read_faculty_sheets(include_overview=False)
             if self.faculty_sheet_data.is_empty():
