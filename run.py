@@ -2,7 +2,6 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "bs4",
-#     "python-dotenv",
 #     "httpx",
 #     "lxml",
 #     "openpyxl",
@@ -14,7 +13,6 @@
 #     "pyyaml",
 #     "colorama",
 #     "loguru",
-#     "nameparser",
 #     "levenshtein",
 #     "selenium",
 #     "google-genai",

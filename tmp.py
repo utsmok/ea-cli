@@ -7,11 +7,3 @@ import asyncio
 from easy_access.utils import File
 import polars as pl
 from easy_access.db.base import init, create
-
-
-async def base():
-    await init()
-    await create()
-
-
-asyncio.run(base())
