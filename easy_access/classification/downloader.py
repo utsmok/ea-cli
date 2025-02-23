@@ -2,7 +2,7 @@
 from selenium import webdriver
 
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import info, warn, cool, Directory, File
+from easy_access.utils import info, warn, cool,  File
 import polars as pl
 import time
 from datetime import datetime

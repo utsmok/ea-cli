@@ -8,13 +8,20 @@ from easy_access.db.models import (
 from easy_access.utils import warn
 import polars as pl
 from datetime import datetime
-
+from pathlib import Path
 
 async def init() -> None:
+    create_tables = False
+    db_path = Path('db.sqlite3')
+    if not db_path.exists():
+        create_tables=True
     await Tortoise.init(
         db_url='sqlite://db.sqlite3',
-        modules={'models': ['easy_access.orm.models']}
+        modules={'models': ['easy_access.db.models']}
     )
+    if create_tables:
+        await Tortoise.generate_schemas(safe=True)
+        return True
 
 async def create() -> None:
     await Tortoise.generate_schemas(safe=True)
@@ -41,11 +48,13 @@ def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
             .name.keep()
         ).filter(
             (pl.col("material_id").is_not_null())
-        ).filter(
+        )
+
+    if 'filetype' in df.columns:
+        df = df.filter(
             (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) |
             (pl.col("filetype").is_null())
         )
-
     if 'type' in df.columns:
         df = df.drop('type')
     if 'google_search_file' in df.columns:
@@ -93,6 +102,7 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
         "infringement",
         "faculty",
     }
+    faculty = await Faculty.get(abbreviation='UNM')
     try:
         if item.get('faculty') == 'Unmapped':
             abbr = 'UNM'

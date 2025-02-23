@@ -72,13 +72,6 @@ def cli(
             rich_help_panel="Functions",
         ),
     ] = True,
-    save: Annotated[
-        bool,
-        typer.Option(
-            help="If enabled, will store results in excel files. If disabled will only print to console.",
-            rich_help_panel="Functions",
-        ),
-    ] = True,
     osiris_update: Annotated[
         bool,
         typer.Option(
@@ -103,13 +96,6 @@ def cli(
             dir_okay=False,
         ),
     ] = None,
-    retrieve_all: Annotated[
-        bool,
-        typer.Option(
-            help="Retrieve all data from data entry folders and store as parquet file.",
-            rich_help_panel="Backup/Restore",
-        ),
-    ] = True,
     backup: Annotated[
         BackupFlag,
         typer.Option(
@@ -167,9 +153,7 @@ def cli(
     ea_settings = EasyAccessSettings.from_env(
         functions=do,
         only_changes=changes,
-        save_files=save,
         refresh_osiris_data=osiris_update,
-        retrieve_all=retrieve_all,
         other_sheet=other_sheet,
         only_retrieve_missing_osiris_data=not osiris_full_refresh,
     )
@@ -183,7 +167,8 @@ def cli(
     tool = EasyAccessTool(ea_settings)
     driver = None
     if download_files:
-        print(f'downloading files')
+        print(f'downloading files. Will use Chrome do so. Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
+        input(f'Press any key to continue...')
         downloader = Downloader()
         driver = downloader.download_pdfs(subset=None, max_amount=max_amount_to_download)
         print(f'done downloading, waiting for download to finish...')

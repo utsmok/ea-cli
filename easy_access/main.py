@@ -1,7 +1,8 @@
 import asyncio
 import os
 import polars as pl
-from easy_access.db.ingest import load_raw_copyright_data
+from easy_access.db.base import init
+from easy_access.db.ingest import load_base_data, load_llm_classifications, load_raw_copyright_data
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_full_data
 from easy_access.utils import Directory, File, info, cool, warn, print
 from easy_access.sheets.enrichment import  update_osiris_data
@@ -109,11 +110,16 @@ class EasyAccessTool:
         if self.copyright_data.is_empty():
             warn("No new Copyright data found to process! No new items will be added. Checking if there are other changes...")
         else:
+            # make sure base data is loaded
+
+            fresh_db = asyncio.get_event_loop().run_until_complete(init())
+            if fresh_db:
+                asyncio.get_event_loop().run_until_complete(load_base_data())
             # load new data into db
             asyncio.get_event_loop().run_until_complete(load_raw_copyright_data(self.copyright_data))
 
         # retrieve full data from db
-        self.copyright_data = self.clean_and_validate_df(asyncio.get_event_loop().run_until_complete(retrieve_copyright_items()))
+        self.copyright_data = self.clean_and_validate_df(retrieve_copyright_items())
 
         # get osiris data for the new items (or refresh all depending on settings)
         if self.refresh_osiris_data:
@@ -126,12 +132,13 @@ class EasyAccessTool:
 
         # determine which material_ids are already on stored in the faculty sheets
         updated_items, mat_ids = asyncio.get_event_loop().run_until_complete(self.update_db_from_faculty_sheets())
+        print(f'{len(mat_ids)} material_ids found in faculty sheets, {len(self.copyright_data)} items currently in copyright_data.')
 
         if mat_ids:
             self.mat_ids_on_disk = mat_ids
         if updated_items:
             # if items were updated, refresh the data for the final time
-            self.copyright_data = asyncio.get_event_loop().run_until_complete(retrieve_copyright_items())
+            self.copyright_data = retrieve_copyright_items()
             self.copyright_data = self.clean_and_validate_df(self.copyright_data)
 
 
@@ -168,12 +175,24 @@ class EasyAccessTool:
 
             Ensure both dataframes have required columns
             """
-            if not all(col in primary.columns for col in select_cols):
-                warn(f"Primary dataframe missing required columns: {set(select_cols) - set(primary.columns)}.\nReturning empty dataframe.")
-                return pl.DataFrame()
-            if not all(col in other.columns for col in select_cols):
-                warn(f"Other dataframe missing required columns: {set(select_cols) - set(other.columns)}\nReturning primary dataframe.")
+
+            cols_in_primary = primary.columns
+            cols_in_other = other.columns
+            primary_selected = [col for col in select_cols if col in cols_in_primary]
+            other_selected = [col for col in select_cols if col in cols_in_other]
+
+            initial_select_cols = select_cols
+            # now only select the cols that are in both dataframes
+            select_cols = [col for col in select_cols if col in primary_selected and col in other_selected]
+
+            if not select_cols:
+                warn('No columns to compare between dataframes. Skipping comparison; returning primary dataframe.')
                 return primary
+            if len(select_cols) == 1:
+                warn(f'Only one column to compare: {select_cols}. Skipping comparison; returning primary dataframe.')
+                return primary
+            if len(select_cols) != len(initial_select_cols):
+                warn(f'Not all selected columns are present in both dataframes. Selecting only the common columns: {select_cols}')
 
             # Get rows in primary but not in other
             not_in_other = primary.join(
@@ -277,8 +296,8 @@ class EasyAccessTool:
         """
         info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
 
-
-        filtered_data: pl.DataFrame = self.copyright_data.filter(~pl.col("material_id").is_in(self.mat_ids_on_disk))
+        int_mat_ids = [int(x) for x in self.mat_ids_on_disk]
+        filtered_data: pl.DataFrame = retrieve_full_data().filter(~pl.col("material_id").is_in(int_mat_ids))
         if filtered_data.is_empty() and self.only_changes:
             warn("No new items found to export to faculty sheets.")
             return
@@ -292,7 +311,7 @@ class EasyAccessTool:
                 continue
 
             if faculty in COURSE_MAPPING:
-                self.create_programme_sheets(faculty, data=faculty_data)
+                self.create_programme_sheets(faculty, input_data=faculty_data)
 
             faculty_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
             if faculty is None or faculty == "":
@@ -321,7 +340,7 @@ class EasyAccessTool:
         )
         course_to_sheet: dict[str, str] = COURSE_MAPPING[faculty]
         data: list[dict[str, pl.DataFrame]] = []
-        if not input_data:
+        if not isinstance(input_data, pl.DataFrame):
             input_data = self.copyright_data
         if input_data.is_empty():
             warn(f'No data for {faculty} -- skipping programme sheet creation.')
@@ -371,9 +390,8 @@ class EasyAccessTool:
         while os.path.exists(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename):
             filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
             i += 1
-        if not self.disable_writes:
-            store_complete_data(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename, filtered_data)
-            info(f"Created sheet: {self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename}")
+        store_complete_data(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename, filtered_data)
+        info(f"Created sheet: {self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename}")
 
     def clean_and_validate_df(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -399,10 +417,11 @@ class EasyAccessTool:
     def remove_current_overviews(self) -> None:
         for faculty in self.faculties:
             overview_fac_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
+            movedir = Directory(self.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty)
             for file in overview_fac_dir.files_r:
                 if "total_overview" in file.name and faculty in file.name:
                     if SETTINGS.backup_settings.backup_overviews and "llm" not in file.name:
-                        file.move(overview_fac_dir.full / file.name)
+                        file.move( movedir.full / file.name)
                     else:
                         file.delete()
 

@@ -1,7 +1,6 @@
 """
 functions to update existing data in the database
 """
-from turtle import up
 from typing import Any
 from enum import Enum
 from tortoise import Tortoise
@@ -110,7 +109,7 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
 
             try:
                 if isinstance(old_value, datetime):
-                        new_value = datetime.strptime(new_value, "%Y-%m-%d").replace(tzinfo=timezone.utc) if new_value else None
+                        new_value = datetime.strptime(new_value, "%Y-%m-%d %H:%M:%S%z").replace(tzinfo=timezone.utc) if new_value else None
                         old_value = old_value.replace(tzinfo=timezone.utc)
                 if isinstance(old_value, Enum):
                     old_value = old_value.value

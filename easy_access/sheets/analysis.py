@@ -1,14 +1,8 @@
 import polars as pl
 from easy_access.settings import SETTINGS, DirSetting, COURSE_MAPPING, FINE_AMOUNT
-from easy_access.sheets.enrichment import enrich_df_with_osiris_data
-from easy_access.utils import info, Directory, File, warn
+from easy_access.utils import info, Directory, File
 from easy_access.sheets.sheet import finalize_sheet, store_complete_data
 from datetime import datetime
-import locale
-from rich.console import Console
-from rich.table import Table
-from rich.terminal_theme import SVG_EXPORT_THEME
-import copy
 from collections import defaultdict
 from easy_access.db.update import update_copyright_items, update_copyright_relations
 from easy_access.db.ingest import load_base_data
@@ -26,12 +20,16 @@ def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, sty
         if programme_data.is_empty():
             continue
         else:
-
-            programme_data = programme_data.with_columns(
-                pl.when(pl.col('possible_fine').is_null() | (pl.col('possible_fine') == ''))
-                .then(pl.col('pages_x_students').cast(pl.Int32).mul(FINE_AMOUNT).alias('possible_fine'))
-                .otherwise(pl.col('possible_fine'))
-            )
+            if 'possible_fine' in programme_data.columns:
+                programme_data = programme_data.with_columns(
+                    pl.when(pl.col('possible_fine').is_null() | (pl.col('possible_fine') == ''))
+                    .then(pl.col('pages_x_students').cast(pl.Int32).mul(FINE_AMOUNT).alias('possible_fine'))
+                    .otherwise(pl.col('possible_fine'))
+                )
+            else:
+                programme_data = programme_data.with_columns(
+                    possible_fine=pl.col('pages_x_students').cast(pl.Int32).mul(FINE_AMOUNT)
+                )
             programme_data = programme_data.with_columns(
                 infringement=pl.when(pl.col("manual_classification").is_null() |
                                     (pl.col("manual_classification") == "") |
@@ -81,21 +79,22 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
         if faculty in COURSE_MAPPING:
             style_iter = create_programme_overviews(all_faculty_data, faculty, style_iter)
 
-
-
         if all_faculty_data.is_empty():
             continue
 
         # add columns:
         # 'possible_fine': for each row multiply col pages_x_students with 0.30 to get the amount, alias it to 'possible_fine'
         # only update rows where 'possible_fine' is null or empty
-
-        all_faculty_data = all_faculty_data.with_columns(
-            pl.when(pl.col('possible_fine').is_null() | (pl.col('possible_fine') == ''))
-            .then(pl.col('pages_x_students').cast(pl.Int32).mul(FINE_AMOUNT).alias('possible_fine'))
-            .otherwise(pl.col('possible_fine'))
-        )
-
+        if 'possible_fine' in all_faculty_data.columns:
+            all_faculty_data = all_faculty_data.with_columns(
+                pl.when(pl.col('possible_fine').is_null() | (pl.col('possible_fine') == ''))
+                .then(pl.col('pages_x_students').cast(pl.Int32).mul(FINE_AMOUNT).alias('possible_fine'))
+                .otherwise(pl.col('possible_fine'))
+            )
+        else:
+            all_faculty_data = all_faculty_data.with_columns(
+                possible_fine=pl.col('pages_x_students').cast(pl.Int32).mul(FINE_AMOUNT)
+            )
         # 'infringement': possible values: 'yes', 'no', 'maybe', 'undetermined'.
         # based on the value in 'manual_classification'
         # if 'manual_classification' is empty (None, "", '-', NaN): set to 'undetermined'
@@ -122,7 +121,7 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
 
         data_to_update.append(all_faculty_data)
 
-    asyncio.get_running_loop().run_until_complete((update_db(data_to_update)))
+    asyncio.get_event_loop().run_until_complete((update_db(data_to_update)))
     return style_iter
 
 async def update_db(datalist: list[pl.DataFrame]):

@@ -46,27 +46,12 @@ def retrieve_full_data() -> pl.DataFrame:
         init_engine()
 
     query="""WITH CourseDataAggregated AS (
-        SELECT
-            cdcd.copyright_data_id,
-            (SELECT GROUP_CONCAT(cursuscode, ' | ') FROM (SELECT DISTINCT CAST(cd.cursuscode AS TEXT) as cursuscode FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS cursuscodes,
-            (SELECT GROUP_CONCAT(programme, ' | ') FROM (SELECT DISTINCT cd.programme FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS programmes,
-            (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT DISTINCT cd.name FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS course_names
-        FROM copyright_data_course_data cdcd
-    ), PersonDataAggregated AS (
-        SELECT
-        ce.course_id,
-        (SELECT GROUP_CONCAT(email, ' | ') FROM (SELECT DISTINCT pd.email FROM person_data pd WHERE pd.id = ce.person_id)) as course_contacts_emails,
-        (SELECT GROUP_CONCAT(main_name, ' | ') FROM (SELECT DISTINCT pd.main_name FROM person_data pd WHERE pd.id = ce.person_id)) as course_contacts_names,
-        (SELECT GROUP_CONCAT(abbreviation, ' | ') FROM (SELECT DISTINCT f.abbreviation FROM faculty f LEFT JOIN person_data pd ON pd.faculty_id = f.abbreviation WHERE pd.id = ce.person_id)) as course_contacts_faculties,
-        (SELECT GROUP_CONCAT(full_abbreviation, ' | ') FROM (
-            SELECT DISTINCT org.full_abbreviation
-            FROM organization_data org
-            LEFT JOIN person_data_organization_data pdod on pdod.organization_id = org.id
-            LEFT JOIN person_data pd ON pd.id = pdod.person_data_id
-            WHERE pd.id = ce.person_id
-        )) as course_contacts_organizations
-        FROM course_employee ce
-        WHERE ce.role = 'contact'
+    SELECT
+        cdcd.copyright_data_id,
+        (SELECT GROUP_CONCAT(cursuscode, ' | ') FROM (SELECT DISTINCT CAST(cd.cursuscode AS TEXT) as cursuscode FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS cursuscodes,
+        (SELECT GROUP_CONCAT(programme, ' | ') FROM (SELECT DISTINCT cd.programme FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS programmes,
+        (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT DISTINCT cd.name FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS course_names
+    FROM copyright_data_course_data cdcd
     )
     SELECT
         cd.*,
@@ -84,18 +69,53 @@ def retrieve_full_data() -> pl.DataFrame:
         llm.source_url as llm_source_url,
         llm.license as llm_license,
         llm.author_names as llm_authors,
-        cda.cursuscodes,
-        cda.programmes,
-        cda.course_names,
-        pda.course_contacts_names,
-        pda.course_contacts_emails,
-        pda.course_contacts_faculties,
-        pda.course_contacts_organizations
+        cda.cursuscodes as cursuscodes,
+        cda.programmes as programmes,
+        cda.course_names as course_names,
+        (
+            SELECT GROUP_CONCAT(course_contacts_names, ' | ')
+            FROM (
+                SELECT DISTINCT pd.main_name as course_contacts_names
+                FROM course_employee ce
+                JOIN person_data pd ON ce.person_id = pd.id
+                WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id -- Correlate with outer query
+            )
+        ) AS course_contacts_names,
+        (
+            SELECT GROUP_CONCAT(course_contacts_emails, ' | ')
+            FROM (
+                SELECT DISTINCT pd.email as course_contacts_emails
+                FROM course_employee ce
+                JOIN person_data pd ON ce.person_id = pd.id
+                WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id  -- Correlate
+            )
+        ) AS course_contacts_emails,
+        (
+            SELECT GROUP_CONCAT(faculty_abbreviations, ' | ')
+            FROM (
+                SELECT DISTINCT f.abbreviation as faculty_abbreviations
+                FROM course_employee ce
+                JOIN person_data pd ON ce.person_id = pd.id
+                LEFT JOIN faculty f ON pd.faculty_id = f.abbreviation
+                WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id -- Correlate
+            )
+        ) AS course_contacts_faculties,
+        (
+            SELECT GROUP_CONCAT(org_full_abbreviations, ' | ')
+            FROM (
+                SELECT DISTINCT org.full_abbreviation as org_full_abbreviations
+                FROM course_employee ce
+                JOIN person_data pd ON ce.person_id = pd.id
+                LEFT JOIN person_data_organization_data pdod ON pd.id = pdod.person_data_id
+                LEFT JOIN organization_data org ON pdod.organization_id = org.id
+                WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id -- Correlate
+
+            )
+        ) AS course_contacts_organizations
     FROM copyright_data cd
     LEFT JOIN llm_classification_data llm ON cd.llm_classification_id = llm.id
     LEFT JOIN CourseDataAggregated cda ON cd.material_id = cda.copyright_data_id
     LEFT JOIN copyright_data_course_data cdcd ON cd.material_id = cdcd.copyright_data_id
-    LEFT JOIN PersonDataAggregated pda ON cdcd.course_id = pda.course_id;
     """
     df: pl.DataFrame = pl.read_database(query=query, connection=engine.connect(), infer_schema_length=None)
     df = df.drop(

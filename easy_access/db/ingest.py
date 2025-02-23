@@ -12,7 +12,7 @@ import json
 from easy_access.utils import warn, info, cool, File
 from loguru import logger
 from easy_access.db.base import copyright_item_from_dict, init, create, standardize_dataframe
-from easy_access.db.update import link_llm_classifications_to_copyright_items, update_copyright_items, update_copyright_relations
+from easy_access.db.update import link_llm_classifications_to_copyright_items,  update_copyright_relations
 import polars as pl
 
 async def load_osiris_data() -> None:
@@ -416,7 +416,8 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
                 continue
             created_item: CopyrightItem = await copyright_item_from_dict(item)
             if not created_item:
-                inp = input(prompt='Error parsing raw item. enter x to stop, anything else to continue')
+                info(item)
+                inp = input('Error parsing raw item. enter x to stop, anything else to continue')
                 if inp.lower() == 'x':
                     break
                 continue
@@ -429,6 +430,7 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
     finally:
         if item_list:
             await CopyrightItem.bulk_create(objects=item_list)
+            await load_llm_classifications()
             await update_copyright_relations()
         cool(f'# of items in db after loading raw items: {await CopyrightItem.all().count()}')
         if error:
