@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from easy_access.utils import File, Directory, print, warn
 from enum import Enum
 from typing import Literal, Any
-from collections.abc import Callable
 import logging
 import os
 import sys
@@ -129,10 +128,8 @@ class EasyAccessSettings:
     """Configuration settings for the Easy Access Tool."""
     functions: Functions
     only_changes: bool = True
-    save_files: bool = True
     refresh_osiris_data: bool = False
     only_retrieve_missing_osiris_data: bool = False
-    retrieve_all: bool = True
     other_sheet: Path | None = None
     enrich_with_osiris_data: bool = True
     dirs: dict[DirSetting, Directory] = field(default_factory=dict)
@@ -212,11 +209,19 @@ class UniversitySettings:
         data = {f"{programme.abbreviation+": " if programme.abbreviation else ""}{programme.name}": programme.faculty_abbreviation if programme.faculty_abbreviation else "" for programme in self.programmes}
         # manual additions here
         tmp = {}
+
         for key, value in data.items():
             if 'Risicomanagement' in key:
                 tmp['Master Risicomanagement'] = value
             if 'Public Management' in key:
                 tmp['Master Public Management'] = value
+        tmp.update(
+            {
+                'BMS: Behavioural, Management and Social Sciences':'BMS',
+                'EEMCS: Electrical Engineering, Mathematics and Computer Science': 'EEMCS',
+                'ET: Engineering Technology': 'ET'
+            }
+        )
         data.update(tmp)
         return data
 
@@ -499,4 +504,3 @@ except Exception as e:
 
 if isinstance((PUBLISHER_NAMES), dict):
     PUBLISHER_NAMES = set(PUBLISHER_NAMES.values())
-

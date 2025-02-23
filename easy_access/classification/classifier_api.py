@@ -1,7 +1,6 @@
 """
 This module uses an api-based service to classify documents.
 """
-import json
 import datetime
 import os
 from easy_access.settings import SETTINGS, DirSetting

@@ -82,20 +82,17 @@ data_settings:
       new_name: "uploaded_by"
     - name: "author"
       new_name: "detected_author"
-    - name: "contact_name"
-    - name: "contact_email"
-    - name: "contact_groups"
-    - name: "contact_departments"
-    - name: "osiris_catalogue_url"
-      is_url: true
+    - name: "course_contacts_names"
+    - name: "course_contacts_emails"
+    - name: "course_contacts_organizations"
     - name: 'course_name'
       new_name: "course_name_canvas"
+    - name: "course_names"
+      new_name: "course_names_osiris"
     - name: "department"
       new_name: "programme_canvas"
-    - name: "osiris_programme"
-      new_name: "programme_osiris"
-    - name: "osiris_course_codes_found"
-    - name: "osiris_course_code_data_selected"
+    - name: "programmes"
+      new_name: "programmes_osiris"
 
   raw_data_col_order: !!seq [
         material_id,
@@ -173,16 +170,21 @@ data_settings:
     possible_fine,
     infringement,
     faculty,
-    contact_faculties,
-    contact_name,
-    contact_email,
-    contact_groups,
-    contact_departments,
-    osiris_course_codes_used,
-    osiris_course_codes_found,
+    course_contacts_faculties,
+    course_contacts_names,
+    course_contacts_emails,
+    course_contacts_organizations,
+    course_names,
+    cursuscodes,
     osiris_catalogue_url,
-    osiris_programme,
+    programmes,
   ]
+
+
+
+
+
+
   new_fields:
   # fields not present in raw data (so added by this script) that need configuration should be added here
   # the key will be used as the field name.

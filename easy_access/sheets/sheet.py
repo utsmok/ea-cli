@@ -3,7 +3,7 @@ import polars as pl
 
 from easy_access.settings import SETTINGS, ColInfo, DirSetting, DEPARTMENT_MAPPING
 from dataclasses import dataclass, field
-from easy_access.utils import File, info, warn, cool, Directory
+from easy_access.utils import File, info, warn, Directory
 from pathlib import Path
 from datetime import datetime
 from itertools import batched
@@ -17,46 +17,6 @@ import openpyxl.worksheet.worksheet
 from openpyxl.worksheet.table import TableStyleInfo
 from openpyxl.worksheet.table import Table as ExcelTable
 import typer
-
-def read_other_sheet(file: File) -> pl.DataFrame:
-        """
-        Reads in the data from another sheet as the datasource, instead of using CopyRight data.
-        Sheet should be formatted in the same way as the faculty output sheets.
-        It will read in the first sheet in the .xlsx file.
-        It will do a quick check on the columns in the sheets to prevent the most basic errors.
-        """
-
-        info(f"Reading in data from {file.name}")
-        copyright_data = pl.read_excel(file.path)
-        latest_file_date = file.modified.strftime("%Y-%m-%d")
-        info(
-            f"Read {len(copyright_data)} items from {file.name}. Item was lasted changed on {latest_file_date}"
-        )
-
-        if "workflow_status" not in copyright_data.columns:
-            copyright_data = copyright_data.with_columns(
-                pl.Series("workflow_status", ["ToDo"] * len(copyright_data))
-            )
-        if "retrieved_from_copyright_on" not in copyright_data.columns:
-            if "added_to_sheet_on" not in copyright_data.columns:
-                copyright_data = copyright_data.with_columns(
-                    pl.Series(
-                        "retrieved_from_copyright_on",
-                        [latest_file_date] * len(copyright_data),
-                    )
-                )
-            else:
-                copyright_data = copyright_data.rename(
-                    {"added_to_sheet_on": "retrieved_from_copyright_on"}
-                )
-
-        latest_file_date = max(
-            copyright_data.select(pl.col("retrieved_from_copyright_on"))
-            .to_series()
-            .to_list()
-        )
-
-        return latest_file_date, copyright_data.select(SETTINGS.data_settings.complete_data_cols)
 
 def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
         """
@@ -131,6 +91,7 @@ def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
         except ValueError:
             warn(f"No file found.")
             raise typer.Exit(code=1)
+
 @dataclass
 class DataEntrySheet:
     """
@@ -206,9 +167,9 @@ class DataEntrySheet:
 
                 else:
                     self.sheet.cell(row, colnum).value = cell_data
-                    if len(cell_data) > col.max_width:
-                        col.max_width = len(cell_data)
-                    if len(cell_data) > 40:
+                    if len(str(cell_data)) > col.max_width:
+                        col.max_width = len(str(cell_data))
+                    if len(str(cell_data)) > 40:
                         col.count_max_width_over_40 += 1
 
         for colnum, col in enumerate(self.cols):
@@ -280,6 +241,7 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
         file_path=str(file.path),
     )
 
+    data = data.unique("material_id")
     sheet.add_data(data)
     info(f'Added data entry sheet to {file.name}')
     llm_classification_data = enrich_with_llm_classifications(data)
@@ -293,11 +255,17 @@ def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
     Stores the given data in an excel file with 1 sheet named SETTINGS.data_settings.complete_data_name
     using the col order in SETTINGS.data_settings.final_data_col_order
     """
+
     if isinstance(file, File):
         file = file.path
 
+    if file.exists():
+        size = file.stat().st_size
+        if size > 0:
+            File(file).delete()
     selectcols = [col for col in SETTINGS.data_settings.final_data_col_order if col in data.columns]
     data = data.select(selectcols)
+    data = data.unique('material_id')
     data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
     info(f'Stored {data.shape[0]} rows to {file}')
 
@@ -434,7 +402,7 @@ def retrieve_all_classifications() -> pl.DataFrame:
     #all_jsons = [file for file in all_files if file.extension == ".json"]
     # read all jsons
 
-    data = {}
+    data: dict[str,dict] = {}
 
     for file in all_jsons:
         with open(file.path, "r", encoding='utf-8', errors='replace') as f:
@@ -447,6 +415,10 @@ def retrieve_all_classifications() -> pl.DataFrame:
     final_data = []
     final_data_dict = {}
     for mat_id, mat_data in data.items():
+        if not str(mat_id).isdigit():
+            warn(f'Skipping llm data for {mat_id} as it is not a valid material_id')
+            continue
+        mat_id = int(mat_id)
         tmp = {}
         for key, value in mat_data.items():
             if isinstance(value, list):
@@ -460,6 +432,10 @@ def retrieve_all_classifications() -> pl.DataFrame:
 
     for replace in all_replacements:
         old, new = replace.split("_")
+        if not old.isdigit() or not new.isdigit():
+            warn(f"Skipping replacement file {replace} as it on or both material_ids are not valid: {old}, {new}")
+            continue
+        old, new = int(old), int(new)
         if old not in final_data_dict:
             if new not in final_data_dict:
                 continue

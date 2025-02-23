@@ -10,7 +10,8 @@ compare/*.*
 *.parquet
 
 *.html
-*.sqlite3
+*.sqlite3*
+*.duckdb
 easy_access/classification/api_keys.py
 api_keys.py
 

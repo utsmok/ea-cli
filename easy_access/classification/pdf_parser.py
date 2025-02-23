@@ -6,19 +6,15 @@ to prepare them for NLP analysis.
 import hashlib
 from _collections_abc import dict_keys
 from easy_access.classification.downloader import Downloader
-from easy_access.utils import File, Directory, cool, warn, info
+from easy_access.utils import File, Directory,  warn, info
 from easy_access.settings import SETTINGS, DirSetting
 import polars as pl
 from pathlib import Path
 import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+from torch.utils.data import Dataset
 import spacy
 from spacy_layout import spaCyLayout
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 from typing import Any
-from difflib import SequenceMatcher
 import os
 from dataclasses import dataclass
 

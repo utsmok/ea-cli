@@ -1,0 +1,137 @@
+"""
+Base & util functions for db-related operations
+"""
+from tortoise import Tortoise
+from easy_access.db.models import (
+    Faculty, CopyrightItem
+    )
+from easy_access.utils import warn
+import polars as pl
+from datetime import datetime
+from pathlib import Path
+
+async def init() -> None:
+    create_tables = False
+    db_path = Path('db.sqlite3')
+    if not db_path.exists():
+        create_tables=True
+    await Tortoise.init(
+        db_url='sqlite://db.sqlite3',
+        modules={'models': ['easy_access.db.models']}
+    )
+    if create_tables:
+        await Tortoise.generate_schemas(safe=True)
+        return True
+
+async def create() -> None:
+    await Tortoise.generate_schemas(safe=True)
+
+def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    rename cols to standard format
+    cast all cols to str
+    replace '-' with None
+    filter missing material_ids
+    filter to select only relevant itemtypes
+    drop useless cols
+    """
+    df = df.with_columns(
+            pl.exclude(pl.String).cast(str)
+        ).rename(
+            lambda col: col.replace(" ", "_")
+            .replace("#", "count_")
+            .replace("*", "x")
+            .lower()
+        ).with_columns(
+            pl.when(pl.col(pl.String) != "-")
+            .then(pl.col(pl.String))
+            .name.keep()
+        ).filter(
+            (pl.col("material_id").is_not_null())
+        )
+
+    if 'filetype' in df.columns:
+        df = df.filter(
+            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) |
+            (pl.col("filetype").is_null())
+        )
+    if 'type' in df.columns:
+        df = df.drop('type')
+    if 'google_search_file' in df.columns:
+        df = df.drop('google_search_file')
+    return df
+
+async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
+    """
+    Turns a dict with data for a CopyrightItem into a CopyrightItem object
+    """
+    copyright_item_keys = {
+        "material_id",
+        "period",
+        "department",
+        "course_code",
+        "course_name",
+        "url",
+        "filename",
+        "title",
+        "owner",
+        "filetype",
+        "classification",
+        "ml_prediction",
+        "manual_classification",
+        "manual_identifier",
+        "scope",
+        "remarks",
+        "auditor",
+        "last_change",
+        "status",
+        "isbn",
+        "doi",
+        "in_collection",
+        "pagecount",
+        "wordcount",
+        "picturecount",
+        "author",
+        "publisher",
+        "reliability",
+        "pages_x_students",
+        "count_students_registered",
+        "retrieved_from_copyright_on",
+        "workflow_status",
+        "possible_fine",
+        "infringement",
+        "faculty",
+    }
+    faculty = await Faculty.get(abbreviation='UNM')
+    try:
+        if item.get('faculty') == 'Unmapped':
+            abbr = 'UNM'
+        else:
+            abbr = item.get('faculty')
+        faculty = await Faculty.get(abbreviation=abbr)
+    except Exception as e:
+        warn(f"Error getting faculty with {item.get('faculty')}: {e}")
+    try:
+
+        item['faculty'] = faculty
+        item['material_id'] = int(item.get('material_id'))
+        item['last_change'] = datetime.strptime(item.get('last_change'), "%Y-%m-%d") if item.get('last_change') else None
+        item['retrieved_from_copyright_on'] = datetime.strptime(item.get('retrieved_from_copyright_on'), "%Y-%m-%d")
+        item['pagecount'] = int(item.get('pagecount'))
+        item['wordcount'] = int(item.get('wordcount'))
+        item['picturecount'] = int(item.get('picturecount'))
+        item['reliability'] = int(item.get('reliability'))
+        item['pages_x_students'] = int(item.get('pages_x_students'))
+        item['count_students_registered'] = int(item.get('count_students_registered'))
+        item['filetype'] = item.get('filetype', 'unknown') if item.get('filetype') else 'unknown'
+        final_dict = {}
+        for key in item.keys():
+            if key in copyright_item_keys:
+                final_dict[key] = item[key]
+
+        final_item = CopyrightItem(**final_dict)
+        return final_item
+
+    except Exception as e:
+        warn(f'Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}')
+        return None
