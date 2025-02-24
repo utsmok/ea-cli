@@ -28,6 +28,9 @@ dependencies = [
     "ea-cli",
     "tortoise-orm[accel]>=0.24.0",
     "connectorx>=0.4.2",
+    "python-fasthtml>=0.12.1",
+    "monsterui>=1.0.10",
+    "pypdf>=5.3.0",
 ]
 
 [tool.uv.sources]
