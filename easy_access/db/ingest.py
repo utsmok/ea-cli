@@ -166,12 +166,16 @@ async def load_person_data() -> None:
                 orgname = org.get('name').strip()
                 org_sole_abbr = org.get('abbr').split('-')[-1].strip()
                 org_full_abbr = org.get('abbr').strip()
-                org_obj, _ = await Organization.get_or_create(defaults={
-                    "name":orgname,
-                    "abbreviation":org_sole_abbr,
+                org_dict = {
+                    "name": orgname,
+                    "abbreviation": org_sole_abbr,
                     "full_abbreviation": org_full_abbr,
-                    "hierarchy_level": hierarchy_level,
-                    }, full_abbreviation=org_full_abbr)
+                    "hierarchy_level": hierarchy_level
+                }
+                org_obj, _ = await Organization.get_or_create(
+                    defaults=org_dict,
+                    full_abbreviation=org_full_abbr
+                )
                 if hierarchy_level == 1:
                     org_obj.parent_organization, _ = await Organization.get_or_create(defaults={"name":"University of Twente", "abbreviation":"UT", "full_abbreviation":"UT", "parent_organization":None, "hierarchy_level":0}, abbreviation="UT")
                 elif hierarchy_level >= 2:
@@ -181,7 +185,7 @@ async def load_person_data() -> None:
                 await org_obj.save()
                 orglist.append(org_obj)
             except Exception as e:
-                warn(f"Error adding org {org} to person: {e}")
+                warn(f"Error adding org with data {org_dict} to person: {e}")
                 continue
 
         person = await Person.create(**person_dict)

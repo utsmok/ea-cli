@@ -106,7 +106,14 @@ class EasyAccessTool:
         Reads in the latest copyright export (using read_copyright_export).
 
         """
-        self.latest_file_date, self.copyright_data = read_copyright_export()
+        file = None
+        try:
+            if not isinstance(self.settings.other_sheet, File):
+                file = File(self.settings.other_sheet)
+        except Exception as e:
+            pass
+
+        self.latest_file_date, self.copyright_data = read_copyright_export(file)
         if self.copyright_data.is_empty():
             warn("No new Copyright data found to process! No new items will be added. Checking if there are other changes...")
         else:
@@ -180,7 +187,6 @@ class EasyAccessTool:
             cols_in_other = other.columns
             primary_selected = [col for col in select_cols if col in cols_in_primary]
             other_selected = [col for col in select_cols if col in cols_in_other]
-
             initial_select_cols = select_cols
             # now only select the cols that are in both dataframes
             select_cols = [col for col in select_cols if col in primary_selected and col in other_selected]
@@ -234,7 +240,7 @@ class EasyAccessTool:
 
             different_vals = matching.filter(
                 pl.any_horizontal(conditions)
-            ).select(select_cols)
+            ).select(cols_in_primary)
 
             return pl.concat([not_in_other, different_vals], how="diagonal_relaxed")
 
@@ -258,7 +264,7 @@ class EasyAccessTool:
             for file in files:
                 # load data entry sheet for file and process
                 try:
-                    data_entry = pl.read_excel(file.path, sheet_name=SETTINGS.data_settings.data_entry_name, columns=select_cols)
+                    data_entry = pl.read_excel(file.path, sheet_name=SETTINGS.data_settings.data_entry_name)
                 except Exception as e:
                     warn(f'Error reading {file.path}: {e}')
                     continue
@@ -272,7 +278,6 @@ class EasyAccessTool:
                 # If no rows remaining: continue
                 # Else, do the same comparison as above but now compare data_entry to update_df
                 # finally concat any remaining rows to update_df and continue to the next file
-
                 if not self.copyright_data.is_empty():
                     data_entry = compare(data_entry, self.copyright_data, select_cols)
                 if not data_entry.is_empty():

@@ -44,7 +44,7 @@ quickstart:
 import time
 import typer
 from typing import Annotated
-from easy_access.utils import cool, warn
+from easy_access.utils import cool, warn, info
 from easy_access.settings import Functions, EasyAccessSettings, SETTINGS
 from easy_access.sheets.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
 from pathlib import Path
@@ -146,6 +146,14 @@ def cli(
             pass
         case _:
             warn("Unrecognized backup flag. Skipping backup/restore.")
+
+    if other_sheet:
+        try:
+            other_sheet = Path(other_sheet)
+            info(f"Reading in data from other sheet: {other_sheet.absolute()}")
+        except Exception as e:
+            warn(f"Failed to parse path to other sheet: {e}")
+            other_sheet = None
 
     # Load settings from env and CLI params
     ea_settings = EasyAccessSettings.from_env(

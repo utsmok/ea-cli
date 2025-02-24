@@ -102,27 +102,30 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
         "infringement",
         "faculty",
     }
-    faculty = await Faculty.get(abbreviation='UNM')
     try:
-        if item.get('faculty') == 'Unmapped':
+        if item.get('faculty') == 'Unmapped' or not item.get('faculty'):
             abbr = 'UNM'
         else:
             abbr = item.get('faculty')
+            if not abbr:
+                abbr = 'UNM'
         faculty = await Faculty.get(abbreviation=abbr)
     except Exception as e:
         warn(f"Error getting faculty with {item.get('faculty')}: {e}")
     try:
+        if not faculty:
+            faculty = await Faculty.get(abbreviation='UNM')
 
         item['faculty'] = faculty
         item['material_id'] = int(item.get('material_id'))
-        item['last_change'] = datetime.strptime(item.get('last_change'), "%Y-%m-%d") if item.get('last_change') else None
-        item['retrieved_from_copyright_on'] = datetime.strptime(item.get('retrieved_from_copyright_on'), "%Y-%m-%d")
-        item['pagecount'] = int(item.get('pagecount'))
-        item['wordcount'] = int(item.get('wordcount'))
-        item['picturecount'] = int(item.get('picturecount'))
-        item['reliability'] = int(item.get('reliability'))
-        item['pages_x_students'] = int(item.get('pages_x_students'))
-        item['count_students_registered'] = int(item.get('count_students_registered'))
+        item['last_change'] = datetime.strptime(item.get('last_change', ""), "%Y-%m-%d") if isinstance(item.get('last_change'),str) else None
+        item['retrieved_from_copyright_on'] = datetime.strptime(item.get('retrieved_from_copyright_on',''), "%Y-%m-%d") if item.get('retrieved_from_copyright_on') else None
+        item['pagecount'] = int(item.get('pagecount')) if item.get('pagecount') else 0
+        item['wordcount'] = int(item.get('wordcount')) if item.get('wordcount') else 0
+        item['picturecount'] = int(item.get('picturecount')) if item.get('picturecount') else 0
+        item['reliability'] = int(item.get('reliability')) if item.get('reliability') else 0
+        item['pages_x_students'] = int(item.get('pages_x_students')) if item.get('pages_x_students') else 0
+        item['count_students_registered'] = int(item.get('count_students_registered')) if item.get('count_students_registered') else 0
         item['filetype'] = item.get('filetype', 'unknown') if item.get('filetype') else 'unknown'
         final_dict = {}
         for key in item.keys():
@@ -134,4 +137,6 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
 
     except Exception as e:
         warn(f'Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}')
+        print(item)
+        input('Press Enter to continue...')
         return None

@@ -268,6 +268,7 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
             warn(f'Could not update item {new_item.get("material_id")}: {e}')
         finally:
             if len(list(changes.keys())) >= 3:
+                changes['modified_at'] = datetime.now()
                 updates[new_item.get('material_id')] = changes
                 changelist.append(db_item)
 
@@ -280,6 +281,7 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
         all_keys.discard('material_id')
         all_keys.discard('update_time')
         changed_fields = list(all_keys)
+        changed_fields.append('modified_at')
         info(f'Updating {len(changelist)} items in db for fields {changed_fields}.')
         info(f'Updating {len(updates)} changelog items in db.')
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)

@@ -273,3 +273,114 @@ class Programme(Model, TimestampMixin):
 
     def __str__(self):
         return self.name + " (" + self.abbreviation + ")"
+
+class FlatCopyrightItem(Model):
+    """
+    Instead of dynamically joining / constructing the default rows of data each time, cache them in this model.
+    Contains no relations, only flattened data from models all over the database.
+    """
+    # ------------------
+    # BASE DATA
+    # ------------------
+    material_id = fields.IntField(primary_key=True)
+    period = fields.CharEnumField(enum_type=Period, max_length=255)
+    department = fields.CharField(max_length=2048, db_index=True) # turn this into a relation w/ programmes later
+    course_code = fields.CharField(max_length=255, db_index=True)
+    course_name = fields.CharField(max_length=2048, db_index=True)
+    url = fields.CharField(max_length=255, unique=True, null=True)
+    filename = fields.CharField(max_length=2048, db_index=True, null=True)
+    title = fields.CharField(max_length=2048, null=True)
+    owner = fields.CharField(max_length=2048, null=True)
+    filetype = fields.CharEnumField(enum_type=Filetype, max_length=255, default=Filetype.UNKNOWN)
+    classification = fields.CharEnumField(enum_type=Classification, max_length=255, default=Classification.LANGE_OVERNAME)
+    ml_prediction = fields.CharEnumField(enum_type=Classification, max_length=255, db_index=True, null=True)
+    manual_classification = fields.CharField(max_length=2048, null=True, db_index=True)
+    manual_identifier = fields.CharField(max_length=2048, null=True)
+    scope = fields.CharField(max_length=255, null=True)
+    remarks = fields.CharField(max_length=10000, null=True)
+    auditor = fields.CharField(max_length=10000, null=True)
+    last_change = fields.DateField(null=True)
+    status = fields.CharEnumField(enum_type=Status, max_length=255, default=Status.PUBLISHED, db_index=True)
+    isbn = fields.CharField(max_length=255, null=True)
+    doi = fields.CharField(max_length=255, null=True)
+    in_collection = fields.BooleanField(null=True)
+    pagecount = fields.IntField()
+    wordcount = fields.IntField()
+    picturecount = fields.IntField()
+    author = fields.CharField(max_length=2048, null=True)
+    publisher = fields.CharField(max_length=2048, null=True)
+    reliability = fields.IntField()
+    pages_x_students = fields.IntField()
+    count_students_registered = fields.IntField()
+    retrieved_from_copyright_on = fields.DatetimeField(null=True, db_index=True)
+    workflow_status = fields.CharEnumField(enum_type=WorkflowStatus, max_length=255, default=WorkflowStatus.ToDo, db_index=True)
+    possible_fine = fields.FloatField(null=True)
+    infringement = fields.CharEnumField(enum_type=Infringement, max_length=255, default=Infringement.UNDETERMINED)
+
+    # ------------------
+    # LLM DATA
+    # ------------------
+    #if original has llm_classification_id, retrieve it and copy over the fields. For json fields, store as concatted strings: see below.
+    allowed_usage_llm = fields.CharEnumField(enum_type=AllowedUsageByUT, max_length=255, default=AllowedUsageByUT.UNDETERMINED, null=True)
+    allowed_usage_reasoning_llm = fields.CharField(max_length=10000, null=True)
+    copyright_status_llm = fields.CharEnumField(enum_type=CopyrightStatus, max_length=255, default=CopyrightStatus.OTHER, null=True)
+    copyright_classification_reason_llm = fields.CharField(max_length=10000, null=True)
+    item_type_llm = fields.CharEnumField(enum_type=ItemType, max_length=255, default=ItemType.UNKNOWN, null=True)
+    item_type_classification_reason_llm = fields.CharField(max_length=10000, null=True)
+    publisher_name_llm = fields.CharField(max_length=2048, null=True)
+    copyright_holder_llm = fields.CharField(max_length=2048, null=True)
+    item_title_llm = fields.CharField(max_length=2048, null=True)
+    remarks_llm = fields.CharField(max_length=10000, null=True)
+
+    # these are json fields in the original model.
+    # store as concatted strings here.
+    author_names_llm = fields.CharField(max_length=10000, null=True)
+    doi_llm = fields.CharField(max_length=10000, null=True)
+    isbn_llm = fields.CharField(max_length=10000, null=True)
+    source_url_llm = fields.CharField(max_length=10000, null=True)
+    license_llm = fields.CharField(max_length=10000, null=True)
+    topic_llm = fields.CharField(max_length=10000, null=True)
+
+        # ------------------
+    # RELATIONS
+    # ------------------
+    # faculty_id in original --> rename to  faculty
+    faculty = fields.CharField(max_length=255, db_index=True)
+
+    # Courses is the 'gateway' to all other data.
+    # retrieve the main info from the directly related courses, concat the strings.
+    # then pull all deeper data for contacts and do the same.
+
+    # relations can be found in m2m table copyright_data_course_data
+    # courses = [row.course_id for row in copyright_data_course_data if row.copyright_data_id == copyrightitem.id]
+    # the course_id value == cursuscode (pk for Courses).
+
+    course_names = fields.CharField(max_length=10000, null=True) # join [course.name for each course in courses]
+    cursuscodes = fields.CharField(max_length=10000, null=True) # join [course.cursuscode for each course in courses]
+    programmes = fields.CharField(max_length=10000, null=True) # join [course.programme for each course in courses]
+
+    # now we need all contacts for all courses selected
+    # use the m2m table course_employee to get all contacts for each course, use the additional data 'role' to filter out contacts (and not also teachers etc)
+    # contacts = [row.person_id for row in course_employee if row.course_id in courses and row.role == 'contact']
+
+
+    course_contacts_names = fields.CharField(max_length=10000, null=True) # join [contact.name for each contact in contacts]
+    course_contacts_faculties = fields.CharField(max_length=10000, null=True) # join [contact.faculty_id for each contact in contacts]
+    course_contacts_emails = fields.CharField(max_length=10000, null=True) # join [contact.email for each contact in contacts]
+    # finally we need all organizations for all contacts selected
+    # use the m2m table person_data_organization_data to get all organizations for each contact
+    # organizations = [row.organization_id for row in person_data_organization_data if row.person_id in contacts]
+    course_contacts_organizations = fields.CharField(max_length=10000, null=True) # join [org.abbreviation for org in organizations] -- see below for improvement (?)
+    # NOTE: we can do this a bit better/with less waste if
+    # we drop abbreviations for items that have a child org in the list
+    # (e.g. if we have 'EEMCS-CS-HMI' and 'EEMCS-CS' in the list, we can drop 'EEMCS-CS')
+    # something like this:
+    # organizations.sort(organizations, key=lambda x: x.hierarchy_level, reverse=True)
+    # parent_orgs = []
+    # final_list = []
+    # for org in organizations:
+    #   if org.id in parent_orgs:
+    #   continue
+    #   parent_orgs.append(org.parent_organization_id)
+    #   final_list.append(org)
+    # organizations = final_list
