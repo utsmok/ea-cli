@@ -129,9 +129,11 @@ async def update_db(datalist: list[pl.DataFrame]):
     info('Moving updates into database.')
 
     await load_base_data()
-    await update_copyright_relations()
 
-    for num, df in enumerate(datalist,1):
-        info(f'update df {num}/{len(datalist)}')
-        await update_copyright_items(df)
-        await update_copyright_relations()
+    # concat all dfs
+    df = pl.concat(datalist, how="diagonal_relaxed")
+    df = df.unique()
+
+    await update_copyright_items(df)
+
+    await update_copyright_relations()

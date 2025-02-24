@@ -2,7 +2,7 @@ import asyncio
 import os
 import polars as pl
 from easy_access.db.base import init
-from easy_access.db.ingest import load_base_data, load_llm_classifications, load_raw_copyright_data
+from easy_access.db.ingest import load_base_data, load_raw_copyright_data
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_full_data
 from easy_access.utils import Directory, File, info, cool, warn, print
 from easy_access.sheets.enrichment import  update_osiris_data
@@ -302,7 +302,7 @@ class EasyAccessTool:
         info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
 
         int_mat_ids = [int(x) for x in self.mat_ids_on_disk]
-        filtered_data: pl.DataFrame = retrieve_full_data().filter(~pl.col("material_id").is_in(int_mat_ids))
+        filtered_data: pl.DataFrame = retrieve_full_data(excluded_material_ids=int_mat_ids)
         if filtered_data.is_empty() and self.only_changes:
             warn("No new items found to export to faculty sheets.")
             return
@@ -446,12 +446,11 @@ class EasyAccessTool:
 
 
         # retrieve full data from db -- all items
-        full_data = retrieve_full_data()
         self.remove_current_overviews()
         for faculty in self.faculties:
             if not faculty or faculty == "" or faculty == "Unmapped":
                 continue
-            data = full_data.filter(pl.col("faculty") == faculty)
+            data = retrieve_full_data(selected_faculties=faculty)
             if data.is_empty():
                 continue
             faculty_dict[faculty] = data

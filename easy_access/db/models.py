@@ -276,8 +276,10 @@ class Programme(Model, TimestampMixin):
 
 class FlatCopyrightItem(Model):
     """
+    Idea:
     Instead of dynamically joining / constructing the default rows of data each time, cache them in this model.
     Contains no relations, only flattened data from models all over the database.
+    TODO: finish this?? currently not used!
     """
     # ------------------
     # BASE DATA

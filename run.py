@@ -21,6 +21,7 @@
 #     "pdfminer-six",
 #     "pydantic",
 #     "sqlalchemy",
+#     "connectorx",
 # ]
 # ///
 

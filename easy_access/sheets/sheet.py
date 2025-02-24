@@ -1,13 +1,13 @@
 from copy import copy
 import polars as pl
 
+from easy_access.db.retrieve import retrieve_llm_classifications
 from easy_access.settings import SETTINGS, ColInfo, DirSetting, DEPARTMENT_MAPPING
 from dataclasses import dataclass, field
-from easy_access.utils import File, info, warn, Directory
+from easy_access.utils import File, info, warn
 from pathlib import Path
 from datetime import datetime
 from itertools import batched
-import json
 import openpyxl
 from openpyxl.styles import NamedStyle, Alignment
 import openpyxl.worksheet
@@ -382,68 +382,6 @@ def create_export_sheet(data: pl.DataFrame, print_overview: bool = True) -> list
 
     return material_ids_exported
 
-def retrieve_all_classifications() -> pl.DataFrame:
-    """
-    -> read all .json files in script_data / classifications /
-    -> each json file has name {material_id}_.......json
-    -> open each json, use key as colname, contents as values, add material_id col with material_id from filename as value
-    -> if a json is not found, check if a .replace file is present --> should have format {input_mat_id}_{replacement_mat_id}.replace
-        -> if a .replace file exists, read the replacement mat_id instead and add that row data
-    -> return as dataframe
-    """
-    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
-    all_jsons = [file for file in all_files if all([file.extension == ".json",'_' not in file.name, file.name.rstrip('.json').isdigit()])]
-    all_replacements = [file.name.replace(".replace","") for file in all_files if file.extension == ".replace"]
-    info(f'Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full}')
-    # rename all jsons to {material_id}.json --> split filename on _ and take first part
-
-    #all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
-    #all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
-    #all_jsons = [file for file in all_files if file.extension == ".json"]
-    # read all jsons
-
-    data: dict[str,dict] = {}
-
-    for file in all_jsons:
-        with open(file.path, "r", encoding='utf-8', errors='replace') as f:
-            read_str = f.read()
-            try:
-                data[file.name.replace(".json", "")] = json.loads(read_str)
-            except json.JSONDecodeError:
-                continue
-
-    final_data = []
-    final_data_dict = {}
-    for mat_id, mat_data in data.items():
-        if not str(mat_id).isdigit():
-            warn(f'Skipping llm data for {mat_id} as it is not a valid material_id')
-            continue
-        mat_id = int(mat_id)
-        tmp = {}
-        for key, value in mat_data.items():
-            if isinstance(value, list):
-                value = "\n".join(value)
-            if not value:
-                value = None
-            tmp[key+"_llm"] = value
-        tmp['material_id'] = mat_id
-        final_data.append(tmp)
-        final_data_dict[mat_id] = tmp
-
-    for replace in all_replacements:
-        old, new = replace.split("_")
-        if not old.isdigit() or not new.isdigit():
-            warn(f"Skipping replacement file {replace} as it on or both material_ids are not valid: {old}, {new}")
-            continue
-        old, new = int(old), int(new)
-        if old not in final_data_dict:
-            if new not in final_data_dict:
-                continue
-            replace_data = final_data_dict[new]
-            replace_data['material_id'] = old
-            final_data.append(replace_data)
-
-    return pl.from_dicts(final_data, infer_schema_length=None)
 
 def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     """
@@ -454,7 +392,7 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     return the joined dataframe
     """
 
-    llm_data = retrieve_all_classifications()
+    llm_data = retrieve_llm_classifications(selected_material_ids=data.select("material_id").unique("material_id").to_series().to_list())
     joined_data = data.join(llm_data, on="material_id", how="left")
     # set col_order
     col_order = [
