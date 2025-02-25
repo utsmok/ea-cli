@@ -122,6 +122,7 @@ class Downloader:
 
     def download(self, urls: pl.DataFrame, max_amount: int = None) -> None:
         def process_results(results, first_datetime, start_time):
+            missing = 0
             info(f'Waiting until downloads are completed...')
             while any(file.name.endswith(('.crdownload', '.tmp')) for file in self.download_dir.files):
                 time.sleep(5)
@@ -166,8 +167,7 @@ class Downloader:
                     cool("Number of skipped files matches number of missing files. All good.")
                 else:
                     warn(f"Number of skipped files does not match number of missing files. Please check: {skipped=}, {missing=}")
-            else:
-                warn(f'No files downloaded for this batch.')
+
         self.setup_selenium()
         info(f'Downloading {len(urls)} files')
         urls = urls.to_dicts()
