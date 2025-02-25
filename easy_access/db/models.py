@@ -10,6 +10,7 @@ from easy_access.settings import SETTINGS, DirSetting
 from easy_access.classification.classifier_api import CopyrightStatus, ItemType, AllowedUsageByUT
 from pathlib import Path
 from easy_access.utils import File
+from datetime import datetime
 class TimestampMixin():
     created_at = fields.DatetimeField(null=True, auto_now_add=True)
     modified_at = fields.DatetimeField(null=True, auto_now=True)
@@ -309,6 +310,20 @@ class PDF(Model, TimestampMixin):
     def path(self) -> Path:
         return SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / self.current_file_name
 
+    @property
+    def age(self) -> int:
+        """
+        Depending on which date info is available, determine the age of the file in seconds.
+        Start with 'file_modification_date', then try 'file_creation_date'.
+        If neither are available, use 'modified_at', which should always be present.
+        """
+        now = datetime.now().timestamp()
+        if self.file_modification_date:
+            return int((now - self.file_modification_date.timestamp()))
+        elif self.file_creation_date:
+            return int((now - self.file_creation_date.timestamp()))
+        else:
+            return int((now - self.modified_at.timestamp()))
     def as_file(self) -> File:
         return File(self.path)
 

@@ -6,14 +6,21 @@ Functions to handle PDF files:
 - store extracted text
 - ...
 """
+from itertools import batched
 from pdfminer.high_level import extract_text
 from easy_access.utils import info, warn, cool, File, Directory
 from easy_access.settings import SETTINGS
 from pathlib import Path
-from pypdf import PdfReader
+import pikepdf
+from datetime import datetime
 from easy_access.db.models import PDF
-
-def extract_pdf_text(pdf: PDF, max_pages: int | None = None, str_limit: int | None = None) -> PDF:
+from xxhash import xxh64
+from collections import defaultdict
+from fastembed import TextEmbedding
+import numpy as np
+from qdrant_client import QdrantClient, models
+from pydantic import BaseModel
+async def extract_pdf_text(pdf: PDF, max_pages: int | None = None, str_limit: int | None = None) -> PDF:
     """
     Extracts text from a PDF file using pdfminer and pypdf.
     Limit the extraction length by number of pdf pages or output string length.
@@ -29,65 +36,244 @@ def extract_pdf_text(pdf: PDF, max_pages: int | None = None, str_limit: int | No
     if not path.exists() or not path.is_file() or not path.suffix.lower() == '.pdf':
         warn(f"Invalid/Not existing PDF file: {path}")
         return pdf
+    try:
+        cur_len = len(pdf.extracted_text) if pdf.extracted_text else 0
+        cur_max_len = pdf.extracted_text_max_length if pdf.extracted_text_max_length else 0
+        if cur_max_len:
+            if cur_max_len >= str_limit:
+                info(f'pdf already has extracted text of length {cur_max_len}')
+                return pdf
+        pdf_text: str = extract_text(pdf_file=path, maxpages=max_pages, codec='utf-8')
+        if str_limit:
+            if len(pdf_text)> str_limit:
+                pdf_text = pdf_text[:str_limit]
 
-    pdf_text: str = extract_text(pdf_file=path, maxpages=max_pages, codec='utf-8')
-    if str_limit:
-        if len(pdf_text)> str_limit:
-            pdf_text = pdf_text[:10_000]
+        if not pdf_text:
+            warn(f"Failed to extract text from PDF: {path}")
+            return pdf
 
-    if not pdf_text:
-        warn(f"Failed to extract text from PDF: {path}")
-        return pdf
+        if len(pdf_text) <= cur_len:
+            warn(f"Extracted text is shorter or equal to current text: {len(pdf_text)} <= {cur_len}. Not updating.")
+            return pdf
 
-    pdf.extracted_text = pdf_text
-    pdf.extracted_text_max_length = str_limit
-    pdf.extracted_text_max_pages = max_pages
-    reader = PdfReader(path)
-    meta = reader.metadata
-    metadata = {
-        'title': meta.title,
-        'author': meta.author,
-        'subject': meta.subject,
-        'creator': meta.creator,
-        'producer': meta.producer,
-        'file_creation_date': meta.creation_date,
-        'file_modification_date': meta.modification_date
-    }
-    for key, value in metadata.items():
-        if value:
-            setattr(pdf, key, value)
+        update_dict = {
+            'extracted_text': pdf_text,
+            'extracted_text_max_length': str_limit,
+            'extracted_text_max_pages': max_pages
+        }
+
+        pdf = pdf.update_from_dict(update_dict)
+        await pdf.save()
+    except Exception as e:
+        warn(f"Error extracting text from PDF: {e}")
+
     return pdf
 
-async def bulk_extract_text(pdfs: list[PDF], max_pages: int | None = None, str_limit: int | None = None) -> list[PDF]:
+async def extract_metadata(pdf: PDF) -> PDF:
     """
-    Extract text from a list of PDF files. Update the objects with extracted text and metadata.
+    Extracts metadata from a PDF file and updates the PDF object with the extracted information.
+    This function reads various metadata fields from the PDF file including title, author,
+    subject, creator, producer, and dates. If any of these fields contain values, they are
+    set as attributes on the PDF object.
+    Args:
+        pdf (PDF): A PDF object containing the path to the PDF file and other attributes.
+    Returns:
+        PDF: The updated PDF object with extracted metadata fields set as attributes.
+    Note:
+        The function will only set attributes for metadata fields that contain values.
+        The PDF object is saved to persistence storage after metadata extraction.
+    """
+    if any([getattr(pdf, field) for field in ['title', 'author', 'subject', 'creator', 'producer', 'file_creation_date', 'file_modification_date']]):
+        return pdf
+    print(f'Extracting metadata from {pdf.path}')
+    file_data = pikepdf.open(pdf.path)
+    metadata = file_data.docinfo
+    if not metadata :
+        warn(f"No metadata found in {pdf.path}")
+        return pdf
+
+
+    try:
+        print(metadata)
+        title = metadata.get('/Title') if metadata.get('/Title') else None
+        author = metadata.get('/Author') if metadata.get('/Author') else None
+        subject = metadata.get('/Subject') if metadata.get('/Subject') else None
+        creator = metadata.get('/Creator') if metadata.get('/Creator') else None
+        producer = metadata.get('/Producer') if metadata.get('/Producer') else None
+        file_creation_date = metadata.get('/CreationDate') if metadata.get('/CreationDate') else None
+        file_modification_date = metadata.get('/ModDate') if metadata.get('/ModDate') else None
+
+        doi = metadata.get("/doi") if metadata.get("/doi") else None
+
+        metadata = {
+            'title': str(title) if title else None,
+            'author': str(author) if author else None,
+            'subject': str(subject) if subject else None,
+            'creator': str(creator) if creator else None,
+            'producer': str(producer) if producer else None,
+        }
+        pdf = pdf.update_from_dict(metadata)
+        await pdf.save()
+        """        date_data = {
+            'file_creation_date': datetime.strptime(str(file_creation_date), "%Y%m%d%H%M%S") if file_creation_date else None,
+            'file_modification_date': datetime.strptime(str(file_modification_date), "%Y%m%d%H%M%S") if file_modification_date else None
+        }
+        pdf = pdf.update_from_dict(date_data)
+        await pdf.save()
+        """
+    except Exception as e:
+        warn(f'Error extracting metadata from {pdf.path}: {e}')
+
+    info(f'done with {pdf.path}')
+    return pdf
+
+
+async def enrich_pdfs(pdfs: list[PDF] | None = None, max_pages: int | None = None, str_limit: int | None = None) -> list[PDF]:
+    """
+    Deduplicates, and then extracts text & metadata from a list of PDF files, and updates the objects accordingly.
     Parameters:
         pdfs (list[PDF]): A list of PDF objects (tortoise orm models).
         max_pages (int, optional): Max num of pages to process. Defaults to None (all pages).
         str_limit (int, optional): Truncate the result to this length. Defaults to None (no limit).
     Returns:
-        list[PDF]: The same list of PDF objects, but updated with extracted text and metadata.
+        list[PDF]: The same list of PDF objects, but updated with deduplication info, metadata & extracted text.
     """
-    for pdf in pdfs:
-        pdf = extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
-    await PDF.bulk_update(pdfs, update_fields=['modified_at', 'extracted_text', 'extracted_text_max_length', 'extracted_text_max_pages', 'title', 'author', 'subject', 'creator', 'producer', 'file_creation_date', 'file_modification_date'])
-    return pdfs
+    if not pdfs:
+        pdfs = await PDF.all()
+
+    pdfs_with_metadata = [await extract_metadata(pdf) for pdf in pdfs]
+    deduplicated_pdfs = pdfs_with_metadata
+    #deduplicated_pdfs = await deduplicate_pdfs(pdfs_with_metadata)
+    # filter out pdfs with extracted text, and pdfs that are duplicates
+    pdfs_with_text = [await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit) for pdf in pdfs_with_metadata]
+    deduplicated_pdfs = await deduplicate_pdfs(pdfs_with_text)
+
 
 async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
     """
     Deduplicate a list of PDF files. Uses various techniques to compare the files.
+    When duplicates are found, keep the -oldest- (?) file and make the others point to it.
     Parameters:
         pdfs (list[PDF]): A list of pdfs from the db to deduplicate.
     Returns:
         list[PDF]: The same list of pdfs, but updated where possible.
     """
-    for pdf in pdfs:
-        replacement_id = None
-        # do stuff to determine if pdf is a duplicate
-        # if pdf is a duplicate, set replacement_id to the id of the pdf to replace
-        if replacement_id:
-            replace_pdf = await PDF.get_or_none(material_id=replacement_id)
-            if replace_pdf:
-                pdf.replace_with(replace_pdf)
+    client = QdrantClient(path="qdrant.db")
+    ids_per_hash = defaultdict(list)
+    new_mapping: dict[int, int] = {} # store duplicates as {id_to_replace: target_id}
+    replaced_ids = set() # store ids that have been replaced: they do not need to be processed any further
+
+    # first sort the pdfs on their 'age' property
+    pdfs.sort(key=lambda pdf: pdf.age)
+
+    # now use list comprehension to populate ids_per_hash.
+    # should result in a dict with hash as key and list of ids as value
+    # if len(ids_per_hash[hash]) > 1, we have duplicates for that hash!
+    [ids_per_hash[get_hash(pdf.path)].append(pdf.material_id) for pdf in pdfs]
+
+    for file_hash, ids in ids_per_hash.items():
+        if len(ids) > 1:
+            new_mapping.update({id_to_replace:ids[0] for id_to_replace in ids[1:]})
+            replaced_ids.union(set(ids[1:]))
+    info(f'Found {len(new_mapping)} duplicates by hash.')
+    by_hash = len(new_mapping)
+    # step 2: load extracted text for pdfs into qdrant
+
+    TRESHOLD = 0.95 # treshold for similarity
+    all_embedding_pdfs = [pdf for pdf in pdfs if pdf.extracted_text and pdf.material_id not in replaced_ids]
+    for embedding_pdfs in batched(all_embedding_pdfs, 20):
+        docs = [pdf.extracted_text for pdf in embedding_pdfs]
+        ids = [pdf.material_id for pdf in embedding_pdfs ]
+        metadata = [pdf.original_file_name for pdf in embedding_pdfs]
+        client.add(
+            collection_name="pdfs",
+            documents=docs,
+            metadata=metadata,
+            ids=ids
+        )
+    # once stored, we can query for duplicates
+    # determine this by looping over all pdfs & searching for the extracted text in the qdrant db
+    # if QueryResponse has a score above treshold: mark as match (add to new_mapping etc).
+
+    for pdf in all_embedding_pdfs:
+        query = pdf.extracted_text
+        # exclude the pdf itself from the query: so id in qdrant != pdf.material_id
+        response: list[BaseModel] = client.query(collection_name="pdfs", query=query, query_filter=models.Filter(
+        must_not=[
+            models.HasIdCondition(has_id=[1, 3, 5, 7, 9, 11]),
+        ],
+    ), top_k=5)
+        for result in response:
+            if result.score > TRESHOLD:
+                new_mapping[pdf.material_id] = result.id
+    info(f'Found {len(new_mapping)-by_hash} duplicates by embedding.')
+
+    if not new_mapping:
+        info('No duplicates found!')
+        return pdfs
+
+    replaced = 0
+    for old_id, new_id in new_mapping.items():
+        replace_pdf = await PDF.get_or_none(material_id=new_id)
+        if replace_pdf:
+            pdf = await PDF.get_or_none(material_id=old_id)
+            if pdf:
+                pdf.replace_with = replace_pdf
+                replaced += 1
                 await pdf.save()
+
+    info(f'Replaced {replaced} duplicate pdfs with alternative material_id.')
     return pdfs
+
+def get_hash(file_path: Path) -> str | None:
+    """
+    Calculate the XXH64 hash of a file and return it as a hexadecimal string.
+    Args:
+        file_path (Path): Path to the file to be hashed.
+    Returns:
+        str or None: Hexadecimal string representation of the file's XXH64 hash; None if an error occurs.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            contents = f.read()
+        return xxh64(contents).hexdigest()
+
+    except Exception as e:
+        warn(f"Error hashing {file_path}: {e}")
+        return None
+
+    # print exact duplicates (same hash)
+    for pdf_hash, paths in file_hashes.items():
+        if len(paths) > 1:
+            try:
+                info(f"Duplicate PDF files found with hash {pdf_hash}: {paths}")
+                filenames = [file.name for file in paths]
+                filenames.sort()
+                main_mat_id = filenames[0].split('_')[0]
+                for i, path in enumerate(paths):
+                    if i == 0:
+                        continue
+                    orig_mat_id = path.name.split('_')[0]
+                    new_file = f"{orig_mat_id}_{main_mat_id}.replace"
+                    # create new_file
+                    new_file_path = pdf_dir.full / new_file
+                    with open(new_file_path, "w") as f:
+                        f.write(f"{orig_mat_id} {main_mat_id}")
+                    # delete original file
+                    os.remove(path)
+            except Exception as e:
+                warn(f"Error deduplicating PDF files with paths {paths}: {e}")
+                continue
+
+def get_embedding(pdf: PDF) -> list[np.ndarray] | None:
+    """
+    Calculate the embedding of the extracted pdf text using a pre-trained model.
+    Args:
+        pdf (PDF): PDF object with extracted text.
+    Returns:
+        list[float] or None: List of floats representing the file's embedding; None if an error occurs.
+    """
+    embedding_model = TextEmbedding()
+    return embedding_model.embed(pdf.extracted_text)
+
+    pass

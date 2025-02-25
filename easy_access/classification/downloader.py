@@ -1,6 +1,7 @@
 
 from selenium import webdriver
 
+from easy_access.db.models import CopyrightItem
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import info, warn, cool,  File
 import polars as pl
@@ -62,29 +63,30 @@ class Downloader:
     def get_already_classified_material_ids(self) -> list[str]:
         return [file.name.rstrip('.json') for file in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files if file.extension == '.json' and '_old' not in file.name]
 
-    def get_urls_from_full_data(self) -> pl.DataFrame:
-        all_items: pl.DataFrame =pl.read_parquet(source=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / 'full_data.parquet', columns=['material_id', 'url', 'workflow_status', 'filename'])
+    async def get_urls_from_full_data(self) -> pl.DataFrame:
+        #all_items: pl.DataFrame = pl.read_parquet(source=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / 'full_data.parquet', columns=['material_id', 'url', 'workflow_status', 'filename'])
+        all_items = await CopyrightItem.all().values('material_id', 'url', 'workflow_status', 'filename')
         all_item_len = len(all_items)
-
-        material_ids_downloaded = self.get_already_downloaded_material_ids()
-        material_ids_classified = self.get_already_classified_material_ids()
+        all_items = pl.from_dicts(all_items)
+        material_ids_downloaded = [int(x) for x in self.get_already_downloaded_material_ids()]
+        material_ids_classified = [int(x) for x in self.get_already_classified_material_ids()]
         amount_done = len(all_items.filter(all_items['workflow_status'] == 'Done'))
         amount_downloaded = len(all_items.filter(all_items['material_id'].is_in(material_ids_downloaded)))
-        amount_classified = len(all_items.filter(all_items['material_id'].is_in(material_ids_classified)))
+        #amount_classified = len(all_items.filter(all_items['material_id'].is_in(material_ids_classified)))
         #all_items = all_items.filter(all_items['workflow_status']!= 'Done')
         all_items = all_items.filter(~all_items['material_id'].is_in(material_ids_downloaded))
-        all_items = all_items.filter(~all_items['material_id'].is_in(material_ids_classified))
+        #all_items = all_items.filter(~all_items['material_id'].is_in(material_ids_classified))
 
         urls = all_items.with_columns(
             pl.col('url').replace(old="-",new=None).replace("", None)
         ).select(['url', 'material_id', 'filename'])
         urls = urls.drop_nulls('url').unique('url')
-        info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) and files already classified ({amount_classified}).')
+        info(f'{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) .')
         return urls
 
-    def rename_pdfs(self) -> None:
+    async def rename_pdfs(self) -> None:
 
-        urls: pl.DataFrame = self.get_urls_from_full_data()
+        urls: pl.DataFrame = await self.get_urls_from_full_data()
         all_files = list(self.download_dir.files)
         selected_files: dict[str, File] = {file.name:file for file in all_files}
         file_info: list[dict[str, str|datetime]] = urls.to_dicts()
@@ -108,9 +110,9 @@ class Downloader:
 
             print(f'\n')
 
-    def download_pdfs(self, subset: list[str], max_amount: int = None) -> webdriver.Chrome:
+    async def download_pdfs(self, subset: list[str] | None, max_amount: int = None) -> webdriver.Chrome:
 
-        urls: pl.DataFrame = self.get_urls_from_full_data()
+        urls: pl.DataFrame = await self.get_urls_from_full_data()
         if subset:
             urls = urls.filter(urls['material_id'].is_in(subset))
         if urls.is_empty():
@@ -119,12 +121,60 @@ class Downloader:
         return self.download(urls=urls, max_amount=max_amount)
 
     def download(self, urls: pl.DataFrame, max_amount: int = None) -> None:
+        def process_results(results, first_datetime, start_time):
+            info(f'Waiting until downloads are completed...')
+            while any(file.name.endswith(('.crdownload', '.tmp')) for file in self.download_dir.files):
+                time.sleep(5)
+                info('Zzz...')
+            info(f'Done! retrieved {len(results)} files in {time.time() - start_time:.2f} seconds')
+            all_files = list(self.download_dir.files)
+            all_files: list[File] = sorted(all_files, key=lambda x: x.created)
+            info(f"first_datetime: {first_datetime}. all_files len: {len(all_files)}")
+
+            selected_files: dict[str, File] = {file.name:file for file in all_files if file.created > first_datetime}
+            info(f"selected files len: {len(selected_files)}")
+            if selected_files:
+                info(f'# of files found in dir: {len(selected_files)}')
+                if len(selected_files) < len(results):
+                    warn(f'Not all files were downloaded?. {len(selected_files)}/{len(results)}')
+                    missing = len(results) - len(selected_files)
+                elif len(selected_files) > len(results):
+                    warn(f'More files were downloaded than expected. {len(selected_files)}/{len(results)}')
+
+            # sort results by 'created' datetime
+            results = sorted(results, key=lambda x: x.get('created'))
+            skipped = 0
+            info(f'Now renaming {len(results)} files')
+            for result in results:
+                print(f'.', end='')
+                file: File | None = selected_files.get(result['filename'])
+                if not file:
+                    closest_match = max(selected_files.keys(), key=lambda x: Levenshtein.ratio(result['filename'], x, processor=lambda x: x.lower()), default=None)
+                    if closest_match:
+                        ratio = Levenshtein.ratio(result["filename"], closest_match)
+                        if ratio < 0.9:
+                            skipped += 1
+                            continue
+                        file = selected_files.get(closest_match)
+                if file:
+                    try:
+                        file.rename(f'{result["material_id"]}_{result["filename"]}_{result["created"].strftime("%Y-%m-%d_%H-%M-%S")}.pdf')
+                    except Exception as e:
+                        warn(f'Error renaming file with info {result}: {e}')
+            if skipped:
+                if skipped == missing:
+                    cool("Number of skipped files matches number of missing files. All good.")
+                else:
+                    warn(f"Number of skipped files does not match number of missing files. Please check: {skipped=}, {missing=}")
+            else:
+                warn(f'No files downloaded for this batch.')
         self.setup_selenium()
         info(f'Downloading {len(urls)} files')
         urls = urls.to_dicts()
 
         start_time = time.time()
-        step_len = min(len(urls) // 20, 100)
+        batch_start_time = time.time()
+        step_len = min(len(urls) // 20, 20)
         results = []
         first_datetime = None
         try:
@@ -149,55 +199,15 @@ class Downloader:
                 if index % step_len == 0:
                     print(f'\n')
                     info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
+                    process_results(results, first_datetime, batch_start_time)
+                    first_datetime = None
+                    results = []
+                    batch_start_time = time.time()
         except Exception as e:
             warn(f'Error downloading file: {e}')
         finally:
             if results:
-                info(f'Waiting until downloads are completed...')
-                while any(file.name.endswith(('.crdownload', '.tmp')) for file in self.download_dir.files):
-                    time.sleep(5)
-                    info('Zzz...')
-                info(f'Done! retrieved {len(results)} files in {time.time() - start_time:.2f} seconds')
-                all_files = list(self.download_dir.files)
-                all_files: list[File] = sorted(all_files, key=lambda x: x.created)
-                info(f"first_datetime: {first_datetime}. all_files len: {len(all_files)}")
-
-                selected_files: dict[str, File] = {file.name:file for file in all_files if file.created > first_datetime}
-                info(f"selected files len: {len(selected_files)}")
-                if selected_files:
-                    info(f'# of files found in dir: {len(selected_files)}')
-                    if len(selected_files) < len(results):
-                        warn(f'Not all files were downloaded?. {len(selected_files)}/{len(results)}')
-                        missing = len(results) - len(selected_files)
-                    elif len(selected_files) > len(results):
-                        warn(f'More files were downloaded than expected. {len(selected_files)}/{len(results)}')
-
-                # sort results by 'created' datetime
-                results = sorted(results, key=lambda x: x.get('created'))
-                skipped = 0
-                info(f'Now renaming {len(results)} files')
-                for result in results:
-                    print(f'.', end='')
-                    file: File | None = selected_files.get(result['filename'])
-                    if not file:
-                        closest_match = max(selected_files.keys(), key=lambda x: Levenshtein.ratio(result['filename'], x, processor=lambda x: x.lower()), default=None)
-                        if closest_match:
-                            ratio = Levenshtein.ratio(result["filename"], closest_match)
-                            if ratio < 0.9:
-                                skipped += 1
-                                continue
-                            file = selected_files.get(closest_match)
-                    if file:
-                        info(f'renaming {file.name} to standard format (material_id: {result["material_id"]})')
-                        file.rename(f'{result["material_id"]}_{result["filename"]}_{result["created"].strftime("%Y-%m-%d_%H-%M-%S")}.pdf')
-                        print(f'\n')
-                if skipped:
-                    if skipped == missing:
-                        cool("Number of skipped files matches number of missing files. All good.")
-                    else:
-                        warn(f"Number of skipped files does not match number of missing files. Please check: {skipped=}, {missing=}")
-            else:
-                warn(f'No files downloaded.')
+                process_results(results, first_datetime, batch_start_time)
 
         cool(f'Done! Downloaded {len(urls)} files in {time.time() - start_time:.2f} seconds')
 

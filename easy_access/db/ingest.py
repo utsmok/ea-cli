@@ -5,7 +5,7 @@ functions to ingest new data into the database
 from collections import Counter
 from tortoise import Tortoise
 from easy_access.db.models import (
-    Organization, Programme, Person, Course, Faculty, LLMClassification, MissingCourse, CopyrightItem, CourseEmployee
+    Organization, Programme, Person, Course, Faculty, LLMClassification, MissingCourse, CopyrightItem, CourseEmployee, PDF
     )
 from easy_access.settings import SETTINGS, DirSetting, SettingsFaculty, FileSetting, DEPARTMENT_MAPPING
 import json
@@ -531,4 +531,37 @@ async def load_llm_classifications() -> None:
 
         cool(f'Created {len(new_objects)} new llm classifications in db. Now linking to copyright items in db.')
     await link_llm_classifications_to_copyright_items()
+    await Tortoise.close_connections()
+
+async def load_pdfs() -> None:
+    """
+    Load pdfs from the pdfs dir into the db.
+    """
+
+    await init()
+    pdf_file_list:list[File] = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
+    pdf_files: dict[str,File] = {file.name.split('_')[0]:file for file in pdf_file_list if file.name.endswith(".pdf")}
+    if not pdf_files:
+        warn("No PDF files found; data not loaded to DB.")
+        return
+
+    existing_pdfs_mat_ids = await PDF.all().values("material_id")
+    pdf_files = {k:v for k,v in pdf_files.items() if int(k) not in {int(p['material_id']) for p in existing_pdfs_mat_ids}}
+    pdf_dicts = []
+    for mat_id, pdf_file in pdf_files.items():
+        related_item = await CopyrightItem.get_or_none(material_id=int(mat_id))
+        if not related_item:
+            warn(f"No related item found for pdf with material_id {mat_id}. Skipping.")
+            continue
+        pdf_dict = {
+            "material_id": int(mat_id),
+            "current_file_name": pdf_file.name,
+            "original_file_name": related_item.filename,
+            "original_page_count": related_item.pagecount,
+        }
+        pdf_dicts.append(pdf_dict)
+
+    info(f'Creating {len(pdf_dicts)} new PDF objects in DB.')
+    await PDF.bulk_create(objects=[PDF(**p) for p in pdf_dicts])
+
     await Tortoise.close_connections()
