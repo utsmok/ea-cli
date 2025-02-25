@@ -5,7 +5,7 @@ import datetime
 import os
 from easy_access.settings import SETTINGS, DirSetting
 from google import genai
-from easy_access.utils import  File
+from easy_access.utils import  File, warn
 from enum import Enum
 from pydantic import BaseModel
 import asyncio
@@ -82,10 +82,11 @@ client = None
 prompt = """From the included document, first extract and determine a list of metadata, then determine the copyright status and item type for this item.
 Finally determine the most important classification: if the item is allowed to be shared with students in the context of the University of Twente learning environment.
 Use all available (meta)data in the file or that you extracted earlier (e.g. the author name, publisher name, and copyright holder name, license statements, etc.) to help determine these statuses.
-The copyright status should be focused on the overall document. You can ignore any possible copyrighted elements included inside the work.
+The copyright status should be focused on the overall document. You can ignore any possible copyrighted elements included inside the work (like images from other works).
 For determining allowed use, take into account that the works are being shared internally at the University of Twente, a Dutch public institute, for educational purposes only, in a closed environment.
-There is never any commercial use, and attribution is always given.
-If the detected 'publisher' is the University of Twente, or an 'author' is employed by the University of Twente, the work should be classified as OWN_MATERIAL.
+This means that clearly copyrighted commercial works cannot be used, except if educational use is explicitly allowed for instance.
+There will never be any commercial use in this context. Assume attribution is always given.
+If the detected 'publisher' or 'author' is the University of Twente or is employed by the University of Twente, the work should be classified as OWN_MATERIAL.
 Include reasoning for the classification in the response in the corresponding fields.
 
 The requested output format is replicated here as a set of Python classes, including additional details, hints, and suggestions.
@@ -139,7 +140,7 @@ def activate_client():
     global client
     client = genai.Client(api_key=gemini)
 
-async def classify_pdf(file: File, full_pdf:bool = True) -> Classification:
+async def classify_pdf(file: File, full_pdf:bool = False) -> Classification:
     try:
         mat_id =file.name.split('_')[0]
         if full_pdf:
@@ -155,6 +156,7 @@ async def classify_pdf(file: File, full_pdf:bool = True) -> Classification:
                 print(e)
                 ...
         else:
+            warn(f'TODO: use the extracted text from the PDF object in db instead!')
             print(f'Extracting text from {file.name}')
             pdf: str = extract_text(pdf_file=file.path, maxpages=8, codec='utf-8')
             if len(pdf)> 10_000:
@@ -205,6 +207,7 @@ async def classify_items(files: list[File]) -> int:
         max_per_second=1,  # Limit request rate to not overload the server.
     ) as classifications:
         async for classification in classifications:
+            warn(f'TODO: change to store in DB directly instead of writing to jsons? Or both?')
             if not classification:
                 continue
             console.print(classification)

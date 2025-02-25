@@ -540,12 +540,13 @@ async def load_pdfs() -> None:
 
     await init()
     pdf_file_list:list[File] = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
-    pdf_files: dict[str,File] = {file.name.split('_')[0]:file for file in pdf_file_list if file.name.endswith(".pdf")}
+    pdf_files: dict[str,File] = {file.name.split('_')[0]:file for file in pdf_file_list if file.name.endswith(".pdf") and file.name.split('_')[0].isdigit()}
     if not pdf_files:
         warn("No PDF files found; data not loaded to DB.")
         return
 
     existing_pdfs_mat_ids = await PDF.all().values("material_id")
+
     pdf_files = {k:v for k,v in pdf_files.items() if int(k) not in {int(p['material_id']) for p in existing_pdfs_mat_ids}}
     pdf_dicts = []
     for mat_id, pdf_file in pdf_files.items():

@@ -111,7 +111,13 @@ class Downloader:
             print(f'\n')
 
     async def download_pdfs(self, subset: list[str] | None, max_amount: int = None) -> webdriver.Chrome:
-
+        deleted = 0
+        for file in self.download_dir.files:
+            if not str(file.name.split('_')[0]).isdigit():
+                file.delete()
+                deleted +=1
+        if deleted:
+            info(f'Deleted {deleted} incorrectly named pdf files.')
         urls: pl.DataFrame = await self.get_urls_from_full_data()
         if subset:
             urls = urls.filter(urls['material_id'].is_in(subset))
@@ -128,7 +134,7 @@ class Downloader:
                 time.sleep(5)
                 info('Zzz...')
             info(f'Done! retrieved {len(results)} files in {time.time() - start_time:.2f} seconds')
-            all_files = list(self.download_dir.files)
+            all_files = [f for f in self.download_dir.files if f.name.endswith('.pdf') and str(f.name.split('_')[0]).isdigit()]
             all_files: list[File] = sorted(all_files, key=lambda x: x.created)
             info(f"first_datetime: {first_datetime}. all_files len: {len(all_files)}")
 
@@ -179,30 +185,34 @@ class Downloader:
         first_datetime = None
         try:
             for index, item in enumerate(urls, start=1):
-                x = 0
-                while item['filename'] in self.download_dir.files:
-                    x += 1
-                    item['filename'] = item['filename'] + f'_{x}'
+                try:
+                    x = 0
+                    while item['filename'] in self.download_dir.files:
+                        x += 1
+                        item['filename'] = item['filename'] + f'_{x}'
 
-                item['created'] = self.download_file(item.get('url'))
-                if not first_datetime:
-                    first_datetime = item['created']
-                results.append(item)
-                print(f'.', end='')
-                items_per_sec = index / (time.time() - start_time)
-                if items_per_sec > 1:
-                    time.sleep(5)
-                if max_amount and index >= max_amount:
-                    print(f'\n')
-                    info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
-                    break
-                if index % step_len == 0:
-                    print(f'\n')
-                    info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
-                    process_results(results, first_datetime, batch_start_time)
-                    first_datetime = None
-                    results = []
-                    batch_start_time = time.time()
+                    item['created'] = self.download_file(item.get('url'))
+                    if not first_datetime:
+                        first_datetime = item['created']
+                    results.append(item)
+                    print(f'.', end='')
+                    items_per_sec = index / (time.time() - start_time)
+                    if items_per_sec > 1:
+                        time.sleep(5)
+                    if max_amount and index >= max_amount:
+                        print(f'\n')
+                        info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
+                        break
+                    if index % step_len == 0:
+                        print(f'\n')
+                        info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
+                        process_results(results, first_datetime, batch_start_time)
+                        first_datetime = None
+                        results = []
+                        batch_start_time = time.time()
+                except Exception as e:
+                    warn(f'Error downloading file: {e}')
+                    continue
         except Exception as e:
             warn(f'Error downloading file: {e}')
         finally:
@@ -210,7 +220,9 @@ class Downloader:
                 process_results(results, first_datetime, batch_start_time)
 
         cool(f'Done! Downloaded {len(urls)} files in {time.time() - start_time:.2f} seconds')
-
+        for file in self.download_dir.files:
+            if not str(file.name.split('_')[0]).isdigit():
+                file.delete()
         return True
 
     def reset_chrome(self) -> None:
