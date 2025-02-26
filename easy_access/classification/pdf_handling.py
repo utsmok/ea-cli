@@ -6,6 +6,7 @@ Functions to handle PDF files:
 - store extracted text
 - ...
 """
+from tortoise.queryset import QuerySet
 from itertools import batched
 from pdfminer.high_level import extract_text
 from easy_access.utils import info, warn, cool, File, Directory
@@ -14,6 +15,7 @@ from pathlib import Path
 import pikepdf
 from datetime import datetime
 from easy_access.db.models import PDF
+from easy_access.db.base import init
 from xxhash import xxh64
 from collections import defaultdict
 from fastembed import TextEmbedding
@@ -138,13 +140,11 @@ async def enrich_pdfs(pdfs: list[PDF] | None = None, max_pages: int | None = Non
     Returns:
         list[PDF]: The same list of PDF objects, but updated with deduplication info, metadata & extracted text.
     """
+    await init()
     if not pdfs:
         pdfs = await PDF.all()
 
     pdfs_with_metadata = [await extract_metadata(pdf) for pdf in pdfs]
-    deduplicated_pdfs = pdfs_with_metadata
-    #deduplicated_pdfs = await deduplicate_pdfs(pdfs_with_metadata)
-    # filter out pdfs with extracted text, and pdfs that are duplicates
     pdfs_with_text = [await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit) for pdf in pdfs_with_metadata]
     deduplicated_pdfs = await deduplicate_pdfs(pdfs_with_text)
 
@@ -161,15 +161,19 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
     client = QdrantClient(path="qdrant.db")
     ids_per_hash = defaultdict(list)
     new_mapping: dict[int, int] = {} # store duplicates as {id_to_replace: target_id}
-    replaced_ids = set() # store ids that have been replaced: they do not need to be processed any further
+    replaced_ids = set() # store ids for pdfs that have been replaced: they do not need to be processed any further
 
+    pdfs_in_db = await PDF.all().prefetch_related('replace_with').values('material_id', 'replace_with__material_id')
+    pdfs_with_replace_with = [pdf for pdf in pdfs_in_db if pdf.get('replace_with__material_id')]
+    replaced_ids.update({pdf.get('material_id') for pdf in pdfs_with_replace_with})
+    info(f'Found {len(replaced_ids)} pdfs that are already replaced in db.')
     # first sort the pdfs on their 'age' property
     pdfs.sort(key=lambda pdf: pdf.age)
 
     # now use list comprehension to populate ids_per_hash.
     # should result in a dict with hash as key and list of ids as value
     # if len(ids_per_hash[hash]) > 1, we have duplicates for that hash!
-    [ids_per_hash[get_hash(pdf.path)].append(pdf.material_id) for pdf in pdfs]
+    [ids_per_hash[get_hash(pdf.path)].append(pdf.material_id) for pdf in pdfs if pdf.material_id not in replaced_ids]
 
     for file_hash, ids in ids_per_hash.items():
         if len(ids) > 1:
@@ -177,36 +181,74 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
             replaced_ids.union(set(ids[1:]))
     info(f'Found {len(new_mapping)} duplicates by hash.')
     by_hash = len(new_mapping)
-    # step 2: load extracted text for pdfs into qdrant
+    replaced = 0
+    for old_id, new_id in new_mapping.items():
+        replace_pdf = await PDF.get_or_none(material_id=new_id)
+        if replace_pdf:
+            pdf = await PDF.get_or_none(material_id=old_id)
+            if pdf:
+                pdf.replace_with = replace_pdf
+                replaced += 1
+                await pdf.save()
 
-    TRESHOLD = 0.95 # treshold for similarity
+    info(f'Replaced {replaced} duplicate pdfs with alternative material_id.')
+
+    # step 2: load extracted text for pdfs into qdrant
+    new_mapping = {}
+    TRESHOLD = 0.98 # treshold for similarity
     all_embedding_pdfs = [pdf for pdf in pdfs if pdf.extracted_text and pdf.material_id not in replaced_ids]
-    for embedding_pdfs in batched(all_embedding_pdfs, 20):
-        docs = [pdf.extracted_text for pdf in embedding_pdfs]
-        ids = [pdf.material_id for pdf in embedding_pdfs ]
-        metadata = [pdf.original_file_name for pdf in embedding_pdfs]
-        client.add(
-            collection_name="pdfs",
-            documents=docs,
-            metadata=metadata,
-            ids=ids
-        )
+
+    if False:
+        for embedding_pdfs in batched(all_embedding_pdfs, 20):
+            selected:list[PDF] = []
+            for pdf in embedding_pdfs:
+                result = client.retrieve(
+                    collection_name="pdfs",
+                    ids=[pdf.material_id],
+                    with_payload=False,
+                    with_vectors=False,
+                )
+                if len(result)>1:
+                    continue
+                selected.append(pdf)
+            if not selected:
+                continue
+            docs = [pdf.extracted_text for pdf in selected]
+            ids = [pdf.material_id for pdf in selected]
+            client.add(
+                collection_name="pdfs",
+                documents=docs,
+                ids=ids
+            )
     # once stored, we can query for duplicates
     # determine this by looping over all pdfs & searching for the extracted text in the qdrant db
     # if QueryResponse has a score above treshold: mark as match (add to new_mapping etc).
 
     for pdf in all_embedding_pdfs:
         query = pdf.extracted_text
+        rep_w: QuerySet[PDF] = pdf.replace_with
+        if rep_w:
+            rep_pdf: PDF | None = await rep_w.first()
+            if rep_pdf:
+                mat_id = rep_pdf.material_id
+                if mat_id:
+                    info(f'Item is replaced by {mat_id}, skipping')
+                    continue
+
         # exclude the pdf itself from the query: so id in qdrant != pdf.material_id
-        response: list[BaseModel] = client.query(collection_name="pdfs", query=query, query_filter=models.Filter(
-        must_not=[
-            models.HasIdCondition(has_id=[1, 3, 5, 7, 9, 11]),
-        ],
-    ), top_k=5)
+        response: list[BaseModel] = client.query(collection_name="pdfs", query_text=query, query_filter=models.Filter(
+                must_not=[
+                        models.HasIdCondition(has_id=[pdf.material_id]),
+                    ],
+            ),
+            limit=5
+        )
         for result in response:
             if result.score > TRESHOLD:
                 new_mapping[pdf.material_id] = result.id
-    info(f'Found {len(new_mapping)-by_hash} duplicates by embedding.')
+                break
+
+    info(f'Found {len(new_mapping)} duplicates by embedding.')
 
     if not new_mapping:
         info('No duplicates found!')
@@ -221,6 +263,7 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
                 pdf.replace_with = replace_pdf
                 replaced += 1
                 await pdf.save()
+
 
     info(f'Replaced {replaced} duplicate pdfs with alternative material_id.')
     return pdfs
@@ -241,29 +284,6 @@ def get_hash(file_path: Path) -> str | None:
     except Exception as e:
         warn(f"Error hashing {file_path}: {e}")
         return None
-
-    # print exact duplicates (same hash)
-    for pdf_hash, paths in file_hashes.items():
-        if len(paths) > 1:
-            try:
-                info(f"Duplicate PDF files found with hash {pdf_hash}: {paths}")
-                filenames = [file.name for file in paths]
-                filenames.sort()
-                main_mat_id = filenames[0].split('_')[0]
-                for i, path in enumerate(paths):
-                    if i == 0:
-                        continue
-                    orig_mat_id = path.name.split('_')[0]
-                    new_file = f"{orig_mat_id}_{main_mat_id}.replace"
-                    # create new_file
-                    new_file_path = pdf_dir.full / new_file
-                    with open(new_file_path, "w") as f:
-                        f.write(f"{orig_mat_id} {main_mat_id}")
-                    # delete original file
-                    os.remove(path)
-            except Exception as e:
-                warn(f"Error deduplicating PDF files with paths {paths}: {e}")
-                continue
 
 def get_embedding(pdf: PDF) -> list[np.ndarray] | None:
     """

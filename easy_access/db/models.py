@@ -7,10 +7,11 @@ from tortoise.models import Model
 from tortoise import fields
 from enum import Enum
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.classification.classifier_api import CopyrightStatus, ItemType, AllowedUsageByUT
+from easy_access.classification.classifier_models import CopyrightStatus, ItemType, AllowedUsageByUT
 from pathlib import Path
 from easy_access.utils import File
 from datetime import datetime
+
 class TimestampMixin():
     created_at = fields.DatetimeField(null=True, auto_now_add=True)
     modified_at = fields.DatetimeField(null=True, auto_now=True)
@@ -87,7 +88,7 @@ class CopyrightItem(Model, TimestampMixin):
     manual_classification = fields.CharField(max_length=2048, null=True, db_index=True)
     manual_identifier = fields.CharField(max_length=2048, null=True)
     scope = fields.CharField(max_length=255, null=True)
-    remarks = fields.CharField(max_length=10000, null=True)
+    remarks = fields.CharField(max_length=10000, null=True, db_index=True)
     auditor = fields.CharField(max_length=10000, null=True)
     last_change = fields.DateField(null=True)
     status = fields.CharEnumField(enum_type=Status, max_length=255, default=Status.PUBLISHED, db_index=True)
@@ -115,7 +116,9 @@ class CopyrightItem(Model, TimestampMixin):
     faculty = fields.ForeignKeyField('models.Faculty', related_name='faculty_items', to_field='abbreviation')
     llm_classification = fields.OneToOneField('models.LLMClassification', related_name='item', null=True)
     changes = fields.ManyToManyField('models.ItemUpdate', related_name='item')
-    pdf = fields.OneToOneField('models.PDF', related_name='item', null=True)
+
+    is_duplicate = fields.BooleanField(db_index=True, null=True) # if this item is a duplicate of another item -- determined by comparing PDFs
+    replacement_id = fields.IntField(null=True, db_index=True) # if this item is a duplicate, this field has the material_id of the original item
 
     class Meta:
         table = "copyright_data"
@@ -288,7 +291,7 @@ class PDF(Model, TimestampMixin):
     material_id = fields.IntField(primary_key=True)
     current_file_name = fields.CharField(max_length=2048) # this is also used to get the path to the file, see self.path()
     replace_with = fields.ForeignKeyField('models.PDF', related_name='replacement_for', null=True) # if this file is a duplicate, this field points to the original file
-
+    replacement_for: fields.ReverseRelation['PDF']
     extracted_text = fields.TextField(null=True)
     extracted_text_max_pages = fields.IntField(null=True) # how many pages were processed to get the extracted text
     extracted_text_max_length = fields.IntField(null=True) # how many characters were kept from the extracted text

@@ -245,9 +245,11 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     sheet.add_data(data)
     info(f'Added data entry sheet to {file.name}')
     llm_classification_data = enrich_with_llm_classifications(data)
-    llm_sheet_path = file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
-    llm_classification_data.write_excel(workbook=llm_sheet_path, worksheet="llm_classification_data", table_name="llm_classification_data", table_style="TableStyleMedium3", autofit = True)
-    info(f'Stored llm_classification_data sheet to {llm_sheet_path.name}')
+    if isinstance(llm_classification_data, pl.DataFrame):
+        llm_sheet_path = file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
+        llm_classification_data.write_excel(workbook=llm_sheet_path, worksheet="llm_classification_data", table_name="llm_classification_data", table_style="TableStyleMedium3", autofit=True)
+        info(f'Stored llm_classification_data sheet to {llm_sheet_path.name}')
+
     return style_iter
 
 def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
@@ -393,7 +395,11 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     """
 
     llm_data = retrieve_llm_classifications(selected_material_ids=data.select("material_id").unique("material_id").to_series().to_list())
-    joined_data = data.join(llm_data, on="material_id", how="left")
+    if not isinstance(llm_data, pl.DataFrame):
+        warn(f'No llm classification data found.')
+        return None
+    else:
+        joined_data = data.join(llm_data, on="material_id", how="left")
     # set col_order
     col_order = [
         "material_id",

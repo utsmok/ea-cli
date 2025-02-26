@@ -36,6 +36,21 @@ def retrieve_copyright_items() -> pl.DataFrame:
     df: pl.DataFrame = pl.read_database(query=query, connection=engine.connect(), infer_schema_length=None)
     return df
 
+def retrieve_duplicate_copyright_items() -> pl.DataFrame:
+    """
+    for copyright_items with duplicates, find the replacing material id
+    returns a dataframe with 'material_id', 'is_duplicate', and 'replacement_id' columns
+    """
+    if not engine:
+        init_engine()
+
+    query: str = """
+        SELECT material_id, is_duplicate, replacement_id
+        FROM copyright_data cd
+        WHERE is_duplicate IS TRUE
+    """
+    df: pl.DataFrame = pl.read_database(query=query, connection=engine.connect(), infer_schema_length=None)
+    return df
 def init_engine() -> None:
     global engine
     engine = create_engine("sqlite:///db.sqlite3")
@@ -200,22 +215,42 @@ def retrieve_full_data(
 
     if df.is_empty():
         return df
+    if df['material_id'].is_null().all():
+        return None
 
-    return df.with_columns(
-            [
-                pl.col(name=colname).
-                str.json_decode(infer_schema_length=None).
-                list.join(separator=' | ')
-                for colname in [
+    # drop nulcols from llm cols
+    llm_cols = [
                     "llm_isbn",
                     "llm_doi",
                     "llm_source_url",
                     "llm_license",
                     "llm_authors"
                 ]
-            ]
-        )
+    droplist = []
+    # iterate over llm cols
+    # if col is null (dtype=null or all values are null), drop it
+    for col in llm_cols:
+        if df[col].is_null().all():
+            df = df.drop(col)
+            droplist.append(col)
+    select_cols = [col for col in llm_cols if col not in droplist]
+    if select_cols:
+        df = df.with_columns(
+                [
 
+                    pl.col(name=colname).
+                    str.json_decode(infer_schema_length=None).
+                    list.join(separator=' | ')
+                    for colname in select_cols
+                ]
+            )
+
+    # add droplist cols back in with empty values
+    if droplist:
+        for col in droplist:
+            df = df.with_columns(col = pl.lit(None))
+
+    return df
 def get_llm_classification_schema() -> dict[str, type]:
     """Defines the expected schema for llm_classification_data."""
     return {
@@ -297,7 +332,9 @@ def retrieve_llm_classifications(
             }
         )
         if df.is_empty():
-            return df
+            return None
+        if df['material_id'].is_null().all():
+            return None
 
         return df.with_columns([
             pl.col(name=colname)

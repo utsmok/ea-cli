@@ -300,8 +300,8 @@ class EasyAccessTool:
         and exports the result to excel sheets.
         """
         info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
+        int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x]
 
-        int_mat_ids = [int(x) for x in self.mat_ids_on_disk]
         filtered_data: pl.DataFrame = retrieve_full_data(excluded_material_ids=int_mat_ids)
         if filtered_data.is_empty() and self.only_changes:
             warn("No new items found to export to faculty sheets.")
@@ -417,6 +417,8 @@ class EasyAccessTool:
                 df = df.with_columns(pl.col('url').str.replace(r'\.{3}','https://utwente.instructure.com/files'))
             if 'osiris_catalogue_url' in df.columns:
                 df = df.with_columns(pl.col('osiris_catalogue_url').str.replace(r'\.{3}','https://utwente.instructure.com/files'))
+            if 'is_duplicate' in df.columns:
+                df = df.with_columns(pl.col('is_duplicate').str.replace('0', 'FALSE').str.replace('1', 'TRUE'))
         return df
 
     def remove_current_overviews(self) -> None:

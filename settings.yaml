@@ -63,6 +63,8 @@ data_settings:
   data_entry_name: Data entry
   data_entry_cols:
     - name: "material_id"
+    - name: "is_duplicate"
+    - name: "replacement_id"
     - name: "url"
       is_url: true
     - name: "workflow_status"
@@ -96,6 +98,8 @@ data_settings:
 
   raw_data_col_order: !!seq [
         material_id,
+        is_duplicate,
+        replacement_id,
         period,
         department,
         course_code,
@@ -134,6 +138,8 @@ data_settings:
 
   final_data_col_order: !!seq [
     material_id,
+    is_duplicate,
+    replacement_id,
     period,
     department,
     course_code,

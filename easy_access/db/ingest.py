@@ -12,7 +12,7 @@ import json
 from easy_access.utils import warn, info, cool, File
 from loguru import logger
 from easy_access.db.base import copyright_item_from_dict, init, create, standardize_dataframe
-from easy_access.db.update import link_llm_classifications_to_copyright_items,  update_copyright_relations
+from easy_access.db.update import link_llm_classifications_to_copyright_items,  update_copyright_relations, update_copyright_items
 import polars as pl
 
 async def load_osiris_data() -> None:
@@ -414,9 +414,10 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
 
         info(f'Read in {len(items)} raw copyright items. {len(existing_mat_ids)} items already in db.')
         num_total = len(items)
-
+        update_list = []
         for item in items:
             if int(item.get('material_id')) in existing_mat_ids:
+                update_list.append(item)
                 continue
             created_item: CopyrightItem = await copyright_item_from_dict(item)
             if not created_item:
@@ -438,8 +439,12 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
             await update_copyright_relations()
         cool(f'# of items in db after loading raw items: {await CopyrightItem.all().count()}')
         if error:
+            await Tortoise.close_connections()
             raise error
 
+    if update_list:
+        info(f'comparing {len(update_list)} items with items in db for updates.')
+        await update_copyright_items(update_list)
 
     await Tortoise.close_connections()
 
@@ -544,7 +549,6 @@ async def load_pdfs() -> None:
     if not pdf_files:
         warn("No PDF files found; data not loaded to DB.")
         return
-
     existing_pdfs_mat_ids = await PDF.all().values("material_id")
 
     pdf_files = {k:v for k,v in pdf_files.items() if int(k) not in {int(p['material_id']) for p in existing_pdfs_mat_ids}}

@@ -7,7 +7,7 @@ from collections import defaultdict
 from easy_access.db.update import update_copyright_items, update_copyright_relations
 from easy_access.db.ingest import load_base_data
 import asyncio
-def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, style_iter:int):
+def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, style_iter:int, dupe_info: pl.DataFrame | None = None):
     """
     create an overview sheet for each programme of the given faculty, using the data in df.
     """

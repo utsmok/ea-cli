@@ -5,8 +5,8 @@ from typing import Any
 from enum import Enum
 from tortoise import Tortoise
 from easy_access.db.models import (
-    Course, LLMClassification, CopyrightItem,  ItemUpdate,
-    Infringement, WorkflowStatus,  Classification,
+    Course, LLMClassification, CopyrightItem,  ItemUpdate, PDF,
+    Infringement, WorkflowStatus,  Classification, Status
     )
 from easy_access.db.base import init, standardize_dataframe, copyright_item_from_dict
 from easy_access.settings import SETTINGS, DirSetting
@@ -74,19 +74,43 @@ async def link_courses_to_copyright_items() -> None:
                 warn(f'Error while trying to get course {course_code} for item {item.material_id}: {e}')
     cool(f'Added {links_added} links to {course_codes_found} found coursecodes.')
 
+async def update_duplicate_status() -> None:
+    """
+    For each item, retrieve the PDF
+    if the PDF has value in 'replace_with', set the item's is_duplicate status to True
+    grab the material_id from the replace_with field and store it in the 'replacement_id' field
+    """
+
+    items = await CopyrightItem.all()
+    duplicates = 0
+    for item in items:
+        item.is_duplicate = False
+        item.replacement_id = None
+        mat_id = item.material_id
+        pdf = await PDF.get_or_none(material_id=mat_id)
+        if pdf:
+            replaced_item = await pdf.replace_with
+            if replaced_item:
+                item.is_duplicate = True
+                item.replacement_id = replaced_item.material_id
+                duplicates += 1
+        await item.save(update_fields=['is_duplicate', 'replacement_id'])
+    cool(f'Updated {duplicates} duplicate statuses.')
 async def update_copyright_relations() -> None:
     """
     Go through the copyright items in the db
     use the values of the item fields to find links to other tables.
     """
     await init()
+    await update_duplicate_status()
+
     await link_llm_classifications_to_copyright_items()
     await link_courses_to_copyright_items()
     await Tortoise.close_connections()
 
-async def update_copyright_items(data: pl.DataFrame) -> None:
+async def update_copyright_items(data: pl.DataFrame | list[dict]) -> None:
     """
-    Update the db with copyrightitems from the dataframe.
+    Update the db with copyrightitems from the dataframe (or pre-filtered list of dicts from a df).
     Adds new if they don't exist, or updates if they do.
     See `compare_items` and the dicts added_fields, changeable_fields, core_fields for details on how the comparison is done.
 
@@ -109,8 +133,19 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
 
             try:
                 if isinstance(old_value, datetime):
+                    new_value = None
+                    try:
                         new_value = datetime.strptime(new_value, "%Y-%m-%d %H:%M:%S%z").replace(tzinfo=timezone.utc) if new_value else None
-                        old_value = old_value.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        try:
+                            new_value = datetime.strptime(new_value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) if new_value else None
+                        except Exception:
+                            try:
+                                new_value = datetime.strptime(new_value, "%Y-%m-%d").replace(tzinfo=timezone.utc) if new_value else None
+                            except Exception:
+                                ...
+
+                    old_value = old_value.replace(tzinfo=timezone.utc)
                 if isinstance(old_value, Enum):
                     old_value = old_value.value
                 if isinstance(old_value, float):
@@ -147,7 +182,10 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
                                 changes = change(changes, field, new_value, old_value, "new > old")
                         else:
                             logger.debug(f'[incomparable types] [{field}] {type(new_value)=}, {type(old_value)=}')
-
+            else:
+                # new value is None
+                # do nothing?
+                pass
 
         return changes, db_item
 
@@ -186,35 +224,46 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
     }
 
     core_fields = {
-        "title",
-        "classification",
-        "ml_prediction",
-        "auditor",
-        "last_change",
-        "status",
-        "isbn",
-        "doi",
-        "in_collection",
-        "pagecount",
-        "wordcount",
-        "picturecount",
-        "author",
-        "publisher",
-        "reliability",
-        "pages_x_students",
-        "count_students_registered",
+        "title": None,
+        "classification": None,
+        "ml_prediction": None,
+        "auditor": None,
+        "last_change": None,
+        "status": [
+                Status.DELETED,
+                Status.PUBLISHED,
+                Status.UNPUBLISHED,
+            ],
+        "isbn": None,
+        "doi": None,
+        "in_collection": None,
+        "pagecount": None,
+        "wordcount": None,
+        "picturecount": None,
+        "author": None,
+        "publisher": None,
+        "reliability": None,
+        "pages_x_students": None,
+        "count_students_registered": None,
     }
     # standardize df
     # loop over items
     # if item is not in db: add it
     # else compare values in specific fields to determine if we need to update
     info(f'Received {len(data)} raw copyright items as input for an update.')
+    new_items = []
+    if isinstance(data, pl.DataFrame):
+        data = standardize_dataframe(data)
+        existing_mat_ids = await CopyrightItem.all().values("material_id")
+        existing_mat_ids = {int(m['material_id']) for m in existing_mat_ids}
+        new_items = data.with_columns(pl.col('material_id').cast(int)).filter(~pl.col('material_id').is_in(existing_mat_ids)).to_dicts()
+        update_items = data.with_columns(pl.col('material_id').cast(int)).filter(pl.col('material_id').is_in(existing_mat_ids)).to_dicts()
+    else:
+        if isinstance(data, list):
+            update_items = data
 
-    data = standardize_dataframe(data)
-    existing_mat_ids = await CopyrightItem.all().values("material_id")
-    existing_mat_ids = {int(m['material_id']) for m in existing_mat_ids}
 
-    new_items = data.with_columns(pl.col('material_id').cast(int)).filter(~pl.col('material_id').is_in(existing_mat_ids)).to_dicts()
+
     info(f'# of new items: {len(new_items)}')
     new_objects = []
     if new_items:
@@ -230,10 +279,8 @@ async def update_copyright_items(data: pl.DataFrame) -> None:
                 except Exception as e:
                     logger.error(e)
                     warn(f'error {e} while trying to save item {item} with material_id {item.material_id}. Skipping for now.')
+        cool(f'Created {len(new_objects)} new copyright items in db.')
 
-    cool(f'Created {len(new_objects)} new copyright items in db.')
-
-    update_items = data.with_columns(pl.col('material_id').cast(int)).filter(pl.col('material_id').is_in(existing_mat_ids)).to_dicts()
     info(f'Updating {len(update_items)} existing items.')
     changelist = []
     updates = {}

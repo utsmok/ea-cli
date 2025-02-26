@@ -22,6 +22,10 @@
 #     "pydantic",
 #     "sqlalchemy",
 #     "connectorx",
+#     "pikepdf",
+#     "qdrant_client",
+#     "fastembed",
+#      "xxhash",
 # ]
 # ///
 
@@ -51,7 +55,9 @@ from easy_access.sheets.backup import Backupper, BackupFlag, RestoreOptions, Res
 from pathlib import Path
 from easy_access.main import EasyAccessTool
 from easy_access.classification.downloader import Downloader
-
+from easy_access.classification.pdf_handling import enrich_pdfs
+from easy_access.classification.classifier_api import main
+import asyncio
 cli_app = typer.Typer()
 
 @cli_app.command()
@@ -129,7 +135,21 @@ def cli(
             help="Maximum amount of files to download.",
             rich_help_panel="Functions",
         ),
-    ] = None
+    ] = None,
+    classify: Annotated[
+        bool,
+        typer.Option(
+            help="Classify the pdfs by LLM.",
+            rich_help_panel="Functions",
+        ),
+    ] = False,
+    deduplicate: Annotated[
+        bool,
+        typer.Option(
+            help="Deduplicate the pdfs.",
+            rich_help_panel="Functions",
+        ),
+    ] = False,
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
 
@@ -177,13 +197,19 @@ def cli(
         print(f'downloading files. Will use Chrome do so. Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
         input(f'Press any key to continue...')
         downloader = Downloader()
-        driver = downloader.download_pdfs(subset=None, max_amount=max_amount_to_download)
+        asyncio.get_event_loop().run_until_complete(downloader.download_pdfs(subset=None, max_amount=max_amount_to_download))
         print(f'done downloading, waiting for download to finish...')
         time.sleep(5)
-        if driver:
-            driver.close()
-    else:
-        tool.run()
+    if deduplicate:
+        print(f'Enriching/deduplicating PDFs.')
+        asyncio.get_event_loop().run_until_complete(enrich_pdfs())
+
+    if classify:
+        print(f'Classifying PDFS.')
+        asyncio.get_event_loop().run_until_complete(main())
+
+
+    tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
 

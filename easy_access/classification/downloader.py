@@ -1,7 +1,8 @@
 
 from selenium import webdriver
-
-from easy_access.db.models import CopyrightItem
+from enum import Enum
+from easy_access.db.models import CopyrightItem, Status, WorkflowStatus
+from easy_access.db.base import init
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import info, warn, cool,  File
 import polars as pl
@@ -65,9 +66,13 @@ class Downloader:
 
     async def get_urls_from_full_data(self) -> pl.DataFrame:
         #all_items: pl.DataFrame = pl.read_parquet(source=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / 'full_data.parquet', columns=['material_id', 'url', 'workflow_status', 'filename'])
-        all_items = await CopyrightItem.all().values('material_id', 'url', 'workflow_status', 'filename')
+        full_item_len = await CopyrightItem.all().count()
+        all_items = await CopyrightItem.filter(url__isnull=False).filter(url__not_in=['','-']).filter(status__in=[Status.PUBLISHED, Status.UNPUBLISHED, Status.PUBLISHED.value, Status.UNPUBLISHED.value]).all().values('material_id', 'url', 'workflow_status', 'filename', 'status')
         all_item_len = len(all_items)
+        info(f'Loaded {all_item_len} items of {full_item_len} total amount of items in db. Filtered out url-less items and DELETED items.')
         all_items = pl.from_dicts(all_items)
+        info(f'Loaded into dataframe.')
+        print(all_items.head())
         material_ids_downloaded = [int(x) for x in self.get_already_downloaded_material_ids()]
         material_ids_classified = [int(x) for x in self.get_already_classified_material_ids()]
         amount_done = len(all_items.filter(all_items['workflow_status'] == 'Done'))
@@ -110,7 +115,8 @@ class Downloader:
 
             print(f'\n')
 
-    async def download_pdfs(self, subset: list[str] | None, max_amount: int = None) -> webdriver.Chrome:
+    async def download_pdfs(self, subset: list[str] | None, max_amount: int = None) -> bool:
+        await init()
         deleted = 0
         for file in self.download_dir.files:
             if not str(file.name.split('_')[0]).isdigit():
@@ -126,19 +132,24 @@ class Downloader:
             return True
         return self.download(urls=urls, max_amount=max_amount)
 
-    def download(self, urls: pl.DataFrame, max_amount: int = None) -> None:
+    def download(self, urls: pl.DataFrame, max_amount: int = None) -> bool:
         def process_results(results, first_datetime, start_time):
+            """
+            Renames the files in the download dir to match the material_id_filename_created.pdf format
+            If file name is not directly found, returns the closest match based on Levenshtein distance.
+            """
             missing = 0
             info(f'Waiting until downloads are completed...')
             while any(file.name.endswith(('.crdownload', '.tmp')) for file in self.download_dir.files):
                 time.sleep(5)
                 info('Zzz...')
             info(f'Done! retrieved {len(results)} files in {time.time() - start_time:.2f} seconds')
+            selected_files: dict[str, File] = {file.name:file for file in self.download_dir.files if file.created > first_datetime}
+
             all_files = [f for f in self.download_dir.files if f.name.endswith('.pdf') and str(f.name.split('_')[0]).isdigit()]
             all_files: list[File] = sorted(all_files, key=lambda x: x.created)
             info(f"first_datetime: {first_datetime}. all_files len: {len(all_files)}")
 
-            selected_files: dict[str, File] = {file.name:file for file in all_files if file.created > first_datetime}
             info(f"selected files len: {len(selected_files)}")
             if selected_files:
                 info(f'# of files found in dir: {len(selected_files)}')
@@ -147,7 +158,9 @@ class Downloader:
                     missing = len(results) - len(selected_files)
                 elif len(selected_files) > len(results):
                     warn(f'More files were downloaded than expected. {len(selected_files)}/{len(results)}')
-
+            if not selected_files:
+                warn(f'No files were found in download dir.')
+                return
             # sort results by 'created' datetime
             results = sorted(results, key=lambda x: x.get('created'))
             skipped = 0
@@ -183,10 +196,14 @@ class Downloader:
         step_len = min(len(urls) // 20, 20)
         results = []
         first_datetime = None
+        no_url = 0
         try:
             for index, item in enumerate(urls, start=1):
                 try:
                     x = 0
+                    if not item.get('url'):
+                        no_url += 1
+                        continue
                     while item['filename'] in self.download_dir.files:
                         x += 1
                         item['filename'] = item['filename'] + f'_{x}'
@@ -216,13 +233,20 @@ class Downloader:
         except Exception as e:
             warn(f'Error downloading file: {e}')
         finally:
-            if results:
-                process_results(results, first_datetime, batch_start_time)
+            info(f'Done downloading. {no_url} items without urls were skipped. Processing final batch.')
+            try:
+                if results:
+                    process_results(results, first_datetime, batch_start_time)
+            except Exception as e:
+                warn(f'error {e} while processing download results')
 
-        cool(f'Done! Downloaded {len(urls)} files in {time.time() - start_time:.2f} seconds')
+
+        info(f'Resetting & closing chrome, hold on...')
+        self.reset_chrome()
         for file in self.download_dir.files:
             if not str(file.name.split('_')[0]).isdigit():
                 file.delete()
+        cool(f'Done resetting chrome & removing misnamed pdfs!')
         return True
 
     def reset_chrome(self) -> None:
@@ -238,6 +262,7 @@ class Downloader:
         self.driver = webdriver.Chrome(
             options = my_options,
         )
+        time.sleep(5)
         self.driver.close()
 
     def download_file(self, url: str) -> None:
