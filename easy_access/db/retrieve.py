@@ -238,20 +238,35 @@ def retrieve_full_data(
     droplist = []
     # iterate over llm cols
     # if col is null (dtype=null or all values are null), drop it
+    # if all cells in col are "[]", drop it
     for col in llm_cols:
-        if df[col].is_null().all() or df[col].dtype == pl.Null:
+        if (
+            (df[col].is_null().all())
+            or (df[col].dtype == pl.Null)
+            or (df[col].eq("[]").all())
+        ):
             df = df.drop(col)
             droplist.append(col)
+
     select_cols = [col for col in llm_cols if col not in droplist]
+
     if select_cols:
-        df = df.with_columns(
-            [
-                pl.col(name=colname)
-                .str.json_decode(infer_schema_length=None)
-                .list.join(separator=" | ")
-                for colname in select_cols
-            ]
-        )
+        for colname in select_cols:
+            try:
+                df = df.with_columns(
+                    pl.col(name=colname)
+                    .str.json_decode(infer_schema_length=None)
+                    .list.join(separator=" | ")
+                )
+            except Exception as e:
+                warn(
+                    f"Error {e} while processing {colname} with type {df[colname].dtype} in retrieve_full_data"
+                )
+                print(colname)
+                print(len(df[colname]))
+                print(df[colname])
+                print(df[colname].dtype)
+                input("Press key to continue")
 
     # add droplist cols back in with empty values
     if droplist:
