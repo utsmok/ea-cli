@@ -57,7 +57,9 @@ from easy_access.main import EasyAccessTool
 from easy_access.classification.downloader import Downloader
 from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.classification.classifier_api import main
+from easy_access.db.ingest import load_pdfs
 import asyncio
+
 cli_app = typer.Typer()
 
 @cli_app.command()
@@ -108,6 +110,13 @@ def cli(
             rich_help_panel="Backup/Restore",
         ),
     ] = BackupFlag.DEFAULT.value,
+    disable_writes: Annotated[
+        bool,
+        typer.Option(
+            help="Disable all write operations.",
+            rich_help_panel="Functions",
+        ),
+    ] = False,
     restore_dir: Annotated[
         RestoreOptions,
         typer.Option(
@@ -140,14 +149,14 @@ def cli(
         bool,
         typer.Option(
             help="Classify the pdfs by LLM.",
-            rich_help_panel="Functions",
+            rich_help_panel="Enrichment",
         ),
     ] = False,
     deduplicate: Annotated[
         bool,
         typer.Option(
             help="Deduplicate the pdfs.",
-            rich_help_panel="Functions",
+            rich_help_panel="Enrichment",
         ),
     ] = False,
 ) -> None:
@@ -183,6 +192,7 @@ def cli(
         refresh_osiris_data=osiris_update,
         other_sheet=other_sheet,
         only_retrieve_missing_osiris_data=not osiris_full_refresh,
+        disable_writes=disable_writes,
     )
 
     if do not in [Functions.both, Functions.read, Functions.export]:
@@ -190,25 +200,42 @@ def cli(
         cool("Thank you for using the Easy Access tool!")
         raise typer.Exit(code=1)
 
-    # Initialize and run tool with settings
-    tool = EasyAccessTool(ea_settings)
-    driver = None
+    # if download_files, dedupe, or classify are enabled, first run a 'bare' version of the tool to update all data without writing to sheets
+    # then enrich everything
+    # then run the tool as normal
+    if download_files or deduplicate or classify:
+        info(f'Running the tool without writes to update db data')
+        temp_tool = EasyAccessTool(settings=EasyAccessSettings.from_env(
+            functions="read",
+            only_changes=True,
+            refresh_osiris_data=osiris_update,
+            other_sheet=None,
+            only_retrieve_missing_osiris_data=not osiris_full_refresh,
+            disable_writes=True,
+        ))
+        temp_tool.run()
+        cool(f'Done updating data without writes to excels. ')
     if download_files:
-        print(f'downloading files. Will use Chrome do so. Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
+        warn(f'downloading files. Will use Chrome do so. Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
         input(f'Press any key to continue...')
         downloader = Downloader()
         asyncio.get_event_loop().run_until_complete(downloader.download_pdfs(subset=None, max_amount=max_amount_to_download))
-        print(f'done downloading, waiting for download to finish...')
+        cool(f'done downloading, waiting for download to finish...')
         time.sleep(5)
+        info(f'Ingesting pdfs into db...')
+        asyncio.get_event_loop().run_until_complete(load_pdfs())
+        cool(f'Done ingesting pdfs.')
     if deduplicate:
-        print(f'Enriching/deduplicating PDFs.')
-        asyncio.get_event_loop().run_until_complete(enrich_pdfs())
-
+        info(f'Enriching/deduplicating PDFs.')
+        asyncio.get_event_loop().run_until_complete(enrich_pdfs(max_pages=50, str_limit=50000))
+        cool(f'Done enriching PDFs.')
     if classify:
-        print(f'Classifying PDFS.')
+        info(f'Classifying PDFS.')
         asyncio.get_event_loop().run_until_complete(main())
-
-
+        cool(f'Done classifying PDFs')
+    # Initialize and run tool with settings
+    info(f"Running the Easy Access tool with settings: {ea_settings}")
+    tool = EasyAccessTool(ea_settings)
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")

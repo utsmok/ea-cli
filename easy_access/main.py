@@ -61,6 +61,7 @@ class EasyAccessTool:
 
         # Initialize other attributes
         self.only_changes = settings.only_changes
+        self.disable_writes = settings.disable_writes
         self.refresh_osiris_data = settings.refresh_osiris_data
         self.enrich_with_osiris_data = settings.enrich_with_osiris_data
         self.only_retrieve_missing_osiris_data = settings.only_retrieve_missing_osiris_data
@@ -299,6 +300,9 @@ class EasyAccessTool:
         Splits the processed copyright data into one sheet per faculty
         and exports the result to excel sheets.
         """
+        if self.disable_writes:
+            warn(f'Writes are disabled. Skipping programme & faculty sheet creation.')
+            return
         info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
         int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x]
 
@@ -328,17 +332,20 @@ class EasyAccessTool:
                 i += 1
             else:
                 info(f"{faculty}:{gap}{faculty_data.shape[0]}")
-
             store_complete_data(faculty_dir.full / filename, faculty_data)
             self.style_iter = finalize_sheet(
-                File(str(faculty_dir.full / filename)), faculty_data, self.style_iter
-            )
+            File(str(faculty_dir.full / filename)), faculty_data, self.style_iter
+                )
 
     def create_programme_sheets(self, faculty: str, input_data:pl.DataFrame | None = None) -> None:
         """
         For a given faculty, split processed copyright data into one sheet per programme.
         Export to faculty_dir / per_programme / programme_name}_{date}.xlsx
         """
+
+        if self.disable_writes:
+            warn(f'Writes are disabled. Skipping programme & faculty sheet creation.')
+            return
 
         programme_dir = Directory(
             self.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme"
@@ -385,6 +392,10 @@ class EasyAccessTool:
         """
         Add all filtered items in the current Copyright data to a single sheet.
         """
+        if self.disable_writes:
+            warn(f'Writes are disabled. Skipping create_all_items_sheet.')
+            return
+
         filtered_data = self.copyright_data.filter(~pl.col("material_id").is_in(self.mat_ids_on_disk))
         if filtered_data.is_empty() and self.only_changes:
             warn("No new items found to export to all items sheet.")
@@ -422,6 +433,10 @@ class EasyAccessTool:
         return df
 
     def remove_current_overviews(self) -> None:
+        if self.disable_writes:
+            warn(f'Writes are disabled. Skipping remove_current_overviews.')
+            return
+
         for faculty in self.faculties:
             overview_fac_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
             movedir = Directory(self.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty)
@@ -439,6 +454,7 @@ class EasyAccessTool:
         3. couples data with llm classification data if found and creates llm overview sheets
         No parameters, will pull the data from disk for each faculty in self.faculties.
         """
+
         faculty_dict: dict[str, pl.DataFrame] = {}
         if not self.faculties:
             self.process_raw_copyright_data()
@@ -448,6 +464,7 @@ class EasyAccessTool:
 
 
         # retrieve full data from db -- all items
+
         self.remove_current_overviews()
         for faculty in self.faculties:
             if not faculty or faculty == "" or faculty == "Unmapped":
@@ -456,7 +473,7 @@ class EasyAccessTool:
             if data.is_empty():
                 continue
             faculty_dict[faculty] = data
-        self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter)
+        self.style_iter = create_faculty_overviews(faculty_dict, self.style_iter, self.disable_writes)
 
     def create_export_sheet(self) -> None:
         #TODO: change to retrieve data from db first

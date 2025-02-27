@@ -62,7 +62,7 @@ def create_programme_overviews(all_faculty_data: pl.DataFrame, faculty: str, sty
 
     return style_iter
 
-def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:int) -> int:
+def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:int, disable_writes:bool = False) -> int:
     """
     Input:
     faculty_data: dict[str, pl.DataFrame]:
@@ -74,10 +74,12 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
     today = datetime.now().strftime("%Y-%m-%d")
     data_to_update = []
 
-
+    if disable_writes:
+        info('write operations disabled, skipping creation of faculty and programme overviews')
     for faculty, all_faculty_data in faculty_data.items():
         if faculty in COURSE_MAPPING:
-            style_iter = create_programme_overviews(all_faculty_data, faculty, style_iter)
+            if not disable_writes:
+                style_iter = create_programme_overviews(all_faculty_data, faculty, style_iter)
 
         if all_faculty_data.is_empty():
             continue
@@ -113,11 +115,11 @@ def create_faculty_overviews(faculty_data: dict[str, pl.DataFrame], style_iter:i
                             .then(pl.lit("yes"))
                             .otherwise(pl.lit("maybe"))
         )
-
-        fac_file = File(path=SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
-        info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
-        store_complete_data(fac_file, all_faculty_data)
-        style_iter = finalize_sheet(fac_file, all_faculty_data, style_iter)
+        if not disable_writes:
+            fac_file = File(path=SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty / f'{faculty}_total_overview_updated_{today}.xlsx')
+            info(f'saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}')
+            store_complete_data(fac_file, all_faculty_data)
+            style_iter = finalize_sheet(fac_file, all_faculty_data, style_iter)
 
         data_to_update.append(all_faculty_data)
 
