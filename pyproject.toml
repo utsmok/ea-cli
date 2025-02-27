@@ -24,7 +24,7 @@ dependencies = [
     "selenium",
     "google-genai>=1.2.0",
     "aiometer>=0.5.0",
-    "pdfminer-six>=20240706",
+    "pdfminer.six==20231228",
     "ea-cli",
     "tortoise-orm[accel]>=0.24.0",
     "connectorx>=0.4.2",

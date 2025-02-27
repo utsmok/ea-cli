@@ -18,14 +18,14 @@
 #     "google-genai",
 #     "tortoise-orm[accel]",
 #     "aiometer",
-#     "pdfminer-six",
+#     "pdfminer.six==20231228",
 #     "pydantic",
 #     "sqlalchemy",
 #     "connectorx",
 #     "pikepdf",
 #     "qdrant_client",
 #     "fastembed",
-#      "xxhash",
+#     "xxhash",
 # ]
 # ///
 
@@ -57,10 +57,40 @@ from easy_access.main import EasyAccessTool
 from easy_access.classification.downloader import Downloader
 from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.classification.classifier_api import main
-from easy_access.db.ingest import load_pdfs
+from easy_access.db.ingest import load_pdfs, load_raw_copyright_data
 import asyncio
 
 cli_app = typer.Typer()
+
+async def download_files():
+    info(f'downloading files. Will use Chrome do so.')
+    warn(f'Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
+    input(f'Press any key to continue...')
+    downloader = Downloader()
+    await downloader.download_pdfs(subset=None, max_amount=None)
+    cool(f'done downloading!')
+
+async def enrich():
+    info(f'Loading existing PDFs into database.')
+    await load_pdfs()
+    cool(f'done loading existing PDFs into database.')
+    info(f'Enriching & deduplicating PDFs.')
+    await enrich_pdfs(max_pages=50, str_limit=50000)
+    cool(f'done enriching & deduplicating PDFs.')
+
+async def classify_items():
+    info(f'Classifying PDFS.')
+    await main()
+    cool(f'done classifying PDFs.')
+
+async def run_preprocessing(download, deduplicate, classify):
+    info(f'Running preprocessing steps: download files, deduplication, and classification.')
+    if download:
+        await download_files()
+    if deduplicate:
+        await enrich()
+    if classify:
+        await classify_items()
 
 @cli_app.command()
 def cli(
@@ -131,20 +161,13 @@ def cli(
             rich_help_panel="Backup/Restore",
         ),
     ] = RestoreStrategy.REPLACE.value,
-    download_files: Annotated[
+    download: Annotated[
         bool,
         typer.Option(
             help="Download pdfs from canvas.",
             rich_help_panel="Functions",
         ),
     ] = False,
-    max_amount_to_download: Annotated[
-        int,
-        typer.Option(
-            help="Maximum amount of files to download.",
-            rich_help_panel="Functions",
-        ),
-    ] = None,
     classify: Annotated[
         bool,
         typer.Option(
@@ -185,6 +208,22 @@ def cli(
             warn(f"Failed to parse path to other sheet: {e}")
             other_sheet = None
 
+    if any([download, deduplicate, classify]):
+        info(f'Running the tool without writes to update db data')
+        temp_tool = EasyAccessTool(settings=EasyAccessSettings.from_env(
+            functions="read",
+            only_changes=True,
+            refresh_osiris_data=osiris_update,
+            other_sheet=None,
+            only_retrieve_missing_osiris_data=not osiris_full_refresh,
+            disable_writes=True,
+        ))
+        temp_tool.run()
+        cool(f'Done updating data without writes to excels. ')
+
+        info(f'Doing the rest of the preprocessing steps: download files, deduplication, and classification.')
+        asyncio.get_event_loop().run_until_complete(run_preprocessing(download, deduplicate, classify))
+
     # Load settings from env and CLI params
     ea_settings = EasyAccessSettings.from_env(
         functions=do,
@@ -200,41 +239,6 @@ def cli(
         cool("Thank you for using the Easy Access tool!")
         raise typer.Exit(code=1)
 
-    # if download_files, dedupe, or classify are enabled, first run a 'bare' version of the tool to update all data without writing to sheets
-    # then enrich everything
-    # then run the tool as normal
-    if download_files or deduplicate or classify:
-        info(f'Running the tool without writes to update db data')
-        temp_tool = EasyAccessTool(settings=EasyAccessSettings.from_env(
-            functions="read",
-            only_changes=True,
-            refresh_osiris_data=osiris_update,
-            other_sheet=None,
-            only_retrieve_missing_osiris_data=not osiris_full_refresh,
-            disable_writes=True,
-        ))
-        temp_tool.run()
-        cool(f'Done updating data without writes to excels. ')
-    if download_files:
-        warn(f'downloading files. Will use Chrome do so. Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
-        input(f'Press any key to continue...')
-        downloader = Downloader()
-        asyncio.get_event_loop().run_until_complete(downloader.download_pdfs(subset=None, max_amount=max_amount_to_download))
-        cool(f'done downloading, waiting for download to finish...')
-        time.sleep(5)
-        info(f'Ingesting pdfs into db...')
-        asyncio.get_event_loop().run_until_complete(load_pdfs())
-        cool(f'Done ingesting pdfs.')
-    if deduplicate:
-        info(f'Enriching/deduplicating PDFs.')
-        asyncio.get_event_loop().run_until_complete(enrich_pdfs(max_pages=50, str_limit=50000))
-        cool(f'Done enriching PDFs.')
-    if classify:
-        info(f'Classifying PDFS.')
-        asyncio.get_event_loop().run_until_complete(main())
-        cool(f'Done classifying PDFs')
-    # Initialize and run tool with settings
-    info(f"Running the Easy Access tool with settings: {ea_settings}")
     tool = EasyAccessTool(ea_settings)
     tool.run()
 
