@@ -16,6 +16,9 @@ from functools import partial
 from easy_access.db.models import PDF, CopyrightItem
 from easy_access.db.ingest import load_llm_classifications
 from easy_access.db.base import init
+from easy_access.classification.pdf_handling import extract_pdf_text
+import pikepdf
+import io
 console = Console(emoji=True, markup=True)
 
 client = None
@@ -81,23 +84,63 @@ def activate_client():
     client = genai.Client(api_key=gemini)
 
 async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classification|None]:
+    async def send_pdf_to_gemini(pdf: PDF, max_pages: int = 20) -> io.BytesIO:
+        """
+        Sends the first 'max_pages' of a PDF file to the Gemini API.
+
+        Args:
+            pdf_path (Path): Path to the PDF file.
+            max_pages (int): The maximum number of pages to send. Defaults to 20.
+
+        Returns:
+            bytes: The content of the first 'max_pages' of the PDF as bytes.
+                Returns an empty bytes object if there's an error.
+        """
+        try:
+            with pikepdf.open(pdf.path) as opened_pdf:
+                # Create a new PDF to hold the first 'max_pages' pages
+                new_pdf = pikepdf.Pdf.new()
+                for i in range(min(max_pages, len(opened_pdf.pages))):
+                    new_pdf.pages.append(opened_pdf.pages[i])
+
+                # Store the new PDF in memory as bytes
+                temp_stream = io.BytesIO()
+                new_pdf.save(temp_stream)
+                return temp_stream.getvalue()
+        except Exception as e:
+            print(f"Error processing PDF: {e}")
+            return b""
+    contents = None
     try:
         mat_id = pdf.material_id
+        if pdf.parsing_failed:
+            full_pdf = True
         if not full_pdf:
+            if not pdf.extracted_text:
+                warn(f'pdf has no extracted text. Trying to extract.')
+                await extract_pdf_text(pdf)
+                pdf = await PDF.get(material_id=mat_id)
+            if not pdf.extracted_text:
+                warn(f'pdf has no extracted text. Sending full pdf instead for {pdf.current_file_name}')
+                full_pdf = True
+        if pdf.extracted_text and not full_pdf:
             pdf_text = pdf.extracted_text
             if len(pdf_text)> 10_000:
                 pdf_text = pdf_text[:10_000]
-            if not pdf_text:
-                warn(f'pdf has no extracted text. Sending full pdf instead for {pdf.current_file_name}')
-                full_pdf = True
             contents = f"\n | text content of pdf file {pdf.current_file_name} is as follows: |\n".join([prompt,pdf_text])
         if full_pdf:
             print(f'Uploading {pdf.current_file_name} to gemini storage.')
             try:
+                # select only the first 20 pages
+                pdf_bytes = await send_pdf_to_gemini(pdf, max_pages=20)
+                if not pdf_bytes:
+                    warn(f'Could not send pdf to gemini storage.')
+                    return pdf, None
+
                 pdf_file = client.files.upload(
-                    file=pdf.path,
+                    file=io.BytesIO(pdf_bytes),
                     config= {'mime_type': 'application/pdf',
-                            'name': mat_id},
+                            'name': str(mat_id)},
                 )
                 contents = [pdf_file,f"You received the pdf file {pdf.current_file_name}.\n"+prompt]
             except Exception as e:
@@ -117,18 +160,32 @@ async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classifica
                 'response_schema': Classification,
             },
         )
-
+        parsed = None
         parsed = response.parsed
         if full_pdf:
-            client.files.delete(name=mat_id)
+            client.files.delete(name=str(mat_id))
 
         if parsed:
             if isinstance(parsed, Classification):
                 parsed.pdf_name = pdf.current_file_name
                 print(f'returned response for {mat_id}')
                 return pdf, parsed
+            else:
+                print(f'Error parsing response for {mat_id}')
+                return pdf, None
+        else:
+            if response.candidates:
+                for candidate in response.candidates:
+                    if candidate.finish_reason:
+                        reason = candidate.finish_reason.value
 
-        return
+            if reason:
+                print(f'No result for {mat_id}, reason: {reason}')
+                return pdf, None
+            else:
+
+                print(f'No response for {mat_id},\n\n parsed: {parsed}.\n\n response:{response}')
+                return pdf, None
     except Exception as e:
         print(f'Error while classifying {pdf.current_file_name}: {e}')
         console.print(e)
@@ -139,7 +196,7 @@ def delete_files():
     console.print('Deleting files from gemini storage.')
     for f in client.files.list():
         console.print("Deleting: ", f.name)
-        client.files.delete(name=f.name)
+        client.files.delete(name=str(f.name))
 
 async def classify_items(files: list[PDF]) -> int:
     async with amap(

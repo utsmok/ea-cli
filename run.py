@@ -18,14 +18,14 @@
 #     "google-genai",
 #     "tortoise-orm[accel]",
 #     "aiometer",
-#     "pdfminer-six",
+#     "pdfminer.six==20231228",
 #     "pydantic",
 #     "sqlalchemy",
 #     "connectorx",
 #     "pikepdf",
 #     "qdrant_client",
 #     "fastembed",
-#      "xxhash",
+#     "xxhash",
 # ]
 # ///
 
@@ -57,8 +57,42 @@ from easy_access.main import EasyAccessTool
 from easy_access.classification.downloader import Downloader
 from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.classification.classifier_api import main
+from easy_access.db.ingest import load_pdfs, load_raw_copyright_data
 import asyncio
 cli_app = typer.Typer()
+
+async def download_files():
+    info(f'downloading files. Will use Chrome do so.')
+    warn(f'Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
+    input(f'Press any key to continue...')
+    downloader = Downloader()
+    await downloader.download_pdfs(subset=None, max_amount=None)
+    cool(f'done downloading!')
+
+async def enrich():
+    info(f'Loading existing PDFs into database.')
+    await load_pdfs()
+    cool(f'done loading existing PDFs into database.')
+    info(f'Enriching & deduplicating PDFs.')
+    await enrich_pdfs(max_pages=50, str_limit=50000)
+    cool(f'done enriching & deduplicating PDFs.')
+
+async def classify_items():
+    info(f'Classifying PDFS.')
+    await main()
+    cool(f'done classifying PDFs.')
+
+async def run_preprocessing(download, deduplicate, classify):
+    info(f'Running preprocessing steps: download files, deduplication, and classification.')
+    info('Starting by ingesting the latest raw copyright data into db.')
+    await load_raw_copyright_data()
+    cool(f'done ingesting raw data.')
+    if download:
+        await download_files()
+    if deduplicate:
+        await enrich()
+    if classify:
+        await classify_items()
 
 @cli_app.command()
 def cli(
@@ -122,7 +156,7 @@ def cli(
             rich_help_panel="Backup/Restore",
         ),
     ] = RestoreStrategy.REPLACE.value,
-    download_files: Annotated[
+    download: Annotated[
         bool,
         typer.Option(
             help="Download pdfs from canvas.",
@@ -176,6 +210,11 @@ def cli(
             warn(f"Failed to parse path to other sheet: {e}")
             other_sheet = None
 
+    if any([download, deduplicate, classify]):
+        # pre_processor_tool = COPY CODE FROM OTHER PC FIRST: RUN THE EA TOOL without writing files to fix up DB
+        info(f'Doing preprocessing steps: download files, deduplication, and classification.')
+        asyncio.get_event_loop().run_until_complete(run_preprocessing(download, deduplicate, classify))
+
     # Load settings from env and CLI params
     ea_settings = EasyAccessSettings.from_env(
         functions=do,
@@ -192,23 +231,6 @@ def cli(
 
     # Initialize and run tool with settings
     tool = EasyAccessTool(ea_settings)
-    driver = None
-    if download_files:
-        print(f'downloading files. Will use Chrome do so. Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
-        input(f'Press any key to continue...')
-        downloader = Downloader()
-        asyncio.get_event_loop().run_until_complete(downloader.download_pdfs(subset=None, max_amount=max_amount_to_download))
-        print(f'done downloading, waiting for download to finish...')
-        time.sleep(5)
-    if deduplicate:
-        print(f'Enriching/deduplicating PDFs.')
-        asyncio.get_event_loop().run_until_complete(enrich_pdfs())
-
-    if classify:
-        print(f'Classifying PDFS.')
-        asyncio.get_event_loop().run_until_complete(main())
-
-
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")

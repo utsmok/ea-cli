@@ -306,6 +306,7 @@ class PDF(Model, TimestampMixin):
     subject = fields.CharField(max_length=2048,null=True)
     title = fields.CharField(max_length=2048,null=True)
 
+    parsing_failed = fields.BooleanField(null=True, default=False) # if the file could not be parsed, set to True
     class Meta:
         table = "pdf_data"
 

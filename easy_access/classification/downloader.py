@@ -9,6 +9,8 @@ import polars as pl
 import time
 from datetime import datetime
 import Levenshtein
+from selenium.webdriver.common.by import By
+from easy_access.db.ingest import load_pdfs
 
 default_download_dir = r"C:\Users\MokS\Downloads"
 default_profile_path = r"C:\Users\MokS\AppData\Local\Google\Chrome\User Data"
@@ -49,6 +51,7 @@ class Downloader:
         cool(f'injecting stealth.js')
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {'source': js})
         info(f'Download dir: {self.download_dir.full}. profile path: {profile_path}.')
+        self.driver.implicitly_wait(5)
         cool(text=f'done setting up selenium')
 
     def get_already_downloaded_material_ids(self) -> list[str]:
@@ -130,10 +133,11 @@ class Downloader:
         if urls.is_empty():
             warn(f'No urls to download.')
             return True
-        return self.download(urls=urls, max_amount=max_amount)
+        await self.download(urls=urls, max_amount=max_amount)
+        await load_pdfs()
 
-    def download(self, urls: pl.DataFrame, max_amount: int = None) -> bool:
-        def process_results(results, first_datetime, start_time):
+    async def download(self, urls: pl.DataFrame, max_amount: int = None) -> bool:
+        async def process_results(results, first_datetime, start_time):
             """
             Renames the files in the download dir to match the material_id_filename_created.pdf format
             If file name is not directly found, returns the closest match based on Levenshtein distance.
@@ -189,7 +193,7 @@ class Downloader:
 
         self.setup_selenium()
         info(f'Downloading {len(urls)} files')
-        urls = urls.to_dicts()
+        urls: list[dict] = urls.to_dicts()
 
         start_time = time.time()
         batch_start_time = time.time()
@@ -197,6 +201,12 @@ class Downloader:
         results = []
         first_datetime = None
         no_url = 0
+        deleted_items = []
+        total = 0
+        if len(urls) < 20:
+            print(f'Downloading these urls: ')
+            for url in urls:
+                print("    ",str(url))
         try:
             for index, item in enumerate(urls, start=1):
                 try:
@@ -208,22 +218,29 @@ class Downloader:
                         x += 1
                         item['filename'] = item['filename'] + f'_{x}'
 
-                    item['created'] = self.download_file(item.get('url'))
+                    succes, item['created'] = await self.download_file(item.get('url'))
+                    if not succes:
+                        deleted_items.append(item)
+                        continue
                     if not first_datetime:
                         first_datetime = item['created']
                     results.append(item)
+                    total += 1
                     print(f'.', end='')
-                    items_per_sec = index / (time.time() - start_time)
+                    items_per_sec = 0
+                    if index:
+                        items_per_sec = index / (time.time() - start_time)
                     if items_per_sec > 1:
                         time.sleep(5)
                     if max_amount and index >= max_amount:
                         print(f'\n')
-                        info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
+                        info(f'[{len(results)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping.')
                         break
                     if index % step_len == 0:
                         print(f'\n')
-                        info(f'[{len(results)}/{len(urls)}] files downloaded in {time.time() - start_time:.2f} seconds')
-                        process_results(results, first_datetime, batch_start_time)
+                        info(f'[{len(results)}] files downloaded in {time.time() - start_time:.2f} seconds')
+                        if results:
+                            await process_results(results, first_datetime, batch_start_time)
                         first_datetime = None
                         results = []
                         batch_start_time = time.time()
@@ -233,13 +250,12 @@ class Downloader:
         except Exception as e:
             warn(f'Error downloading file: {e}')
         finally:
-            info(f'Done downloading. {no_url} items without urls were skipped. Processing final batch.')
+            info(f'Done downloading.\n  Input urls:  {len(urls)}\n  Downloaded: {total}\n  Skipped: {no_url}\n  Deleted: {len(deleted_items)}')
             try:
                 if results:
-                    process_results(results, first_datetime, batch_start_time)
+                    await process_results(results, first_datetime, batch_start_time)
             except Exception as e:
                 warn(f'error {e} while processing download results')
-
 
         info(f'Resetting & closing chrome, hold on...')
         self.reset_chrome()
@@ -247,11 +263,14 @@ class Downloader:
             if not str(file.name.split('_')[0]).isdigit():
                 file.delete()
         cool(f'Done resetting chrome & removing misnamed pdfs!')
+
+        if deleted_items:
+            info(f'Now processing {len(deleted_items)} deleted items.')
+            await self.handle_deleted_items(deleted_items)
         return True
 
     def reset_chrome(self) -> None:
         my_options = webdriver.ChromeOptions()
-
         my_options.add_experimental_option("prefs", {
             "download.default_directory":default_download_dir,
             "download.prompt_for_download": False,
@@ -265,7 +284,7 @@ class Downloader:
         time.sleep(5)
         self.driver.close()
 
-    def download_file(self, url: str) -> None:
+    async def download_file(self, url: str) -> tuple[bool, datetime]:
         """
         Downloads a file from a canvas url and stores it in the download dir (set during init) as:
         {material_id}_{orig_name}_{date_retrieved}.pdf
@@ -283,6 +302,51 @@ class Downloader:
 
 
         now = datetime.now()
+
+
         result_done = self.driver.get(download_url)
-        self.driver.implicitly_wait(20) # is this necessary?
-        return now
+        # check if "Page Not Found" and/or "This file has been deleted" is on page
+
+        try:
+            if 'Page Not Found' in self.driver.page_source and 'This file has been deleted' in self.driver.page_source:
+                info(f'[by source] File {material_id} has been deleted from canvas.')
+                return False, now
+        except Exception as e:
+            warn(f'Error while checking if file {material_id} has been deleted: {e}')
+        # alternative option, disabled for now
+        if False:
+            try:
+                if self.driver.find_element(by=By.CLASS_NAME, value='ic-Error-page'):
+                    text = self.driver.find_element(by=By.CLASS_NAME, value='ic-Error-page').text
+                    if 'deleted' in text:
+                        info(f'[by id] File {material_id} has been deleted from canvas.')
+                        return False, now
+            except Exception as e:
+                warn(f'error {e} while checking by id if file {material_id} has been deleted.')
+        return True, now
+
+
+    async def handle_deleted_items(self, items: list[dict]) -> None:
+        changed = 0
+        not_found = 0
+        already_deleted = 0
+        for item in items:
+            try:
+                c_item = await CopyrightItem.get_or_none(material_id=int(item['material_id']))
+                if c_item:
+                    if c_item.status == Status.DELETED:
+                        already_deleted += 1
+                        continue
+                    c_item.status = Status.DELETED
+                    await c_item.save()
+                    changed += 1
+                else:
+                    not_found += 1
+            except Exception as e:
+                warn(f'Error while marking item {item["material_id"]} as deleted: {e}')
+                continue
+
+        cool(f'Marked {changed}/{len(items)} items as deleted.')
+        cool(f'{already_deleted}/{len(items)} items were already marked as deleted.')
+        warn(f'{not_found}/{len(items)} items not found in the database.')
+        return

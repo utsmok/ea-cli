@@ -11,6 +11,7 @@ from easy_access.db.ingest import load_pdfs
 from easy_access.db.update import update_copyright_relations
 from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.db.models import PDF, CopyrightItem
+
 async def compare_pdfs():
     delete = False
     await init()
@@ -57,6 +58,5 @@ async def compare_pdfs():
 
 async def run():
     await init()
-    await create()
-    await update_copyright_relations()
+    await main()
 asyncio.run(run())
