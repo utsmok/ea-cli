@@ -46,51 +46,66 @@ quickstart:
 3. > uv run run.py --help
 """
 
-import time
-import typer
-from typing import Annotated
-from easy_access.utils import cool, warn, info
-from easy_access.settings import Functions, EasyAccessSettings, SETTINGS
-from easy_access.sheets.backup import Backupper, BackupFlag, RestoreOptions, RestoreStrategy
+import asyncio
 from pathlib import Path
-from easy_access.main import EasyAccessTool
+from typing import Annotated
+
+import typer
+
+from easy_access.classification.classifier_api import main
 from easy_access.classification.downloader import Downloader
 from easy_access.classification.pdf_handling import enrich_pdfs
-from easy_access.classification.classifier_api import main
-from easy_access.db.ingest import load_pdfs, load_raw_copyright_data
-import asyncio
+from easy_access.db.ingest import load_pdfs
+from easy_access.main import EasyAccessTool
+from easy_access.settings import SETTINGS, EasyAccessSettings, Functions
+from easy_access.sheets.backup import (
+    BackupFlag,
+    Backupper,
+    RestoreOptions,
+    RestoreStrategy,
+)
+from easy_access.utils import cool, info, warn
 
 cli_app = typer.Typer()
 
+
 async def download_files():
-    info(f'downloading files. Will use Chrome do so.')
-    warn(f'Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing.')
-    input(f'Press any key to continue...')
+    info("downloading files. Will use Chrome do so.")
+    warn(
+        "Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing."
+    )
+    input("Press any key to continue...")
     downloader = Downloader()
     await downloader.download_pdfs(subset=None, max_amount=None)
-    cool(f'done downloading!')
+    cool("done downloading!")
+
 
 async def enrich():
-    info(f'Loading existing PDFs into database.')
+    info("Loading existing PDFs into database.")
     await load_pdfs()
-    cool(f'done loading existing PDFs into database.')
-    info(f'Enriching & deduplicating PDFs.')
+    cool("done loading existing PDFs into database.")
+    info("Enriching & deduplicating PDFs.")
     await enrich_pdfs(max_pages=50, str_limit=50000)
-    cool(f'done enriching & deduplicating PDFs.')
+    cool("done enriching & deduplicating PDFs.")
+
 
 async def classify_items():
-    info(f'Classifying PDFS.')
+    info("Classifying PDFS.")
     await main()
-    cool(f'done classifying PDFs.')
+    cool("done classifying PDFs.")
+
 
 async def run_preprocessing(download, deduplicate, classify):
-    info(f'Running preprocessing steps: download files, deduplication, and classification.')
+    info(
+        "Running preprocessing steps: download files, deduplication, and classification."
+    )
     if download:
         await download_files()
     if deduplicate:
         await enrich()
     if classify:
         await classify_items()
+
 
 @cli_app.command()
 def cli(
@@ -191,7 +206,10 @@ def cli(
         case BackupFlag.BACKUP:
             backupper.backup_files()
         case BackupFlag.RESTORE:
-            backupper.restore_backup(strategy=RestoreStrategy(restore_strategy), select=RestoreOptions(restore_dir))
+            backupper.restore_backup(
+                strategy=RestoreStrategy(restore_strategy),
+                select=RestoreOptions(restore_dir),
+            )
         case BackupFlag.DEFAULT:
             if SETTINGS.backup_settings.backup_all:
                 backupper.backup_files()
@@ -209,20 +227,26 @@ def cli(
             other_sheet = None
 
     if any([download, deduplicate, classify]):
-        info(f'Running the tool without writes to update db data')
-        temp_tool = EasyAccessTool(settings=EasyAccessSettings.from_env(
-            functions="read",
-            only_changes=True,
-            refresh_osiris_data=osiris_update,
-            other_sheet=None,
-            only_retrieve_missing_osiris_data=not osiris_full_refresh,
-            disable_writes=True,
-        ))
+        info("Running the tool without writes to update db data")
+        temp_tool = EasyAccessTool(
+            settings=EasyAccessSettings.from_env(
+                functions="read",
+                only_changes=True,
+                refresh_osiris_data=osiris_update,
+                other_sheet=None,
+                only_retrieve_missing_osiris_data=not osiris_full_refresh,
+                disable_writes=True,
+            )
+        )
         temp_tool.run()
-        cool(f'Done updating data without writes to excels. ')
+        cool("Done updating data without writes to excels. ")
 
-        info(f'Doing the rest of the preprocessing steps: download files, deduplication, and classification.')
-        asyncio.get_event_loop().run_until_complete(run_preprocessing(download, deduplicate, classify))
+        info(
+            "Doing the rest of the preprocessing steps: download files, deduplication, and classification."
+        )
+        asyncio.get_event_loop().run_until_complete(
+            run_preprocessing(download, deduplicate, classify)
+        )
 
     # Load settings from env and CLI params
     ea_settings = EasyAccessSettings.from_env(
@@ -243,6 +267,7 @@ def cli(
     tool.run()
 
     cool("All done! Thank you for using the Easy Access tool!")
+
 
 if __name__ == "__main__":
     cli_app()

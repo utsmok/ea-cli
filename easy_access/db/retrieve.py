@@ -1,10 +1,13 @@
 """
 Functions to retrieve data from the database.
 """
+
 from collections.abc import Iterable
 from typing import Literal, LiteralString
-from sqlalchemy import Engine, create_engine, text
+
 import polars as pl
+from sqlalchemy import Engine, create_engine, text
+
 from easy_access.settings import SETTINGS
 from easy_access.utils import warn
 
@@ -21,20 +24,23 @@ def retrieve_copyright_items() -> pl.DataFrame:
 
     col_order: set[str] = set(SETTINGS.data_settings.raw_data_col_order)
 
-    if 'google_search_file' in col_order:
-        col_order.remove('google_search_file')
-    if 'type' in col_order:
-        col_order.remove('type')
-    if 'faculty' in col_order:
-        col_order.remove('faculty')
-        select_cols = {*col_order, 'faculty_id AS faculty'}
+    if "google_search_file" in col_order:
+        col_order.remove("google_search_file")
+    if "type" in col_order:
+        col_order.remove("type")
+    if "faculty" in col_order:
+        col_order.remove("faculty")
+        select_cols = {*col_order, "faculty_id AS faculty"}
     else:
         select_cols = col_order
 
     query: str = "SELECT " + ", ".join(select_cols) + " FROM copyright_data cd"
 
-    df: pl.DataFrame = pl.read_database(query=query, connection=engine.connect(), infer_schema_length=None)
+    df: pl.DataFrame = pl.read_database(
+        query=query, connection=engine.connect(), infer_schema_length=None
+    )
     return df
+
 
 def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     """
@@ -49,11 +55,16 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
         FROM copyright_data cd
         WHERE is_duplicate IS TRUE
     """
-    df: pl.DataFrame = pl.read_database(query=query, connection=engine.connect(), infer_schema_length=None)
+    df: pl.DataFrame = pl.read_database(
+        query=query, connection=engine.connect(), infer_schema_length=None
+    )
     return df
+
+
 def init_engine() -> None:
     global engine
     engine = create_engine("sqlite:///db.sqlite3")
+
 
 def get_valid_faculties() -> set[str]:
     """Retrieves the set of valid faculty abbreviations from the database."""
@@ -67,8 +78,8 @@ def get_valid_faculties() -> set[str]:
 def retrieve_full_data(
     selected_material_ids: Iterable[int] | None = None,
     selected_faculties: Iterable[str] | str | None = None,
-    excluded_material_ids: Iterable[int] | None = None
-    ) -> pl.DataFrame:
+    excluded_material_ids: Iterable[int] | None = None,
+) -> pl.DataFrame:
     """
     Retrieves copyright items, enriched with related data, with optional filtering.
 
@@ -90,21 +101,31 @@ def retrieve_full_data(
         # print all table names
         if selected_material_ids is not None:
             if not selected_material_ids:
-                warn(text='retrieve_full_data received an empty collection of selected_material_ids.  Returning empty DataFrame.')
+                warn(
+                    text="retrieve_full_data received an empty collection of selected_material_ids.  Returning empty DataFrame."
+                )
                 return pl.DataFrame()
             conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
-            conn.execute(text("CREATE TEMP TABLE temp_material_ids (material_id INTEGER);"))
             conn.execute(
-                text("INSERT INTO temp_material_ids (material_id) VALUES (:material_id)"),
-                [{"material_id": mat_id} for mat_id in selected_material_ids]
+                text("CREATE TEMP TABLE temp_material_ids (material_id INTEGER);")
             )
-            material_join_clause = "INNER JOIN temp_material_ids tmid ON cd.material_id = tmid.material_id"
+            conn.execute(
+                text(
+                    "INSERT INTO temp_material_ids (material_id) VALUES (:material_id)"
+                ),
+                [{"material_id": mat_id} for mat_id in selected_material_ids],
+            )
+            material_join_clause = (
+                "INNER JOIN temp_material_ids tmid ON cd.material_id = tmid.material_id"
+            )
 
         if excluded_material_ids is not None:
             excluded_material_ids_list = list(excluded_material_ids)
             if excluded_material_ids_list:  # Only add clause if the list is not empty
-                excluded_ids_string = ', '.join(map(str, excluded_material_ids_list))
-                material_exclusion_clause = f"AND cd.material_id NOT IN ({excluded_ids_string})"
+                excluded_ids_string = ", ".join(map(str, excluded_material_ids_list))
+                material_exclusion_clause = (
+                    f"AND cd.material_id NOT IN ({excluded_ids_string})"
+                )
 
         if selected_faculties:
             if isinstance(selected_faculties, str):
@@ -117,7 +138,6 @@ def retrieve_full_data(
 
             faculties_string = "', '".join(selected_faculties)  # Escape for SQL
             faculty_where_clause = f"AND cd.faculty_id IN ('{faculties_string}')"
-
 
         query: LiteralString = f"""
             WITH CourseDataAggregated AS (
@@ -198,59 +218,49 @@ def retrieve_full_data(
             """
         df = pl.read_database(query=query, connection=conn, infer_schema_length=None)
 
-
     df = df.drop(
-            [
-                "llm_classification_id",
-                'created_at',
-                'modified_at',
-                'possible_fine',
-                'infringement'
-            ]
-        ).rename(
-            mapping={
-                "faculty_id":"faculty"
-            }
-        )
+        [
+            "llm_classification_id",
+            "created_at",
+            "modified_at",
+            "possible_fine",
+            "infringement",
+        ]
+    ).rename(mapping={"faculty_id": "faculty"})
 
     if df.is_empty():
         return df
-    if df['material_id'].is_null().all():
+    if df["material_id"].is_null().all():
         return None
 
     # drop nulcols from llm cols
-    llm_cols = [
-                    "llm_isbn",
-                    "llm_doi",
-                    "llm_source_url",
-                    "llm_license",
-                    "llm_authors"
-                ]
+    llm_cols = ["llm_isbn", "llm_doi", "llm_source_url", "llm_license", "llm_authors"]
     droplist = []
     # iterate over llm cols
     # if col is null (dtype=null or all values are null), drop it
     for col in llm_cols:
-        if df[col].is_null().all():
+        if df[col].is_null().all() or df[col].dtype == pl.Null:
             df = df.drop(col)
             droplist.append(col)
     select_cols = [col for col in llm_cols if col not in droplist]
     if select_cols:
         df = df.with_columns(
-                [
-
-                    pl.col(name=colname).
-                    str.json_decode(infer_schema_length=None).
-                    list.join(separator=' | ')
-                    for colname in select_cols
-                ]
-            )
+            [
+                pl.col(name=colname)
+                .str.json_decode(infer_schema_length=None)
+                .list.join(separator=" | ")
+                for colname in select_cols
+            ]
+        )
 
     # add droplist cols back in with empty values
     if droplist:
         for col in droplist:
-            df = df.with_columns(col = pl.lit(None))
+            df = df.with_columns(col=pl.lit(None))
 
     return df
+
+
 def get_llm_classification_schema() -> dict[str, type]:
     """Defines the expected schema for llm_classification_data."""
     return {
@@ -274,24 +284,30 @@ def get_llm_classification_schema() -> dict[str, type]:
         "material_id": pl.Int64,
     }
 
+
 def retrieve_llm_classifications(
     selected_material_ids: Iterable[int] | None = None,
 ) -> pl.DataFrame:
-
     if not engine:
         init_engine()
-    material_join_clause: Literal[''] = ""
+    material_join_clause: Literal[""] = ""
     with engine.connect() as conn:
         # print all table names
         if selected_material_ids is not None:
             if not selected_material_ids:
-                warn(text='retrieve_llm_classifications received an empty collection of selected_material_ids.  Returning empty DataFrame.')
+                warn(
+                    text="retrieve_llm_classifications received an empty collection of selected_material_ids.  Returning empty DataFrame."
+                )
                 return pl.DataFrame(schema=get_llm_classification_schema())
             conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
-            conn.execute(text("CREATE TEMP TABLE temp_material_ids (material_id INTEGER);"))
             conn.execute(
-                text("INSERT INTO temp_material_ids (material_id) VALUES (:material_id)"),
-                [{"material_id": mat_id} for mat_id in selected_material_ids]
+                text("CREATE TEMP TABLE temp_material_ids (material_id INTEGER);")
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO temp_material_ids (material_id) VALUES (:material_id)"
+                ),
+                [{"material_id": mat_id} for mat_id in selected_material_ids],
             )
             material_join_clause = "INNER JOIN temp_material_ids tmid ON llm.used_material_id = tmid.material_id"
 
@@ -303,51 +319,47 @@ def retrieve_llm_classifications(
         """
 
         df = pl.read_database(query=query, connection=conn)
-        df = df.drop(
-            [
-                'created_at',
-                'modified_at',
-                'id'
-            ]
-        ).rename(
+        df = df.drop(["created_at", "modified_at", "id"]).rename(
             mapping={
-                "allowed_usage":"allowed_usage_llm",
-                "allowed_usage_reasoning":"allowed_usage_reasoning_llm",
-                "copyright_status":"copyright_status_llm",
-                "copyright_classification_reason":"copyright_classification_reason_llm",
-                "item_type":"item_type_llm",
-                "item_type_classification_reason":"item_type_classification_reason_llm",
-                "remarks":"remarks_llm",
-                "author_names":"author_names_llm",
-                "item_title":"item_title_llm",
-                "publisher_name":"publisher_name_llm",
-                "copyright_holder":"copyright_holder_llm",
-                "doi":"doi_llm",
-                "isbn":"isbn_llm",
-                "source_url":"source_url_llm",
-                "license":"license_llm",
-                "topic":"topic_llm",
-                "pdf_page_count":"pdf_page_count_llm",
-                'used_material_id':'material_id',
+                "allowed_usage": "allowed_usage_llm",
+                "allowed_usage_reasoning": "allowed_usage_reasoning_llm",
+                "copyright_status": "copyright_status_llm",
+                "copyright_classification_reason": "copyright_classification_reason_llm",
+                "item_type": "item_type_llm",
+                "item_type_classification_reason": "item_type_classification_reason_llm",
+                "remarks": "remarks_llm",
+                "author_names": "author_names_llm",
+                "item_title": "item_title_llm",
+                "publisher_name": "publisher_name_llm",
+                "copyright_holder": "copyright_holder_llm",
+                "doi": "doi_llm",
+                "isbn": "isbn_llm",
+                "source_url": "source_url_llm",
+                "license": "license_llm",
+                "topic": "topic_llm",
+                "pdf_page_count": "pdf_page_count_llm",
+                "used_material_id": "material_id",
             }
         )
         if df.is_empty():
             return None
-        if df['material_id'].is_null().all():
+        if df["material_id"].is_null().all():
             return None
 
-        return df.with_columns([
-            pl.col(name=colname)
-            .str.json_decode(infer_schema_length=None)
-            .fill_null(pl.lit([]))
-            .list.eval(pl.element().cast(pl.Utf8))
-            .list.join(separator=' | ')
-            for colname in [
-                "isbn_llm",
-                "doi_llm",
-                "source_url_llm",
-                "license_llm",
-                "author_names_llm",
-                "topic_llm"
+        return df.with_columns(
+            [
+                pl.col(name=colname)
+                .str.json_decode(infer_schema_length=None)
+                .fill_null(pl.lit([]))
+                .list.eval(pl.element().cast(pl.Utf8))
+                .list.join(separator=" | ")
+                for colname in [
+                    "isbn_llm",
+                    "doi_llm",
+                    "source_url_llm",
+                    "license_llm",
+                    "author_names_llm",
+                    "topic_llm",
+                ]
             ]
-        ])
+        )
