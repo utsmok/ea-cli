@@ -6,32 +6,42 @@ Functions to handle PDF files:
 - store extracted text
 - ...
 """
-from tortoise.queryset import QuerySet
-from itertools import batched
-from pdfminer.high_level import extract_text
-from easy_access.utils import info, warn, cool, File, Directory
-from easy_access.settings import SETTINGS
-from pathlib import Path
-import pikepdf
-from datetime import datetime
-from easy_access.db.models import PDF
-from easy_access.db.base import init
-from xxhash import xxh64
-from collections import defaultdict
-from fastembed import TextEmbedding
-import numpy as np
-from qdrant_client import QdrantClient, models
-from pydantic import BaseModel
-import asyncio
 
-TIMEOUT = 20 # set timeout for functions that might hang, e.g. text extraction
-class TimeoutException(Exception):   # Custom exception class
+import asyncio
+from collections import defaultdict
+from itertools import batched
+from pathlib import Path
+
+import numpy as np
+import pikepdf
+from fastembed import TextEmbedding
+from pdfminer.high_level import extract_text
+from pydantic import BaseModel
+from qdrant_client import QdrantClient, models
+from tortoise.queryset import QuerySet
+from xxhash import xxh64
+
+from easy_access.db.base import init
+from easy_access.db.models import PDF
+from easy_access.utils import cool, info, warn
+
+TIMEOUT = 20  # set timeout for functions that might hang, e.g. text extraction
+
+
+class TimeoutException(Exception):  # Custom exception class
     pass
 
-def timeout_handler(signum, frame):   # Custom signal handler
+
+def timeout_handler(signum, frame):  # Custom signal handler
     raise TimeoutException
 
-async def extract_pdf_text(pdf: PDF, max_pages: int | None = None, str_limit: int | None = None, skip_failed: bool = True) -> PDF:
+
+async def extract_pdf_text(
+    pdf: PDF,
+    max_pages: int | None = None,
+    str_limit: int | None = None,
+    skip_failed: bool = True,
+) -> PDF:
     """
     Extracts text from a PDF file using pdfminer and pypdf.
     Limit the extraction length by number of pdf pages or output string length.
@@ -44,7 +54,7 @@ async def extract_pdf_text(pdf: PDF, max_pages: int | None = None, str_limit: in
         The updated PDF object with extracted text and metadata (if successful).
     """
     path = pdf.path
-    if not path.exists() or not path.is_file() or not path.suffix.lower() == '.pdf':
+    if not path.exists() or not path.is_file() or not path.suffix.lower() == ".pdf":
         warn(f"Invalid/Not existing PDF file. Not parsing {path}")
         return pdf
 
@@ -52,56 +62,77 @@ async def extract_pdf_text(pdf: PDF, max_pages: int | None = None, str_limit: in
         warn(f"PDF parsing failed previously. Not parsing {path}")
         return pdf
 
-
     try:
         cur_len = len(pdf.extracted_text) if pdf.extracted_text else 0
-        cur_max_len = pdf.extracted_text_max_length if pdf.extracted_text_max_length else 0
+        cur_max_len = (
+            pdf.extracted_text_max_length if pdf.extracted_text_max_length else 0
+        )
         if cur_max_len:
             if str_limit:
                 if cur_max_len >= str_limit:
-                    info(f'pdf already has extracted text of length {cur_max_len}')
+                    info(f"pdf already has extracted text of length {cur_max_len}")
                     return pdf
         try:
-            pdf_text: str = await asyncio.wait_for(asyncio.to_thread(extract_text, pdf_file=path, maxpages=max_pages, codec='utf-8'), TIMEOUT)
+            pdf_text: str = await asyncio.wait_for(
+                asyncio.to_thread(
+                    extract_text, pdf_file=path, maxpages=max_pages, codec="utf-8"
+                ),
+                TIMEOUT,
+            )
 
         except asyncio.TimeoutError:
-            warn(f"Timeout extracting text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}")
+            warn(
+                f"Timeout extracting text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}"
+            )
+            pdf.parsing_failed = True
+            await pdf.save()
+            return pdf
+        except Exception as e:
+            warn(
+                f"Error extracting text from PDF: {e}.\n    Setting parsing_failed to True for material id {pdf.material_id}"
+            )
             pdf.parsing_failed = True
             await pdf.save()
             return pdf
 
         if not pdf_text:
-            warn(f"Failed to extract text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}")
+            warn(
+                f"Failed to extract text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}"
+            )
 
             pdf.parsing_failed = True
             await pdf.save()
             return pdf
 
         if str_limit:
-            if len(pdf_text)> str_limit:
+            if len(pdf_text) > str_limit:
                 pdf_text = pdf_text[:str_limit]
-
 
         if pdf_text and cur_len:
             if len(str(pdf_text)) <= int(cur_len):
-                warn(f"Extracted text is shorter or equal to current text: {len(str(pdf_text))} <= {cur_len}. Not updating.")
+                warn(
+                    f"Extracted text is shorter or equal to current text: {len(str(pdf_text))} <= {cur_len}. Not updating."
+                )
                 return pdf
 
         update_dict = {
-            'extracted_text': pdf_text,
-            'extracted_text_max_length': str_limit,
-            'extracted_text_max_pages': max_pages
+            "extracted_text": pdf_text,
+            "extracted_text_max_length": str_limit,
+            "extracted_text_max_pages": max_pages,
         }
 
         pdf = pdf.update_from_dict(update_dict)
         await pdf.save()
-        cool(f'Extracted text with len {len(pdf_text)} from {path}')
+        cool(f"Extracted text with len {len(pdf_text)} from {path}")
     except Exception as e:
-        warn(f"Error extracting text from PDF: {e}.\n    Setting parsing_failed to True for material id {pdf.material_id}")
+        warn(
+            f"Error extracting text from PDF: {e}.\n    Setting parsing_failed to True for material id {pdf.material_id}"
+        )
         pdf.parsing_failed = True
         await pdf.save()
 
     return pdf
+
 
 async def extract_metadata(pdf: PDF) -> PDF:
     """
@@ -117,36 +148,44 @@ async def extract_metadata(pdf: PDF) -> PDF:
         The function will only set attributes for metadata fields that contain values.
         The PDF object is saved to persistence storage after metadata extraction.
     """
-    print(f'Extracting metadata from {pdf.path}')
+    print(f"Extracting metadata from {pdf.path}")
     try:
-        file_data = await asyncio.wait_for(asyncio.to_thread(pikepdf.open, pdf.path), TIMEOUT)
+        file_data = await asyncio.wait_for(
+            asyncio.to_thread(pikepdf.open, pdf.path), TIMEOUT
+        )
         metadata = file_data.docinfo
     except asyncio.TimeoutError:
         warn(f"Timeout extracting metadata from PDF: {pdf.path}")
         return pdf
-    if not metadata :
+    except Exception as e:
+        warn(f"Error extracting metadata from PDF: {e}")
+        return pdf
+    if not metadata:
         warn(f"No metadata found in {pdf.path}")
         return pdf
 
-
     try:
         print(metadata)
-        title = metadata.get('/Title') if metadata.get('/Title') else None
-        author = metadata.get('/Author') if metadata.get('/Author') else None
-        subject = metadata.get('/Subject') if metadata.get('/Subject') else None
-        creator = metadata.get('/Creator') if metadata.get('/Creator') else None
-        producer = metadata.get('/Producer') if metadata.get('/Producer') else None
-        file_creation_date = metadata.get('/CreationDate') if metadata.get('/CreationDate') else None
-        file_modification_date = metadata.get('/ModDate') if metadata.get('/ModDate') else None
+        title = metadata.get("/Title") if metadata.get("/Title") else None
+        author = metadata.get("/Author") if metadata.get("/Author") else None
+        subject = metadata.get("/Subject") if metadata.get("/Subject") else None
+        creator = metadata.get("/Creator") if metadata.get("/Creator") else None
+        producer = metadata.get("/Producer") if metadata.get("/Producer") else None
+        file_creation_date = (
+            metadata.get("/CreationDate") if metadata.get("/CreationDate") else None
+        )
+        file_modification_date = (
+            metadata.get("/ModDate") if metadata.get("/ModDate") else None
+        )
 
         doi = metadata.get("/doi") if metadata.get("/doi") else None
 
         metadata = {
-            'title': str(title) if title else None,
-            'author': str(author) if author else None,
-            'subject': str(subject) if subject else None,
-            'creator': str(creator) if creator else None,
-            'producer': str(producer) if producer else None,
+            "title": str(title) if title else None,
+            "author": str(author) if author else None,
+            "subject": str(subject) if subject else None,
+            "creator": str(creator) if creator else None,
+            "producer": str(producer) if producer else None,
         }
         pdf = pdf.update_from_dict(metadata)
         await pdf.save()
@@ -158,13 +197,18 @@ async def extract_metadata(pdf: PDF) -> PDF:
         await pdf.save()
         """
     except Exception as e:
-        warn(f'Error extracting metadata from {pdf.path}: {e}')
+        warn(f"Error extracting metadata from {pdf.path}: {e}")
 
-    info(f'done with {pdf.path}')
+    info(f"done with {pdf.path}")
     return pdf
 
 
-async def enrich_pdfs(pdfs: list[PDF] | None = None, max_pages: int | None = None, str_limit: int | None = None) -> list[PDF]:
+async def enrich_pdfs(
+    pdfs: list[PDF] | None = None,
+    input_mat_ids: list[int] | list[str] | None = None,
+    max_pages: int | None = None,
+    str_limit: int | None = None,
+) -> list[PDF]:
     """
     Deduplicates, and then extracts text & metadata from a list of PDF files, and updates the objects accordingly.
     Parameters:
@@ -175,15 +219,37 @@ async def enrich_pdfs(pdfs: list[PDF] | None = None, max_pages: int | None = Non
         list[PDF]: The same list of PDF objects, but updated with deduplication info, metadata & extracted text.
     """
     await init()
+
     if pdfs:
-
         input_mat_ids = [pdf.material_id for pdf in pdfs]
-    if not pdfs:
-        pdfs = await PDF.all()
-        input_mat_ids = None
 
-    pdfs_missing_metadata = [pdf for pdf in pdfs if not any([getattr(pdf, field) for field in ['title', 'author', 'subject', 'creator', 'producer', 'file_creation_date', 'file_modification_date']])]
-    info(f'Found {len(pdfs_missing_metadata)} pdfs without metadata.')
+    if not pdfs:
+        if input_mat_ids:
+            input_mat_ids = [int(mat_id) for mat_id in input_mat_ids]
+            pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
+        else:
+            pdfs = await PDF.all()
+            input_mat_ids = [pdf.material_id for pdf in pdfs]
+
+    pdfs_missing_metadata = [
+        pdf
+        for pdf in pdfs
+        if not any(
+            [
+                getattr(pdf, field)
+                for field in [
+                    "title",
+                    "author",
+                    "subject",
+                    "creator",
+                    "producer",
+                    "file_creation_date",
+                    "file_modification_date",
+                ]
+            ]
+        )
+    ]
+    info(f"Found {len(pdfs_missing_metadata)} pdfs without metadata.")
     pdfs_with_metadata = [await extract_metadata(pdf) for pdf in pdfs_missing_metadata]
 
     if input_mat_ids:
@@ -192,16 +258,22 @@ async def enrich_pdfs(pdfs: list[PDF] | None = None, max_pages: int | None = Non
         pdfs = await PDF.all()
 
     pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
-    info(f'Found {len(pdfs_missing_text)} pdfs without extracted text.')
-    pdfs_with_text = [await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit) for pdf in pdfs_missing_text]
+    info(f"Found {len(pdfs_missing_text)} pdfs without extracted text.")
+    pdfs_with_text = [
+        await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
+        for pdf in pdfs_missing_text
+    ]
+
+    if input_mat_ids:
+        pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
+    else:
+        pdfs = await PDF.all()
+
+    info(f"Deduplicating {len(pdfs)} pdfs.")
+    deduplicated_pdfs = await deduplicate_pdfs(pdfs, False)
 
 
-    all_pdfs = await PDF.all()
-    info(f'Deduplicating {len(all_pdfs)} pdfs.')
-    deduplicated_pdfs = await deduplicate_pdfs(all_pdfs)
-
-
-async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
+async def deduplicate_pdfs(pdfs: list[PDF], compare_with_db=True) -> list[PDF]:
     """
     Deduplicate a list of PDF files. Uses various techniques to compare the files.
     When duplicates are found, keep the -oldest- (?) file and make the others point to it.
@@ -212,13 +284,28 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
     """
     client = QdrantClient(path="qdrant.db")
     ids_per_hash = defaultdict(list)
-    new_mapping: dict[int, int] = {} # store duplicates as {id_to_replace: target_id}
-    replaced_ids = set() # store ids for pdfs that have been replaced: they do not need to be processed any further
+    new_mapping: dict[int, int] = {}  # store duplicates as {id_to_replace: target_id}
+    replaced_ids = set()  # store ids for pdfs that have been replaced: they do not need to be processed any further
 
-    pdfs_in_db = await PDF.all().prefetch_related('replace_with').values('material_id', 'replace_with__material_id')
-    pdfs_with_replace_with = [pdf for pdf in pdfs_in_db if pdf.get('replace_with__material_id')]
-    replaced_ids.update({pdf.get('material_id') for pdf in pdfs_with_replace_with})
-    info(f'Found {len(replaced_ids)} pdfs that are already replaced in db.')
+    if compare_with_db:
+        pdfs_in_db = (
+            await PDF.all()
+            .prefetch_related("replace_with")
+            .values("material_id", "replace_with__material_id")
+        )
+    else:
+        input_mat_ids = [pdf.material_id for pdf in pdfs]
+        pdfs_in_db = (
+            await PDF.filter(material_id__in=input_mat_ids)
+            .prefetch_related("replace_with")
+            .values("material_id", "replace_with__material_id")
+        )
+
+    pdfs_with_replace_with = [
+        pdf for pdf in pdfs_in_db if pdf.get("replace_with__material_id")
+    ]
+    replaced_ids.update({pdf.get("material_id") for pdf in pdfs_with_replace_with})
+    info(f"Found {len(replaced_ids)} pdfs that are already replaced in db.")
     # first sort the pdfs on their 'age' property
     pdfs.sort(key=lambda pdf: pdf.age)
 
@@ -229,9 +316,9 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
     [ids_per_hash[get_hash(pdf.path)].append(pdf.material_id) for pdf in pdfs]
     for file_hash, ids in ids_per_hash.items():
         if len(ids) > 1:
-            new_mapping.update({id_to_replace:ids[0] for id_to_replace in ids[1:]})
+            new_mapping.update({id_to_replace: ids[0] for id_to_replace in ids[1:]})
             replaced_ids.union(set(ids[1:]))
-    info(f'Found {len(new_mapping)} duplicates by hash.')
+    info(f"Found {len(new_mapping)} duplicates by hash.")
     by_hash = len(new_mapping)
     replaced = 0
     already_replaced = 0
@@ -248,16 +335,22 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
                 replaced += 1
                 await pdf.save()
 
-    info(f'Replaced {replaced} duplicate pdfs with alternative material_id.\n {already_replaced} pdfs already had a replacement.')
+    info(
+        f"Replaced {replaced} duplicate pdfs with alternative material_id.\n {already_replaced} pdfs already had a replacement."
+    )
 
     # step 2: load extracted text for pdfs into qdrant
     new_mapping = {}
-    TRESHOLD = 0.98 # treshold for similarity
-    all_embedding_pdfs = [pdf for pdf in pdfs if pdf.extracted_text and pdf.material_id not in replaced_ids]
-    info(f'!!!! \n       Disabled embedding deduplication for now\n!!!!!!')
+    TRESHOLD = 0.98  # treshold for similarity
+    all_embedding_pdfs = [
+        pdf
+        for pdf in pdfs
+        if pdf.extracted_text and pdf.material_id not in replaced_ids
+    ]
+    info("!!!! \n       Disabled embedding deduplication for now\n!!!!!!")
     if False:
         for embedding_pdfs in batched(all_embedding_pdfs, 20):
-            selected:list[PDF] = []
+            selected: list[PDF] = []
             for pdf in embedding_pdfs:
                 result = client.retrieve(
                     collection_name="pdfs",
@@ -265,22 +358,18 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
                     with_payload=False,
                     with_vectors=False,
                 )
-                if len(result)>1:
+                if len(result) > 1:
                     continue
                 selected.append(pdf)
             if not selected:
                 continue
             docs = [pdf.extracted_text for pdf in selected]
             ids = [pdf.material_id for pdf in selected]
-            client.add(
-                collection_name="pdfs",
-                documents=docs,
-                ids=ids
-            )
+            client.add(collection_name="pdfs", documents=docs, ids=ids)
         # once stored, we can query for duplicates
         # determine this by looping over all pdfs & searching for the extracted text in the qdrant db
         # if QueryResponse has a score above treshold: mark as match (add to new_mapping etc).
-        info(f'deduplicating {len(all_embedding_pdfs)} by embedding')
+        info(f"deduplicating {len(all_embedding_pdfs)} by embedding")
         for pdf in all_embedding_pdfs:
             query = pdf.extracted_text
             rep_w: QuerySet[PDF] = pdf.replace_with
@@ -289,26 +378,29 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
                 if rep_pdf:
                     mat_id = rep_pdf.material_id
                     if mat_id:
-                        info(f'Item is replaced by {mat_id}, skipping')
+                        info(f"Item is replaced by {mat_id}, skipping")
                         continue
 
             # exclude the pdf itself from the query: so id in qdrant != pdf.material_id
-            response: list[BaseModel] = client.query(collection_name="pdfs", query_text=query, query_filter=models.Filter(
+            response: list[BaseModel] = client.query(
+                collection_name="pdfs",
+                query_text=query,
+                query_filter=models.Filter(
                     must_not=[
-                            models.HasIdCondition(has_id=[pdf.material_id]),
-                        ],
+                        models.HasIdCondition(has_id=[pdf.material_id]),
+                    ],
                 ),
-                limit=5
+                limit=5,
             )
             for result in response:
                 if result.score > TRESHOLD:
                     new_mapping[pdf.material_id] = result.id
                     break
 
-        info(f'Found {len(new_mapping)} duplicates by embedding.')
+        info(f"Found {len(new_mapping)} duplicates by embedding.")
 
     if not new_mapping:
-        info('No duplicates found!')
+        info("No duplicates found!")
         return pdfs
 
     replaced = 0
@@ -326,9 +418,11 @@ async def deduplicate_pdfs(pdfs: list[PDF]) -> list[PDF]:
                 replaced += 1
                 await pdf.save()
 
-
-    info(f'Replaced {replaced} duplicate pdfs with alternative material_id.\n {already_replaced} pdfs already had a replacement.')
+    info(
+        f"Replaced {replaced} duplicate pdfs with alternative material_id.\n {already_replaced} pdfs already had a replacement."
+    )
     return pdfs
+
 
 def get_hash(file_path: Path) -> str | None:
     """
@@ -346,6 +440,7 @@ def get_hash(file_path: Path) -> str | None:
     except Exception as e:
         warn(f"Error hashing {file_path}: {e}")
         return None
+
 
 def get_embedding(pdf: PDF) -> list[np.ndarray] | None:
     """

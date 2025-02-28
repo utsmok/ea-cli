@@ -332,6 +332,7 @@ class LLMClassification(Model, TimestampMixin):
     topic = fields.JSONField()
 
     used_material_id = fields.IntField()
+    item: fields.OneToOneNullableRelation[CopyrightItem]
 
     class Meta:
         table = "llm_classification_data"

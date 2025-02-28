@@ -1,24 +1,28 @@
 """
 This module uses an api-based service to classify documents.
 """
-from easy_access.classification.classifier_models import Classification
-import os
-from easy_access.settings import SETTINGS, DirSetting
-from google import genai
-from easy_access.utils import  File, warn
+
 import asyncio
-import time
-from rich.console import Console
-import re
-from easy_access.classification.api_keys import gemini
-from aiometer import amap
-from functools import partial
-from easy_access.db.models import PDF, CopyrightItem
-from easy_access.db.ingest import load_llm_classifications
-from easy_access.db.base import init
-from easy_access.classification.pdf_handling import extract_pdf_text
-import pikepdf
 import io
+import os
+import re
+import time
+from functools import partial
+
+import pikepdf
+from aiometer import amap
+from google import genai
+from rich.console import Console
+
+from easy_access.classification.api_keys import gemini
+from easy_access.classification.classifier_models import Classification
+from easy_access.classification.pdf_handling import extract_pdf_text
+from easy_access.db.base import init
+from easy_access.db.ingest import load_llm_classifications
+from easy_access.db.models import PDF, CopyrightItem
+from easy_access.settings import SETTINGS, DirSetting
+from easy_access.utils import File, warn
+
 console = Console(emoji=True, markup=True)
 
 client = None
@@ -79,11 +83,15 @@ The requested output format is replicated here as a set of Python classes, inclu
         remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
 """
 
+
 def activate_client():
     global client
     client = genai.Client(api_key=gemini)
 
-async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classification|None]:
+
+async def classify_pdf(
+    pdf: PDF, full_pdf: bool = False
+) -> tuple[PDF, Classification | None]:
     async def send_pdf_to_gemini(pdf: PDF, max_pages: int = 20) -> io.BytesIO:
         """
         Sends the first 'max_pages' of a PDF file to the Gemini API.
@@ -110,6 +118,7 @@ async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classifica
         except Exception as e:
             print(f"Error processing PDF: {e}")
             return b""
+
     contents = None
     try:
         mat_id = pdf.material_id
@@ -117,47 +126,55 @@ async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classifica
             full_pdf = True
         if not full_pdf:
             if not pdf.extracted_text:
-                warn(f'pdf has no extracted text. Trying to extract.')
+                warn("pdf has no extracted text. Trying to extract.")
                 await extract_pdf_text(pdf)
                 pdf = await PDF.get(material_id=mat_id)
             if not pdf.extracted_text:
-                warn(f'pdf has no extracted text. Sending full pdf instead for {pdf.current_file_name}')
+                warn(
+                    f"pdf has no extracted text. Sending full pdf instead for {pdf.current_file_name}"
+                )
                 full_pdf = True
         if pdf.extracted_text and not full_pdf:
             pdf_text = pdf.extracted_text
-            if len(pdf_text)> 10_000:
+            if len(pdf_text) > 10_000:
                 pdf_text = pdf_text[:10_000]
-            contents = f"\n | text content of pdf file {pdf.current_file_name} is as follows: |\n".join([prompt,pdf_text])
+            if len(pdf_text) < 100:
+                warn(f"pdf text is too short for {pdf.current_file_name}")
+                return pdf, None
+            contents = f"\n | text content of pdf file {pdf.current_file_name} is as follows: |\n".join(
+                [prompt, pdf_text]
+            )
         if full_pdf:
-            print(f'Uploading {pdf.current_file_name} to gemini storage.')
+            print(f"Uploading {pdf.current_file_name} to gemini storage.")
             try:
                 # select only the first 20 pages
                 pdf_bytes = await send_pdf_to_gemini(pdf, max_pages=20)
                 if not pdf_bytes:
-                    warn(f'Could not send pdf to gemini storage.')
+                    warn("Could not send pdf to gemini storage.")
                     return pdf, None
 
                 pdf_file = client.files.upload(
                     file=io.BytesIO(pdf_bytes),
-                    config= {'mime_type': 'application/pdf',
-                            'name': str(mat_id)},
+                    config={"mime_type": "application/pdf", "name": str(mat_id)},
                 )
-                contents = [pdf_file,f"You received the pdf file {pdf.current_file_name}.\n"+prompt]
+                contents = [
+                    pdf_file,
+                    f"You received the pdf file {pdf.current_file_name}.\n" + prompt,
+                ]
             except Exception as e:
                 print(e)
                 return pdf, None
 
-
-        print(f'sent request for {mat_id}')
+        print(f"sent request for {mat_id}")
         if not mat_id:
-            print(f'Could not extract material id from {pdf.current_file_name}')
+            print(f"Could not extract material id from {pdf.current_file_name}")
             return pdf, None
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model="gemini-2.0-flash",
             contents=contents,
             config={
-                'response_mime_type': 'application/json',
-                'response_schema': Classification,
+                "response_mime_type": "application/json",
+                "response_schema": Classification,
             },
         )
         parsed = None
@@ -168,10 +185,10 @@ async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classifica
         if parsed:
             if isinstance(parsed, Classification):
                 parsed.pdf_name = pdf.current_file_name
-                print(f'returned response for {mat_id}')
+                print(f"returned response for {mat_id}")
                 return pdf, parsed
             else:
-                print(f'Error parsing response for {mat_id}')
+                print(f"Error parsing response for {mat_id}")
                 return pdf, None
         else:
             if response.candidates:
@@ -180,30 +197,31 @@ async def classify_pdf(pdf: PDF, full_pdf:bool = False) -> tuple[PDF, Classifica
                         reason = candidate.finish_reason.value
 
             if reason:
-                print(f'No result for {mat_id}, reason: {reason}')
+                print(f"No result for {mat_id}, reason: {reason}")
                 return pdf, None
             else:
-
-                print(f'No response for {mat_id},\n\n parsed: {parsed}.\n\n response:{response}')
+                print(
+                    f"No response for {mat_id},\n\n parsed: {parsed}.\n\n response:{response}"
+                )
                 return pdf, None
     except Exception as e:
-        print(f'Error while classifying {pdf.current_file_name}: {e}')
+        print(f"Error while classifying {pdf.current_file_name}: {e}")
         console.print(e)
         return
 
 
 def delete_files():
-    console.print('Deleting files from gemini storage.')
+    console.print("Deleting files from gemini storage.")
     for f in client.files.list():
         console.print("Deleting: ", f.name)
         client.files.delete(name=str(f.name))
 
+
 async def classify_items(files: list[PDF]) -> int:
     async with amap(
-        partial(classify_pdf,
-        full_pdf=False),
+        partial(classify_pdf, full_pdf=False),
         files,
-        max_at_once=5, # Limit maximum number of concurrently running tasks.
+        max_at_once=5,  # Limit maximum number of concurrently running tasks.
         max_per_second=1,  # Limit request rate to not overload the server.
     ) as classifications:
         async for details in classifications:
@@ -215,50 +233,85 @@ async def classify_items(files: list[PDF]) -> int:
                 continue
             console.print(classification)
             mat_id = pdf.material_id
-            json_name = f'{mat_id}.json'
-            console.print(f'Storing results as {json_name}')
-            if os.path.exists(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}'):
-                os.rename(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}',
-                          SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name.rstrip(".json")}_old.json')
+            json_name = f"{mat_id}.json"
+            console.print(f"Storing results as {json_name}")
+            if os.path.exists(
+                SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f"{json_name}"
+            ):
+                os.rename(
+                    SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f"{json_name}",
+                    SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full
+                    / f"{json_name.rstrip('.json')}_old.json",
+                )
 
             try:
-                with open(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f'{json_name}', 'w', encoding='utf-8') as f:
-                    f.write(classification.model_dump_json(indent=2, warnings='warn'))
+                with open(
+                    SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f"{json_name}",
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write(classification.model_dump_json(indent=2, warnings="warn"))
             except Exception as e:
-                console.print(f'Could not store {json_name}: {e}')
+                console.print(f"Could not store {json_name}: {e}")
                 continue
 
     return 1
-async def main():
-    PAGE_COUNT_REGEX = re.compile(
-        rb"/Type\s*/Page([^s]|$)",
-        re.MULTILINE|re.DOTALL
-    )
 
-    def get_page_count(file:File, regex=PAGE_COUNT_REGEX):
+
+async def main(subset: list[int] | list[str] | None = None):
+    PAGE_COUNT_REGEX = re.compile(rb"/Type\s*/Page([^s]|$)", re.MULTILINE | re.DOTALL)
+
+    def get_page_count(file: File, regex=PAGE_COUNT_REGEX):
         """Count number of pages in a pdf"""
         with open(file.path, "rb") as f:
             return len(regex.findall(f.read()))
+
     await init()
     activate_client()
-    all_copyright_items = await CopyrightItem.all().prefetch_related('llm_classification').values('material_id', 'llm_classification_id')
-    items_without_classifications = [item['material_id'] for item in all_copyright_items if not item['llm_classification_id']]
-    pdfs = await PDF.filter(material_id__in=items_without_classifications).all()
-    console.print(f'{len(pdfs)} files found requiring classification.')
+    if not subset:
+        all_copyright_items = (
+            await CopyrightItem.all()
+            .prefetch_related("llm_classification")
+            .values("material_id", "llm_classification_id")
+        )
+        items_without_classifications = [
+            item["material_id"]
+            for item in all_copyright_items
+            if not item["llm_classification_id"]
+        ]
+        pdfs = await PDF.filter(material_id__in=items_without_classifications).all()
+    else:
+        subset = [int(item) for item in subset]
+        selected_items = (
+            await CopyrightItem()
+            .filter(material_id__in=subset)
+            .prefetch_related("llm_classification")
+            .values("material_id", "llm_classification_id")
+        )
+        items_without_classifications = [
+            item["material_id"]
+            for item in selected_items
+            if not item["llm_classification_id"]
+        ]
+        pdfs = await PDF.filter(material_id__in=items_without_classifications).all()
+
+    console.print(f"{len(pdfs)} files found requiring classification.")
 
     pdf_batch = []
     batch_start_time = time.time()
 
     for pdf in pdfs:
         pdf_batch.append(pdf)
-        if len(pdf_batch) == 10: # rate limit to 10 requests per minute
-            print('awaiting results for a batch of 10 files...')
+        if len(pdf_batch) == 10:  # rate limit to 10 requests per minute
+            print("awaiting results for a batch of 10 files...")
             result = await classify_items(pdf_batch)
             while result != 1:
                 pass
-            if time.time()-batch_start_time < 120:
-                console.print(f'Sleeping for {120-(time.time()-batch_start_time)} seconds to avoid rate limit.')
-                await asyncio.sleep(120-(time.time()-batch_start_time))
+            if time.time() - batch_start_time < 120:
+                console.print(
+                    f"Sleeping for {120 - (time.time() - batch_start_time)} seconds to avoid rate limit."
+                )
+                await asyncio.sleep(120 - (time.time() - batch_start_time))
             delete_files()
             pdf_batch = []
             batch_start_time = time.time()

@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import Levenshtein
@@ -110,26 +110,47 @@ class Downloader:
                 warn(f"Could not extract material_id from {pdf}?")
         return material_ids_downloaded
 
-    async def get_urls_from_full_data(self) -> pl.DataFrame:
+    async def get_urls_from_full_data(
+        self, subset: list[str] | list[int]
+    ) -> pl.DataFrame:
         """
         From all CopyrightItems in the db, grab "material_id", "url", "workflow_status", "filename", and "status" for all non-deleted items.
         Returns a dataframe with those columns.
         """
+        if subset:
+            subset = [int(x) for x in subset]
         full_item_len = await CopyrightItem.all().count()
-        all_items = (
-            await CopyrightItem.filter(url__isnull=False)
-            .filter(url__not_in=["", "-"])
-            .filter(
-                status__in=[
-                    Status.PUBLISHED,
-                    Status.UNPUBLISHED,
-                    Status.PUBLISHED.value,
-                    Status.UNPUBLISHED.value,
-                ]
+        if not subset:
+            all_items = (
+                await CopyrightItem.filter(url__isnull=False)
+                .filter(url__not_in=["", "-"])
+                .filter(
+                    status__in=[
+                        Status.PUBLISHED,
+                        Status.UNPUBLISHED,
+                        Status.PUBLISHED.value,
+                        Status.UNPUBLISHED.value,
+                    ]
+                )
+                .all()
+                .values("material_id", "url", "workflow_status", "filename", "status")
             )
-            .all()
-            .values("material_id", "url", "workflow_status", "filename", "status")
-        )
+        else:
+            all_items = (
+                await CopyrightItem.filter(url__isnull=False)
+                .filter(url__not_in=["", "-"])
+                .filter(
+                    status__in=[
+                        Status.PUBLISHED,
+                        Status.UNPUBLISHED,
+                        Status.PUBLISHED.value,
+                        Status.UNPUBLISHED.value,
+                    ]
+                )
+                .filter(material_id__in=subset)
+                .all()
+                .values("material_id", "url", "workflow_status", "filename", "status")
+            )
         all_item_len = len(all_items)
         info(
             f"Loaded {all_item_len} items of {full_item_len} total amount of items in db. Filtered out url-less items and DELETED items."
@@ -213,17 +234,24 @@ class Downloader:
                 deleted += 1
         if deleted:
             info(f"Deleted {deleted} incorrectly named pdf files.")
-        urls: pl.DataFrame = await self.get_urls_from_full_data()
-        if subset:
-            urls = urls.filter(urls["material_id"].is_in(subset))
+
+        urls: pl.DataFrame = await self.get_urls_from_full_data(subset)
         if urls.is_empty():
             warn("No urls to download.")
             return True
-        await self.download(urls=urls, max_amount=max_amount)
+        skiplist = await self.download(urls=urls, max_amount=max_amount)
+        # if items were skipped, keep retrying until done
+        while skiplist:
+            skiplist = await self.download(urls=None, skiplist=skiplist)
         await load_pdfs()
         return True
 
-    async def download(self, urls: pl.DataFrame, max_amount: int = None) -> bool:
+    async def download(
+        self,
+        urls: pl.DataFrame | None,
+        max_amount: int = None,
+        skiplist: list[dict] = list(),
+    ) -> bool:
         """
         Downloads PDFs based on the URLs fetched from the database, potentially filtered by a subset of material IDs.
         If max_amount is set, only that amount of items are downloaded.
@@ -255,7 +283,7 @@ class Downloader:
             selected_files: dict[str, File] = {
                 file.name: file
                 for file in self.download_dir.files
-                if file.created > first_datetime
+                if file.created > first_datetime - timedelta(minutes=5)
             }
 
             all_files = [
@@ -304,9 +332,6 @@ class Downloader:
                         file = selected_files.get(closest_match)
                 if file:
                     try:
-                        info(
-                            f"Renaming {file.name} to with {result['material_id']=}, {result['filename']=}, {result['created']=}"
-                        )
                         file.rename(
                             f"{result['material_id']}_{result['filename']}_{result['created'].strftime('%Y-%m-%d_%H-%M-%S')}.pdf"
                         )
@@ -321,34 +346,54 @@ class Downloader:
                     warn(
                         f"Number of skipped files does not match number of missing files. Please check: {skipped=}, {missing=}"
                     )
+            cool("Done with renaming! Resuming downloads...")
 
         self.setup_selenium()
-        info(f"Downloading {len(urls)} files")
-        urls: list[dict] = urls.to_dicts()
-
+        if not skiplist:
+            info(f"Downloading {len(urls)} files")
+            urls: list[dict] = urls.to_dicts()
+        if skiplist:
+            info(f"Retrying {len(skiplist)} skipped items.")
+            urls = skiplist
         start_time = time.time()
         batch_start_time = time.time()
-        step_len = min(len(urls) // 20, 20)
+        step_len = max(min(len(urls) // 20, 20), 10)
         results = []
         first_datetime = None
         no_url = 0
         deleted_items = []
         total = 0
+        skiplist = []
         if len(urls) < 20:
             print("Downloading these urls: ")
             for url in urls:
                 print("    ", str(url))
         try:
             for index, item in enumerate(urls, start=1):
+                if max_amount and index >= max_amount:
+                    print("\n")
+                    info(
+                        f"{len(results)} files downloaded in {time.time() - batch_start_time:.2f} seconds. Max amount of downloads reached, stopping."
+                    )
+                    break
+                if len(results) >= step_len:
+                    print("\n")
+                    info(
+                        f"{len(results)} files downloaded in {time.time() - batch_start_time:.2f} seconds"
+                    )
+                    if results:
+                        await process_results(results, first_datetime, batch_start_time)
+                    first_datetime = None
+                    results = []
+                    batch_start_time = time.time()
+
                 try:
-                    x = 0
                     if not item.get("url"):
                         no_url += 1
                         continue
                     while item["filename"] in self.download_dir.files:
-                        x += 1
-                        item["filename"] = item["filename"] + f"_{x}"
-
+                        skiplist.append(item)
+                        continue
                     succes, item["created"] = await self.download_file(item.get("url"))
                     if not succes:
                         deleted_items.append(item)
@@ -363,24 +408,6 @@ class Downloader:
                         items_per_sec = index / (time.time() - start_time)
                     if items_per_sec > 1:
                         time.sleep(5)
-                    if max_amount and index >= max_amount:
-                        print("\n")
-                        info(
-                            f"[{len(results)}] files downloaded in {time.time() - start_time:.2f} seconds. Max amount of downloads reached, stopping."
-                        )
-                        break
-                    if index % step_len == 0:
-                        print("\n")
-                        info(
-                            f"[{len(results)}] files downloaded in {time.time() - start_time:.2f} seconds"
-                        )
-                        if results:
-                            await process_results(
-                                results, first_datetime, batch_start_time
-                            )
-                        first_datetime = None
-                        results = []
-                        batch_start_time = time.time()
                 except Exception as e:
                     warn(f"Error downloading file: {e}")
                     continue
@@ -401,12 +428,16 @@ class Downloader:
         for file in self.download_dir.files:
             if not str(file.name.split("_")[0]).isdigit():
                 file.delete()
+            elif len(str(file.name.split("_")[0])) != 8:
+                file.delete()
         cool("Done resetting chrome & removing misnamed pdfs!")
 
         if deleted_items:
             info(f"Now processing {len(deleted_items)} deleted items.")
             await self.handle_deleted_items(deleted_items)
-        return True
+        if skiplist:
+            info(f"{len(skiplist)} items were skipped, retrying...")
+        return skiplist
 
     async def download_file(self, url: str) -> tuple[bool, datetime]:
         """

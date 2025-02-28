@@ -61,9 +61,11 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     return df
 
 
-def init_engine() -> None:
+def init_engine(path: str | None) -> None:
     global engine
-    engine = create_engine("sqlite:///db.sqlite3")
+    if not path:
+        path = "db.sqlite3"
+    engine = create_engine(f"sqlite:///{str(path)}")
 
 
 def get_valid_faculties() -> set[str]:
