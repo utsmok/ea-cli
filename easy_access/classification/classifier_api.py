@@ -300,14 +300,14 @@ async def main(subset: list[int] | list[str] | None = None):
 
     pdf_batch = []
     batch_start_time = time.time()
-
+    total = 0
     for pdf in pdfs:
         pdf_batch.append(pdf)
+        total += 1
         if len(pdf_batch) == 10:  # rate limit to 10 requests per minute
             print("awaiting results for a batch of 10 files...")
-            result = await classify_items(pdf_batch)
-            while result != 1:
-                pass
+            await classify_items(pdf_batch)
+            print(f"\n           Processed {total}/{len(pdfs)} files.\n\n")
             if time.time() - batch_start_time < 120:
                 console.print(
                     f"Sleeping for {120 - (time.time() - batch_start_time)} seconds to avoid rate limit."
@@ -317,5 +317,4 @@ async def main(subset: list[int] | list[str] | None = None):
             pdf_batch = []
             batch_start_time = time.time()
 
-    result = await classify_items(pdf_batch)
     await load_llm_classifications()
