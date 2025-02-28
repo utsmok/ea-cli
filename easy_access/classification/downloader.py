@@ -370,28 +370,30 @@ class Downloader:
                 print("    ", str(url))
         try:
             for index, item in enumerate(urls, start=1):
-                if max_amount and index >= max_amount:
-                    print("\n")
-                    info(
-                        f"{len(results)} files downloaded in {time.time() - batch_start_time:.2f} seconds. Max amount of downloads reached, stopping."
-                    )
-                    break
-                if len(results) >= step_len:
-                    print("\n")
-                    info(
-                        f"{len(results)} files downloaded in {time.time() - batch_start_time:.2f} seconds"
-                    )
-                    if results:
-                        await process_results(results, first_datetime, batch_start_time)
-                    first_datetime = None
-                    results = []
-                    batch_start_time = time.time()
-
                 try:
+                    if max_amount and index >= max_amount:
+                        print("\n")
+                        info(
+                            f"{len(results)} files downloaded in {time.time() - batch_start_time:.2f} seconds. Max amount of downloads reached, stopping."
+                        )
+                        break
+                    if len(results) >= step_len:
+                        print("\n")
+                        info(
+                            f"{len(results)} files downloaded in {time.time() - batch_start_time:.2f} seconds"
+                        )
+                        if results:
+                            await process_results(
+                                results, first_datetime, batch_start_time
+                            )
+                        first_datetime = None
+                        results = []
+                        batch_start_time = time.time()
+
                     if not item.get("url"):
                         no_url += 1
                         continue
-                    while item["filename"] in self.download_dir.files:
+                    if item["filename"] in self.download_dir.files:
                         skiplist.append(item)
                         continue
                     succes, item["created"] = await self.download_file(item.get("url"))
@@ -460,15 +462,20 @@ class Downloader:
         result_done = self.driver.get(download_url)
         # check if "Page Not Found" and/or "This file has been deleted" is on page
 
-        try:
-            if (
-                "Page Not Found" in self.driver.page_source
-                and "This file has been deleted" in self.driver.page_source
-            ):
-                info(f"[by source] File {material_id} has been deleted from canvas.")
-                return False, now
-        except Exception as e:
-            warn(f"Error while checking if file {material_id} has been deleted: {e}")
+        if False:
+            try:
+                if (
+                    "Page Not Found" in self.driver.page_source
+                    and "This file has been deleted" in self.driver.page_source
+                ):
+                    info(
+                        f"[by source] File {material_id} has been deleted from canvas."
+                    )
+                    return False, now
+            except Exception as e:
+                warn(
+                    f"Error while checking if file {material_id} has been deleted: {e}"
+                )
         # alternative option, disabled for now
         if False:
             try:

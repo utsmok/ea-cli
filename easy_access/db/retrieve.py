@@ -100,7 +100,6 @@ def retrieve_full_data(
     faculty_where_clause = ""
     material_exclusion_clause = ""
     with engine.connect() as conn:
-        # print all table names
         if selected_material_ids is not None:
             if not selected_material_ids:
                 warn(

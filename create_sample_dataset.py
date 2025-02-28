@@ -112,19 +112,6 @@ def cli(
 ) -> None:
     """cli to create sample datasets from easy access data."""
 
-    warn(
-        'This script will use settings found in "sample.yaml" to create the sample dataset.'
-    )
-    warn(
-        'For settings not found in "sample.yaml", the default settings from "settings.yaml" will be used.'
-    )
-    key = input(
-        "Verify that all settings are correct.\n   [q] abort, [any key] continue   > "
-    )
-    if key.lower() == "q":
-        cool("Stopping script!")
-        raise typer.Exit(1)
-
     if False:
         base_settings = SETTINGS
         sample_settings = SAMPLESETTINGS
@@ -196,12 +183,6 @@ def cli(
 
         # Retrieve data
 
-        # define filters
-        # format: colname : filter option
-        # if colname is 'not_' + val, use exclude/not operator
-        # if val is list of len > 1, use 'in' operator
-        # if val is list of len == 1, use '==' operator
-        # if val is str, parse as an option (e.g. 'distinct' -> only unique values)
         filters = {
             "faculty": ["BMS", "EEMCS", "ET", "ITC", "TNW"],
             "not_classification": ["lange overname"],
@@ -218,6 +199,10 @@ def cli(
         AND status NOT IN ('Deleted')
         GROUP BY filename
         """
+
+        # GROUP BY replacement_id to make sure we only get one record per batch of duplicates
+        # GROUP BY filename is an extra check to help prevent duplicates before comparing pdfs and such
+
         # Execute with parameters
         with engine.connect() as conn:
             df = pl.read_database(
@@ -240,8 +225,8 @@ def cli(
             df = df.drop("created_at")
         if "modified_at" in df.columns:
             df = df.drop("modified_at")
-        num_per_faculty = 100
-        num_per_course = 5
+        num_per_faculty = 150
+        num_per_course = 10
         faculties = ["BMS", "EEMCS", "ET", "ITC", "TNW"]
         classifications = df.select("classification").unique().to_series().to_list()
         num_per_classification = num_per_faculty // len(classifications)
@@ -327,11 +312,13 @@ def cli(
             # Distribute last_change dates evenly
 
             info(f"[{faculty}] final set: {len(faculty_result)} records")
-            final_selection.append(faculty_result)
+            final_selection.append(
+                faculty_result.with_columns(pl.exclude(pl.String).cast(str))
+            )
 
         # for each df in final_selection, cast all cols to str
         for i, df in enumerate(final_selection):
-            final_selection[i] = df.with_columns(pl.exclude(pl.String).cast(str))
+            final_selection[i] = df
 
         final_df: pl.DataFrame = pl.concat(final_selection)
         final_df.write_excel("sample_dataset.xlsx")
@@ -360,27 +347,35 @@ def cli(
     info(f"{len(material_ids_missing_classification)} material_ids needing enrichment.")
     info("Downloading PDFs for selected material_ids.")
     downloader = Downloader()
-    asyncio.get_event_loop().run_until_complete(
-        downloader.download_pdfs(material_ids_missing_classification)
-    )
-
-    info("Enriching PDFs for selected material_ids.")
-    asyncio.get_event_loop().run_until_complete(
-        enrich_pdfs(
-            input_mat_ids=material_ids_missing_classification,
-            max_pages=5,
-            str_limit=5000,
+    try:
+        asyncio.get_event_loop().run_until_complete(
+            downloader.download_pdfs(material_ids_missing_classification)
         )
-    )
+    except Exception as e:
+        warn(f"Error downloading PDFs: {e}")
 
-    info("Classifying PDFs")
-    asyncio.get_event_loop().run_until_complete(
-        main(material_ids_missing_classification[:1])
-    )
+    try:
+        info("Enriching PDFs for selected material_ids.")
+        asyncio.get_event_loop().run_until_complete(
+            enrich_pdfs(
+                input_mat_ids=material_ids_missing_classification,
+                max_pages=5,
+                str_limit=5000,
+            )
+        )
+    except Exception as e:
+        warn(f"Error enriching PDFs: {e}")
+    try:
+        info("Classifying PDFs")
+        asyncio.get_event_loop().run_until_complete(
+            main(material_ids_missing_classification)
+        )
+    except Exception as e:
+        warn(f"Error classifying PDFs: {e}")
 
     # now that all is processed, retrieve the detailed data from the db for the selected material_ids
     info(
-        "Done with enrichment. Now retrieving detailed data for all selected material_ids and writing to excel."
+        "Done with enrichment. Now:\n -> updating all relations\n -> retrieving detailed data for all selected material_ids\n -> writing to excel."
     )
     asyncio.get_event_loop().run_until_complete(update_copyright_relations())
     data: pl.DataFrame = retrieve_full_data(selected_material_ids)
