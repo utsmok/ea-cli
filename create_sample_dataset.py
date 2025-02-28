@@ -166,6 +166,8 @@ def cli(
     db_path = Path("sample_db.sqlite3")
     set_db_path(db_path)
     asyncio.get_event_loop().run_until_complete(init())
+    append = False
+    create = True
 
     try:
         final_df = pl.read_excel(
@@ -176,7 +178,6 @@ def cli(
     except FileNotFoundError:
         cool("Creating sample dataset.")
         create = True
-
     if not create:
         info(f"Loaded existing sample dataset with {len(final_df)} records.")
         # drop duplicate rows based on material_id
@@ -388,7 +389,7 @@ def cli(
         final_df.select("material_id").cast(pl.Int32).to_series().to_list()
     )
 
-    selected_material_ids = [int(x) for x in selected_material_ids]
+    selected_material_ids = list({int(x) for x in selected_material_ids})
     info(f"Selected {len(selected_material_ids)} material_ids for the dataset.")
     # retrieve the full data and see which items need additional enrichment
     data: pl.DataFrame = retrieve_full_data(selected_material_ids)
