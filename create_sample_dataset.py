@@ -177,20 +177,22 @@ def cli(
         cool("Creating sample dataset.")
         create = True
 
-    if create:
-        # create the sample dataset
-        # - Retrieve specific selection of data from db
+    if not create:
+        info(f"Loaded existing sample dataset with {len(final_df)} records.")
+        # drop duplicate rows based on material_id
+        final_df = final_df.unique("material_id")
+        info(f"After dropping duplicates: {len(final_df)} records.")
+        # drop rows without llm_classification_id
+        # final_df = final_df.filter(pl.col("llm_classification_id").is_not_null())
 
-        # Retrieve data
+        if len(final_df) < 500:
+            append = True
+            info(f"Only {len(final_df)} records found. Will append to the dataset.")
 
-        filters = {
-            "faculty": ["BMS", "EEMCS", "ET", "ITC", "TNW"],
-            "not_classification": ["lange overname"],
-            "filetype": ["pdf"],
-            "not_status": ["Deleted"],
-            "filename": "distinct",
-        }
-
+    input("Press any key to continue...")
+    if create or append:
+        # retrieve filtered data from the database for a new list of items
+        # or append to the existing dataset
         query = """
         SELECT * FROM copyright_data
         WHERE faculty_id IN ('BMS', 'EEMCS', 'ET', 'ITC', 'TNW')
@@ -199,10 +201,6 @@ def cli(
         AND status NOT IN ('Deleted')
         GROUP BY filename
         """
-
-        # GROUP BY replacement_id to make sure we only get one record per batch of duplicates
-        # GROUP BY filename is an extra check to help prevent duplicates before comparing pdfs and such
-
         # Execute with parameters
         with engine.connect() as conn:
             df = pl.read_database(
@@ -220,11 +218,54 @@ def cli(
 
         if "faculty_id" in df.columns:
             df = df.rename({"faculty_id": "faculty"})
-
         if "created_at" in df.columns:
             df = df.drop("created_at")
         if "modified_at" in df.columns:
             df = df.drop("modified_at")
+
+        df = df.unique("material_id")
+        df = df.unique("filename")
+        df = df.filter(pl.col("is_duplicate") == 0)
+        info(
+            f"{len(df)} records remaining after filtering out duplicate material_ids, filenames, and is_duplictate"
+        )
+        if append:
+            # remove mat_ids already in the dataset
+            existing_mat_ids = final_df.select("material_id").to_series().to_list()
+            existing_mat_ids = {int(x) for x in existing_mat_ids}
+            df = df.filter(~pl.col("material_id").is_in(existing_mat_ids))
+            info(
+                f"{len(df)} records remaining after filtering out material_ids already in the dataset"
+            )
+            for col in [
+                "llm_allowed_usage",
+                "llm_allowed_usage_reason",
+                "llm_copyright",
+                "llm_copyright_reason",
+                "llm_item_type",
+                "llm_remarks",
+                "llm_title",
+                "llm_copyright_holder",
+                "llm_publisher",
+                "llm_isbn",
+                "llm_doi",
+                "llm_source_url",
+                "llm_license",
+                "llm_authors",
+                "cursuscodes",
+                "programmes",
+                "course_names",
+                "course_contacts_names",
+                "course_contacts_emails",
+                "course_contacts_faculties",
+                "course_contacts_organizations",
+            ]:
+                if col in df.columns:
+                    final_df = final_df.drop(col)
+
+        else:
+            existing_mat_ids = set()
+
         num_per_faculty = 150
         num_per_course = 10
         faculties = ["BMS", "EEMCS", "ET", "ITC", "TNW"]
@@ -237,6 +278,7 @@ def cli(
 
         # Process each faculty separately
         final_selection: list[pl.DataFrame] = []
+        per_course = defaultdict(int)
 
         for faculty in faculties:
             info(f"Processing faculty: {faculty}")
@@ -249,10 +291,21 @@ def cli(
                 continue
 
             faculty_selection = []
-            per_course = defaultdict(int)
             per_classification = defaultdict(int)
-            # Ensure we have at least 10 records for each classification
-            amount_of_courses = df.select("course_code").unique().shape[0]
+
+            if append:
+                faculty_selection = final_df.filter(
+                    pl.col("faculty") == faculty
+                ).to_dicts()
+                for row in faculty_selection:
+                    code = row["course_code"]
+                    if isinstance(code, list):
+                        code = code[0]
+                    classification = row["classification"]
+                    if isinstance(classification, list):
+                        classification = classification[0]
+                    per_course[code] += 1
+                    per_classification[classification] += 1
 
             for classification in classifications:
                 class_df = faculty_df.filter(pl.col("classification") == classification)
@@ -276,11 +329,16 @@ def cli(
                         )
                         selection = (
                             class_df.filter(pl.col("course_name") == name)
-                            .limit(limit)
+                            .filter(~pl.col("material_id").is_in(existing_mat_ids))
                             .to_dicts()
                         )
+                        if len(selection) > limit:
+                            selection = selection[:limit]
                         per_course[code] += len(selection)
                         per_classification[classification] += len(selection)
+                        existing_mat_ids.update(
+                            [int(x["material_id"]) for x in selection]
+                        )
                         faculty_selection.extend(selection)
 
             info(
@@ -322,7 +380,9 @@ def cli(
 
         final_df: pl.DataFrame = pl.concat(final_selection)
         final_df.write_excel("sample_dataset.xlsx")
-        cool('Wrote base sample dataset to "sample_dataset.xlsx"')
+        cool(
+            f'Wrote base sample dataset with {len(final_selection)} to "sample_dataset.xlsx"'
+        )
 
     selected_material_ids = (
         final_df.select("material_id").cast(pl.Int32).to_series().to_list()

@@ -140,10 +140,11 @@ async def classify_pdf(
                 pdf_text = pdf_text[:10_000]
             if len(pdf_text) < 100:
                 warn(f"pdf text is too short for {pdf.current_file_name}")
-                return pdf, None
-            contents = f"\n | text content of pdf file {pdf.current_file_name} is as follows: |\n".join(
-                [prompt, pdf_text]
-            )
+                full_pdf = True
+            if not full_pdf:
+                contents = f"\n | text content of pdf file {pdf.current_file_name} is as follows: |\n".join(
+                    [prompt, pdf_text]
+                )
         if full_pdf:
             print(f"Uploading {pdf.current_file_name} to gemini storage.")
             try:
