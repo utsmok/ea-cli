@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pikepdf
 from fastembed import TextEmbedding
+from kreuzberg import batch_extract_file
 from pdfminer.high_level import extract_text
 from pydantic import BaseModel
 from qdrant_client import QdrantClient, models
@@ -34,6 +35,58 @@ class TimeoutException(Exception):  # Custom exception class
 
 def timeout_handler(signum, frame):  # Custom signal handler
     raise TimeoutException
+
+
+async def batch_extract_pdf_text(
+    pdfs: list[PDF], max_pages: int | None = None, str_limit: int | None = None
+) -> list[PDF]:
+    # Extract from multiple files
+    pdfs = [p for p in pdfs if p.path.exists() and not p.extracted_text]
+    file_paths = [pdf.path for pdf in pdfs]
+    results = await batch_extract_file(file_paths)
+    for pdf, result in zip(pdfs, results):
+        content = result.content
+        metadata = result.metadata
+
+        if content:
+            if len(content) > str_limit:
+                content = content[:str_limit]
+            pdf.extracted_text = content
+            pdf.extracted_text_max_length = str_limit
+
+        if metadata:
+            title = metadata.get("title")
+            if metadata.get("subtitle"):
+                title += " - " + metadata.get("subtitle")
+
+            author = metadata.get("authors")
+            if isinstance(author, list):
+                author = ", ".join(author)
+            subject = metadata.get("subject")
+            creator = metadata.get("creator")
+            producer = metadata.get("/Producer") if metadata.get("/Producer") else None
+
+            metadata = {
+                "title": str(title) if title else None,
+                "author": str(author) if author else None,
+                "subject": str(subject) if subject else None,
+                "creator": str(creator) if creator else None,
+                "producer": str(producer) if producer else None,
+            }
+            pdf = pdf.update_from_dict(metadata)
+
+    await PDF.bulk_update(
+        pdfs,
+        fields=[
+            "extracted_text",
+            "extracted_text_max_length",
+            "title",
+            "author",
+            "subject",
+            "creator",
+            "producer",
+        ],
+    )
 
 
 async def extract_pdf_text(
@@ -231,6 +284,29 @@ async def enrich_pdfs(
             pdfs = await PDF.all()
             input_mat_ids = [pdf.material_id for pdf in pdfs]
 
+    if input_mat_ids:
+        pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
+    else:
+        pdfs = await PDF.all()
+
+    pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
+    info(
+        f"Found {len(pdfs_missing_text)} pdfs without extracted text. First trying batch extract with kreuzberg"
+    )
+
+    await batch_extract_pdf_text(
+        pdfs_missing_text, max_pages=max_pages, str_limit=str_limit
+    )
+    pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
+    info(
+        f"Still have {len(pdfs_missing_text)} pdfs without extracted text. Trying one by one using pdfminer."
+    )
+
+    pdfs_with_text = [
+        await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
+        for pdf in pdfs_missing_text
+    ]
+
     pdfs_missing_metadata = [
         pdf
         for pdf in pdfs
@@ -251,18 +327,6 @@ async def enrich_pdfs(
     ]
     info(f"Found {len(pdfs_missing_metadata)} pdfs without metadata.")
     pdfs_with_metadata = [await extract_metadata(pdf) for pdf in pdfs_missing_metadata]
-
-    if input_mat_ids:
-        pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
-    else:
-        pdfs = await PDF.all()
-
-    pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
-    info(f"Found {len(pdfs_missing_text)} pdfs without extracted text.")
-    pdfs_with_text = [
-        await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
-        for pdf in pdfs_missing_text
-    ]
 
     if input_mat_ids:
         pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
