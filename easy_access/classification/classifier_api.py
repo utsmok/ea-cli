@@ -310,9 +310,9 @@ async def main(subset: list[int] | list[str] | None = None):
             print(f"\n           Processed {total}/{len(pdfs)} files.\n\n")
             if time.time() - batch_start_time < 120:
                 console.print(
-                    f"Sleeping for {120 - (time.time() - batch_start_time)} seconds to avoid rate limit."
+                    f"Sleeping for {60 - (time.time() - batch_start_time)} seconds to avoid rate limit."
                 )
-                await asyncio.sleep(120 - (time.time() - batch_start_time))
+                await asyncio.sleep(60 - (time.time() - batch_start_time))
             delete_files()
             pdf_batch = []
             batch_start_time = time.time()

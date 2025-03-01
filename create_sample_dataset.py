@@ -440,6 +440,8 @@ def cli(
     )
     asyncio.get_event_loop().run_until_complete(update_copyright_relations())
     data: pl.DataFrame = retrieve_full_data(selected_material_ids)
+    if Path("sample_dataset_full.xlsx").exists():
+        Path("sample_dataset_full.xlsx").unlink()
     data.write_excel("sample_dataset_full.xlsx")
     cool("All done!")
 
