@@ -293,19 +293,24 @@ async def enrich_pdfs(
     info(
         f"Found {len(pdfs_missing_text)} pdfs without extracted text. First trying batch extract with kreuzberg"
     )
+    try:
+        await batch_extract_pdf_text(
+            pdfs_missing_text, max_pages=max_pages, str_limit=str_limit
+        )
+    except Exception as e:
+        warn(f"Error batch extracting text from pdfs: {e}")
 
-    await batch_extract_pdf_text(
-        pdfs_missing_text, max_pages=max_pages, str_limit=str_limit
-    )
     pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
     info(
         f"Still have {len(pdfs_missing_text)} pdfs without extracted text. Trying one by one using pdfminer."
     )
-
-    pdfs_with_text = [
-        await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
-        for pdf in pdfs_missing_text
-    ]
+    try:
+        pdfs_with_text = [
+            await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
+            for pdf in pdfs_missing_text
+        ]
+    except Exception as e:
+        warn(f"Error extracting text from pdfs one-by-one: {e}")
 
     pdfs_missing_metadata = [
         pdf
