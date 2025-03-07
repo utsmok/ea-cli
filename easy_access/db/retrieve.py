@@ -61,7 +61,7 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     return df
 
 
-def init_engine(path: str | None) -> None:
+def init_engine(path: str | None=None) -> None:
     global engine
     if not path:
         path = "db.sqlite3"

@@ -108,6 +108,7 @@ class Downloader:
                 material_ids_downloaded.append(pdf.split("_")[0])
             else:
                 warn(f"Could not extract material_id from {pdf}?")
+        info(f'Found {len(material_ids_downloaded)} material_ids in download dir.')
         return material_ids_downloaded
 
     async def get_urls_from_full_data(
@@ -161,6 +162,10 @@ class Downloader:
         material_ids_downloaded = [
             int(x) for x in self.get_already_downloaded_material_ids()
         ]
+        # cast col 'material_id' to int
+        all_items = all_items.with_columns(
+            pl.col("material_id").cast(pl.Int32)
+        )
         amount_downloaded = len(
             all_items.filter(all_items["material_id"].is_in(material_ids_downloaded))
         )

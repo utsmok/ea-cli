@@ -21,7 +21,7 @@ backup:
   backup_dirs:
     - faculties_dir
   # maximum number of backups to keep (int)
-  max_backups: 3
+  max_backups: 40
   # backup overview files (move them to overview_backup instead of deleting)? (bool)
   # note that this settings is separate from backup_all!
   backup_overviews: true

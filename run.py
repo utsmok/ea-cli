@@ -26,6 +26,7 @@
 #     "qdrant_client",
 #     "fastembed",
 #     "xxhash",
+#     "kreuzberg",
 # ]
 # ///
 
