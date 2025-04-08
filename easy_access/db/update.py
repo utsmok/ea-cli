@@ -133,7 +133,9 @@ async def update_copyright_relations() -> None:
     await Tortoise.close_connections()
 
 
-async def update_copyright_items(data: pl.DataFrame | list[dict]) -> None:
+async def update_copyright_items(
+    data: pl.DataFrame | list[dict], update_relations: bool = True
+) -> None:
     """
     Update the db with copyrightitems from the dataframe (or pre-filtered list of dicts from a df).
     Adds new if they don't exist, or updates if they do.
@@ -448,7 +450,7 @@ async def update_copyright_items(data: pl.DataFrame | list[dict]) -> None:
             )
             await item.changes.add(update)
 
-    if changelist or new_objects:
+    if (changelist or new_objects) and update_relations:
         cool("Updating relations for all CopyrightItems.")
         await update_copyright_relations()
 

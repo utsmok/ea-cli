@@ -15,7 +15,6 @@ def create_programme_overviews(
     all_faculty_data: pl.DataFrame,
     faculty: str,
     style_iter: int,
-    dupe_info: pl.DataFrame | None = None,
 ):
     """
     create an overview sheet for each programme of the given faculty, using the data in df.
