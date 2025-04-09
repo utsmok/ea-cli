@@ -67,17 +67,17 @@ MANUAL_CLASSIFICATION_CHOICES = [
 COLUMNS_TO_DISPLAY = [
     "material_id",
     "url",
+    "workflow_status",
+    "manual_classification",
+    "remarks",
+    "ml_prediction",
     "filename",
     "title",
     "owner",
-    "ml_prediction",
     "author",
     "publisher",
     "doi",
     "isbn",
-    "workflow_status",
-    "manual_classification",
-    "remarks",
     "faculty",
 ]
 
@@ -165,120 +165,172 @@ if "selected_material_id" not in st.session_state:
     st.session_state.selected_material_id = None
 if "edit_form_key" not in st.session_state:
     st.session_state.edit_form_key = 0
-
-for faculty in FACULTIES:
-    prefix = f"{faculty}_"
-    if f"{prefix}page" not in st.session_state:
-        st.session_state[f"{prefix}page"] = 1
-    if f"{prefix}filters" not in st.session_state:
-        st.session_state[f"{prefix}filters"] = {
-            "workflow_status": [],
-            "manual_classification": [],
-        }
-    if f"{prefix}sort_by" not in st.session_state:
-        st.session_state[f"{prefix}sort_by"] = "material_id"
-    if f"{prefix}sort_ascending" not in st.session_state:
-        st.session_state[f"{prefix}sort_ascending"] = True
-    if "selected_item" not in st.session_state:
-        st.session_state["selected_item"] = {}
+if "selected_item" not in st.session_state:
+    st.session_state["selected_item"] = {}
 
 
 full_data: dict[str, pd.DataFrame] = {}
 
 
-st.title("Material Classification Workflow")
-
-st.header("Edit Material")
-
-with st.form(key=f"edit_form_{st.session_state.edit_form_key}"):
-    wf_status = None
-    material_id = None
-    manual_class = None
-
-    if st.session_state["selected_item"]:
-        item = st.session_state["selected_item"]
-        print(item)
-        material_id = item.get("material_id")
-        wf_status = item.get("workflow_status")
-        manual_class = item.get("manual_classification")
-
-        material_id = st.write(
-            "Selected material_id:",
-            material_id,
-        )
+@st.fragment
+def create_form():
+    item = st.session_state.get("selected_item")
+    print(item)
+    if not isinstance(item, dict) or not item:
+        st.info("Select a row in the table to edit.")
     else:
-        st.info("Select a row in the table below to edit.")
-    print(wf_status, manual_class)
-    print(WORKFLOW_STATUS_CHOICES.index(wf_status) if wf_status else 0)
-    print(MANUAL_CLASSIFICATION_CHOICES.index(manual_class) if manual_class else 0)
-    wf_status = st.selectbox(
-        "Workflow Status",
-        options=WORKFLOW_STATUS_CHOICES,
-        index=WORKFLOW_STATUS_CHOICES.index(wf_status) if wf_status else 0,
-    )
-    manual_class = st.selectbox(
-        "Manual Classification",
-        options=MANUAL_CLASSIFICATION_CHOICES,
-        index=MANUAL_CLASSIFICATION_CHOICES.index(manual_class) if manual_class else 0,
-    )
-    remarks = st.text_area("Remarks")
+        with st.form(key=f"edit_form_{st.session_state.edit_form_key}"):
+            wf_status = None
+            material_id = None
+            manual_class = None
+            if item:
+                print(item)
+                material_id = item.get("material_id")
+                wf_status = item.get("workflow_status")
+                manual_class = item.get("manual_classification")
 
-    save_button = st.form_submit_button("Save Changes")
-
-    if save_button:
-        updates = {
-            "workflow_status": wf_status,
-            "manual_classification": manual_class,
-            "remarks": remarks,
-        }
-        try:
-            success = save_user_edits(st.session_state["selected_material_id"], updates)
-            if success:
-                st.success(
-                    f"Material {st.session_state['selected_material_id']} updated successfully!"
+                material_id = st.write(
+                    "Selected material_id:",
+                    material_id,
                 )
-                st.rerun()
-            else:
-                st.error(
-                    f"Failed to update material {st.session_state['selected_material_id']}."
+                print(wf_status, manual_class)
+                print(WORKFLOW_STATUS_CHOICES.index(wf_status) if wf_status else 0)
+                print(
+                    MANUAL_CLASSIFICATION_CHOICES.index(manual_class)
+                    if manual_class
+                    else len(MANUAL_CLASSIFICATION_CHOICES) - 1
                 )
-        except Exception as e:
-            st.error(f"An error occurred during save: {e}")
+                wf_status = st.selectbox(
+                    "Workflow Status",
+                    options=WORKFLOW_STATUS_CHOICES,
+                    index=WORKFLOW_STATUS_CHOICES.index(wf_status) if wf_status else 0,
+                )
+                manual_class = st.selectbox(
+                    "Manual Classification",
+                    options=MANUAL_CLASSIFICATION_CHOICES,
+                    index=MANUAL_CLASSIFICATION_CHOICES.index(manual_class)
+                    if manual_class
+                    else len(MANUAL_CLASSIFICATION_CHOICES) - 1,
+                )
+                remarks = st.text_area("Remarks", value=item.get("remarks", ""))
 
-faculty_tabs = st.tabs(FACULTIES)
+                save_button = st.form_submit_button("Save Changes")
 
-for i, tab in enumerate(faculty_tabs):
-    faculty = FACULTIES[i]
-    prefix = f"{faculty}_"
+                if save_button:
+                    updates = {
+                        "workflow_status": wf_status,
+                        "manual_classification": manual_class,
+                        "remarks": remarks,
+                    }
+                    try:
+                        success = save_user_edits(
+                            st.session_state["selected_material_id"], updates
+                        )
+                        if success:
+                            st.success(
+                                f"Material {st.session_state['selected_material_id']} updated successfully!"
+                            )
+                            st.rerun()
+                        else:
+                            st.error(
+                                f"Failed to update material {st.session_state['selected_material_id']}."
+                            )
+                    except Exception as e:
+                        st.error(f"An error occurred during save: {e}")
 
-    with tab:
-        st.subheader(f"Materials for {faculty}")
-        try:
-            df, total_items = get_materials(
-                faculty=faculty,
+
+@st.fragment
+def create_tabs():
+    faculty_tabs = st.tabs(FACULTIES)
+    for i, tab in enumerate(faculty_tabs):
+        faculty = FACULTIES[i]
+        prefix = f"{faculty}_"
+
+        with tab:
+            st.subheader(f"Materials for {faculty}")
+            try:
+                df, total_items = get_materials(
+                    faculty=faculty,
+                )
+
+            except Exception as e:
+                st.error(f"Error fetching data for {faculty}: {e}")
+                df = pl.DataFrame()  # Empty dataframe on error
+                total_items = 0
+
+            full_data[faculty] = st.data_editor(
+                df,
+                use_container_width=True,
+                key=f"table_{faculty}",
+                hide_index=True,
+                column_config={
+                    "material_id": st.column_config.NumberColumn(
+                        label="Material ID",
+                        help="Unique identifier for the material",
+                        disabled=True,
+                    ),
+                    "url": st.column_config.LinkColumn(
+                        label="Open URL",
+                        help="Link to the material",
+                        disabled=True,
+                        display_text="↗️",
+                    ),
+                    "workflow_status": st.column_config.SelectboxColumn(
+                        label="Workflow Status",
+                        help="Current status of the material",
+                        options=WORKFLOW_STATUS_CHOICES,
+                        default=WORKFLOW_STATUS_CHOICES[0],
+                        required=True,
+                    ),
+                    "manual_classification": st.column_config.SelectboxColumn(
+                        label="Manual Classification",
+                        help="Classification of the material",
+                        options=MANUAL_CLASSIFICATION_CHOICES,
+                        default=MANUAL_CLASSIFICATION_CHOICES[8],
+                        required=True,
+                    ),
+                    "remarks": st.column_config.TextColumn(
+                        label="Remarks",
+                        help="Additional remarks / notes",
+                    ),
+                    "ml_prediction": st.column_config.TextColumn(
+                        label="ML Prediction",
+                        help="Machine learning prediction",
+                        disabled=True,
+                    ),
+                    "filename": st.column_config.TextColumn(
+                        label="Filename",
+                        help="Name of the file",
+                        disabled=True,
+                    ),
+                    "title": st.column_config.TextColumn(
+                        label="Title",
+                        help="Title of the material, if found in PDF metadata",
+                        disabled=True,
+                    ),
+                    "owner": st.column_config.TextColumn(
+                        label="Uploaded by",
+                        help="Filed was uploaded by this person. Blank if copied from last year's material",
+                        disabled=True,
+                    ),
+                    "author": st.column_config.TextColumn(
+                        label="Author",
+                        help="Author of the material, if found in PDF metadata",
+                        disabled=True,
+                    ),
+                    "doi": st.column_config.TextColumn(
+                        label="DOI",
+                        help="Digital Object Identifier, if found in PDF metadata",
+                        disabled=True,
+                    ),
+                    "isbn": st.column_config.TextColumn(
+                        label="ISBN",
+                        help="International Standard Book Number, if found in PDF metadata",
+                        disabled=True,
+                    ),
+                },
             )
 
-        except Exception as e:
-            st.error(f"Error fetching data for {faculty}: {e}")
-            df = pl.DataFrame()  # Empty dataframe on error
-            total_items = 0
-
-        full_data[faculty] = st.dataframe(
-            df,
-            use_container_width=True,
-            key=f"table_{faculty}",
-            on_select="rerun",
-            hide_index=True,
-            selection_mode="single-row",
-        )
-
-        selection = full_data[faculty].get("selection").get("rows")
-        if selection:
-            st.session_state["selected_item"] = df[selection].to_dicts()[0]
-            st.rerun()
-        else:
-            st.session_state["selected_item"] = {}
-        if False:
             # functionality for storing changes when using st.data_editor
             edited_rows = st.session_state[f"table_{faculty}"].get("edited_rows")
             if edited_rows:
@@ -293,3 +345,6 @@ for i, tab in enumerate(faculty_tabs):
                         full_data[faculty][row]["material_id"],
                         full_data[faculty][row],
                     )
+
+
+create_tabs()
