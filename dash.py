@@ -852,26 +852,37 @@ async def show_item_details(
             label_text: str, field_name: str, options_map: dict
         ):
             current_value = get_val(field_name)
-            content_component, _ = render_modal_field(
-                field_name, current_value
-            )  # Get current pill
+            # Get the original component (e.g., a Label tuple) and its type hint
+            content_component, _ = render_modal_field(field_name, current_value)
             label_el, _ = render_labelled_item(
                 label_text, content_component
             )  # Get label
 
             # Store original value and style for reset
             original_value_str = str(current_value) if current_value is not None else ""
-            original_style_class = getattr(
-                content_component, "class", [DEFAULT_PILL_STYLE + " badge-sm"]
-            )[0].split()[0]  # Heuristic to get base style class
+            original_style_class = DEFAULT_PILL_STYLE + " badge-sm"  # Default
+            # Safer check for FT tuple and attributes dictionary
+            if (
+                isinstance(content_component, tuple)
+                and len(content_component) == 3
+                and isinstance(content_component[2], dict)
+            ):
+                current_classes = content_component[2].get("cls", "").split()
+                labelt_values = {str(lt) for lt in LabelT}
+                found_style = next(
+                    (cls for cls in current_classes if cls in labelt_values), None
+                )
+                if found_style:
+                    original_style_class = (
+                        found_style  # Store only the base style class
+                    )
 
             # Dropdown Items
             dropdown_items = []
             for opt_val, opt_style_enum in options_map.items():
-                # Get the actual style class string from the enum
                 opt_style_class = str(opt_style_enum)
-                # Use repr to safely quote strings in JS call
-                onclick_js = f"updatePill('{field_name}', {repr(opt_val)}, {repr(opt_val)}, '{opt_style_class}'); return false;"
+                # Use repr for safe JS string quoting
+                onclick_js = f"updatePill('{field_name}', {repr(str(opt_val))}, {repr(str(opt_val))}, '{opt_style_class}'); return false;"
                 dropdown_items.append(
                     Li(
                         A(
@@ -886,34 +897,51 @@ async def show_item_details(
             hidden_input = Input(
                 type="hidden",
                 id=f"input-{field_name}",
-                name=field_name,  # Important for potential future form submission
+                name=field_name,
                 value=original_value_str,
-                data_original_value=original_value_str,  # Store original value
-                data_original_text=original_value_str,  # Store original text
-                data_original_style=original_style_class,  # Store original style
+                data_original_value=original_value_str,
+                data_original_text=original_value_str,  # Store original text for reset
+                data_original_style=original_style_class,  # Store original style for reset
             )
 
-            # Wrap the pill in a Button for dropdown trigger, add ID to the pill itself
+            # --- FIX: Reconstruct the component with the ID ---
+            component_with_id = (
+                content_component  # Default to original if not a modifiable FT tuple
+            )
+            if isinstance(content_component, tuple) and len(content_component) == 3:
+                tag, children, attrs_orig = content_component
+                # Ensure attrs_orig is a dict before copying, handle None case
+                attrs_new = attrs_orig.copy() if isinstance(attrs_orig, dict) else {}
+                attrs_new["id"] = f"pill-display-{field_name}"  # Add the ID
+                # Create the new tuple
+                component_with_id = (tag, children, attrs_new)
+            # --- END FIX ---
+
+            # Wrap the pill in a Button for dropdown trigger
             pill_wrapper = Div(
-                cls="inline-block"
-            )(  # Dropdown container
+                cls="inline-block uk-inline"
+            )(  # Added uk-inline for dropdown positioning
                 Button(
-                    # Add ID to the visual pill element itself for easy JS targeting
-                    content_component(id=f"pill-display-{field_name}"),
+                    component_with_id,  # Use the reconstructed component with the ID
                     type="button",
                     cls="p-0 m-0 bg-transparent border-none hover:opacity-80",  # Make button invisible
                 ),
-                DropDownNavContainer(
-                    *dropdown_items, cls="uk-dropdown-nav", uk_drop="mode: click"
+                # Use Div for dropdown content as DropDownNavContainer might add unwanted styles
+                Div(
+                    Ul(
+                        *dropdown_items, cls="uk-nav uk-dropdown-nav"
+                    ),  # Standard UIKit nav list
+                    cls="uk-dropdown",  # Basic dropdown class
+                    uk_drop="mode: click; pos: bottom-right",  # Ensure uk-drop attribute is set
                 ),
-                hidden_input,  # Include hidden input
+                hidden_input,
             )
 
             # Apply inline layout classes
             return Div(
                 label_el,
                 Div(pill_wrapper, cls="text-right"),
-                cls="flex items-center justify-between space-x-2 mb-2",  # label-inline-item styling
+                cls="flex items-center justify-between space-x-2 mb-2",
             )
 
         # --- End Dropdown Helper ---

@@ -1,96 +1,98 @@
 from copy import copy
-import polars as pl
-
-from easy_access.db.retrieve import retrieve_llm_classifications
-from easy_access.settings import SETTINGS, ColInfo, DirSetting, DEPARTMENT_MAPPING
 from dataclasses import dataclass, field
-from easy_access.utils import File, info, warn
-from pathlib import Path
 from datetime import datetime
 from itertools import batched
+from pathlib import Path
+
 import openpyxl
-from openpyxl.styles import NamedStyle, Alignment
 import openpyxl.worksheet
 import openpyxl.worksheet.datavalidation
 import openpyxl.worksheet.table
 import openpyxl.worksheet.worksheet
-from openpyxl.worksheet.table import TableStyleInfo
-from openpyxl.worksheet.table import Table as ExcelTable
+import polars as pl
 import typer
+from openpyxl.styles import Alignment, NamedStyle
+from openpyxl.worksheet.table import Table as ExcelTable
+from openpyxl.worksheet.table import TableStyleInfo
+
+from easy_access.db.retrieve import (
+    retrieve_copyright_items,
+    retrieve_llm_classifications,
+)
+from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting
+from easy_access.utils import File, info, warn
+
 
 def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
-        """
-        Reads in data from the latest copyright export file in the copyright dir;
-        or if a file is given, reads in that file.
-        Input should be a direct export from the CopyRight tool without any changes.
-        """
-        try:
-            if not file:
-                info(
-                    f"Reading in newest Copyright Data from directory: {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
-                )
-                file = max(
-                        SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files,
-                        key=lambda x: x.created
-                    )
-
-            info(f"Reading in data from:\n            {file.name}\n")
-            latest_file_date = file.created.strftime("%Y-%m-%d")
-            raw_copyright_data = pl.read_excel(file.path)
-            copyright_data =  raw_copyright_data.with_columns(
-                    pl.exclude(pl.Utf8).cast(str)
-                ).rename(
-                    lambda col: col.replace(" ", "_")
-                        .replace("#", "count_")
-                        .replace("*", "x")
-                        .lower()
-                ).with_columns(
-                    pl.Series(
-                            "retrieved_from_copyright_on",
-                            [latest_file_date] * len(raw_copyright_data),
-                        ),
-                    pl.Series(
-                            "workflow_status",
-                            ["ToDo"] * len(raw_copyright_data)
-                        ),
-                    pl.col("last_change")
-                        .str.replace(r"^-$", "")
-                        .str.strip_chars()
-                        .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-                        .dt.strftime("%Y-%m-%d"),
-                    pl.col("classification")
-                        .str.to_lowercase(),
-                    faculty=pl.col("department")
-                        .replace_strict(
-                            DEPARTMENT_MAPPING,
-                            default="Unmapped"
-                        ),
-                )
-
-            # now drop rows we definitely do not want.
-            # - drop row if material_id is null, None, blank, or '-'
-            # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
-            info(f'Retrieved {len(copyright_data)} items from {file.name}.')
-
-            copyright_data = copyright_data.filter(
-                (pl.col("material_id").is_not_null())
+    """
+    Reads in data from the latest copyright export file in the copyright dir;
+    or if a file is given, reads in that file.
+    Input should be a direct export from the CopyRight tool without any changes.
+    """
+    try:
+        if not file:
+            info(
+                f"Reading in newest Copyright Data from directory: {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
             )
-            copyright_data = copyright_data.filter(
-                (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) |
-                (pl.col("filetype").is_null())
+            file = max(
+                SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files,
+                key=lambda x: x.created,
             )
 
-            info(f'{len(copyright_data)} items remaining from {file.name} after filtering out missing material_ids and specific filetypes.')
-            return latest_file_date, copyright_data
-        except FileNotFoundError:
-            warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
-            raise typer.Exit(code=1)
-        except PermissionError:
-            warn(f"Permission denied to read {file.name}")
-            raise typer.Exit(code=1)
-        except ValueError:
-            warn(f"No file found.")
-            raise typer.Exit(code=1)
+        info(f"Reading in data from:\n            {file.name}\n")
+        latest_file_date = file.created.strftime("%Y-%m-%d")
+        raw_copyright_data = pl.read_excel(file.path)
+        copyright_data = (
+            raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
+            .rename(
+                lambda col: col.replace(" ", "_")
+                .replace("#", "count_")
+                .replace("*", "x")
+                .lower()
+            )
+            .with_columns(
+                pl.Series(
+                    "retrieved_from_copyright_on",
+                    [latest_file_date] * len(raw_copyright_data),
+                ),
+                pl.Series("workflow_status", ["ToDo"] * len(raw_copyright_data)),
+                pl.col("last_change")
+                .str.replace(r"^-$", "")
+                .str.strip_chars()
+                .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+                .dt.strftime("%Y-%m-%d"),
+                pl.col("classification").str.to_lowercase(),
+                faculty=pl.col("department").replace_strict(
+                    DEPARTMENT_MAPPING, default="Unmapped"
+                ),
+            )
+        )
+
+        # now drop rows we definitely do not want.
+        # - drop row if material_id is null, None, blank, or '-'
+        # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
+        info(f"Retrieved {len(copyright_data)} items from {file.name}.")
+
+        copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
+        copyright_data = copyright_data.filter(
+            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"]))
+            | (pl.col("filetype").is_null())
+        )
+
+        info(
+            f"{len(copyright_data)} items remaining from {file.name} after filtering out missing material_ids and specific filetypes."
+        )
+        return latest_file_date, copyright_data
+    except FileNotFoundError:
+        warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
+        raise typer.Exit(code=1)
+    except PermissionError:
+        warn(f"Permission denied to read {file.name}")
+        raise typer.Exit(code=1)
+    except ValueError:
+        warn("No file found.")
+        raise typer.Exit(code=1)
+
 
 @dataclass
 class DataEntrySheet:
@@ -216,6 +218,7 @@ class DataEntrySheet:
     def save(self) -> None:
         self.workbook.save(filename=self.file_path)
 
+
 def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     """
     This function takes an excel file with 'Complete Data' and adds a data entry sheet +styling.
@@ -243,14 +246,23 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
 
     data = data.unique("material_id")
     sheet.add_data(data)
-    info(f'Added data entry sheet to {file.name}')
+    info(f"Added data entry sheet to {file.name}")
     llm_classification_data = enrich_with_llm_classifications(data)
     if isinstance(llm_classification_data, pl.DataFrame):
-        llm_sheet_path = file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
-        llm_classification_data.write_excel(workbook=llm_sheet_path, worksheet="llm_classification_data", table_name="llm_classification_data", table_style="TableStyleMedium3", autofit=True)
-        info(f'Stored llm_classification_data sheet to {llm_sheet_path.name}')
+        llm_sheet_path = (
+            file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
+        )
+        llm_classification_data.write_excel(
+            workbook=llm_sheet_path,
+            worksheet="llm_classification_data",
+            table_name="llm_classification_data",
+            table_style="TableStyleMedium3",
+            autofit=True,
+        )
+        info(f"Stored llm_classification_data sheet to {llm_sheet_path.name}")
 
     return style_iter
+
 
 def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
     """
@@ -265,11 +277,16 @@ def store_complete_data(file: File | Path, data: pl.DataFrame) -> None:
         size = file.stat().st_size
         if size > 0:
             File(file).delete()
-    selectcols = [col for col in SETTINGS.data_settings.final_data_col_order if col in data.columns]
+    selectcols = [
+        col
+        for col in SETTINGS.data_settings.final_data_col_order
+        if col in data.columns
+    ]
     data = data.select(selectcols)
-    data = data.unique('material_id')
+    data = data.unique("material_id")
     data.write_excel(file, worksheet=SETTINGS.data_settings.complete_data_name)
-    info(f'Stored {data.shape[0]} rows to {file}')
+    info(f"Stored {data.shape[0]} rows to {file}")
+
 
 def read_export_sheets() -> pl.DataFrame:
     """
@@ -279,110 +296,168 @@ def read_export_sheets() -> pl.DataFrame:
     returndata = pl.DataFrame()
     for file in SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].files:
         if file.extension in [".xls", ".xlsx"]:
-            returndata = pl.concat([returndata, pl.read_excel(file.path)], how="diagonal_relaxed")
+            returndata = pl.concat(
+                [returndata, pl.read_excel(file.path)], how="diagonal_relaxed"
+            )
         if file.extension in [".csv"]:
-            returndata = pl.concat([returndata, pl.read_csv(file.path)], how="diagonal_relaxed")
+            returndata = pl.concat(
+                [returndata, pl.read_csv(file.path)], how="diagonal_relaxed"
+            )
     return returndata
 
-def create_export_sheet(data: pl.DataFrame, print_overview: bool = True) -> list[str]:
+
+def create_export_sheet(data: pl.DataFrame | None = None, print_overview: bool = True):
     """
-    Create an export sheet to import back into CopyRight tool.
-    Specifications:
+        Create an export sheet to import back into CopyRight tool.
+        Specifications:
 
-        - .xlsx file with 1 sheet
-        - utf-8 encoding
-        - Column info:
-        OutputExcelField        --	QlikField               --  Notes
-----------------------------------------------------------------------------------------------------------------
-        MaterialID              --	Material id	            --  Formatted as Number
-        Filename                --	Filename	            --  n/a
-        Manual_classification   --	Manual classification   --  Classification of the item
-        Manual_identifier       --	Manual identifier	    --  e.g. for ISBN/DOI/...
-        Owner                   --	Owner	                --  E-mail adress of whomever classified the item aanpasser
-        Remarks                 --	Remarks	                --  Free text field
-        Scope                   --	Scope                   --  Pick between:  Altijd / Eenmaal / DezePeriode
+            - .xlsx file with 1 sheet
+            - utf-8 encoding
+            - Column info:
+            OutputExcelField        --	QlikField               --  Notes
+    ----------------------------------------------------------------------------------------------------------------
+            MaterialID              --	Material id	            --  Formatted as Number
+            Filename                --	Filename	            --  n/a
+            Manual_classification   --	Manual classification   --  Classification of the item
+            Manual_identifier       --	Manual identifier	    --  e.g. for ISBN/DOI/...
+            Owner                   --	Owner	                --  E-mail adress of whomever classified the item aanpasser
+            Remarks                 --	Remarks	                --  Free text field
+            Scope                   --	Scope                   --  Pick between:  Altijd / Eenmaal / DezePeriode
 
 
-    Also store a full details sheet with all the data available for each entry.
+        Also store a full details sheet with all the data available for each entry.
 
-    Returns a list of material_ids for the items that were exported, for further processing.
+        Returns a list of material_ids for the items that were exported, for further processing.
 
-    #TODO: Determine if for 'Owner' the actual 'Owner' field in copyright data should be used, or if it should be 'auditor' instead??
+        #TODO: Determine if for 'Owner' the actual 'Owner' field in copyright data should be used, or if it should be 'auditor' instead??
 
     """
-    COL_NAMES = ['material_id', 'filename', 'manual_classification', 'owner', 'remarks', 'scope']
+    COL_NAMES = [
+        "material_id",
+        "filename",
+        "manual_classification",
+        "owner",
+        "remarks",
+        "scope",
+    ]
     TODAY: str = datetime.now().strftime(format="%Y-%m-%d_%H-%M-%S")
+    if False:
+        # previous implementation
+        data = data.filter(pl.col(name="workflow_status") == "Done")
+        full_data: pl.DataFrame = copy(x=data)
 
-    data = data.filter(pl.col(name='workflow_status') == 'Done')
-    full_data: pl.DataFrame = copy(x=data)
+        data = data.select([col for col in COL_NAMES if col in data.columns])
+        data = data.rename(
+            mapping={col: col.replace("_", "").lower() for col in data.columns}
+        )
 
-    data = data.select([col for col in COL_NAMES if col in data.columns])
-    data = data.rename(mapping={col: col.replace("_", "").lower() for col in data.columns})
+        existing_data: pl.DataFrame = read_export_sheets()
+        if not existing_data.is_empty():
+            data = data.join(other=existing_data, on="materialid", how="anti")
 
-    existing_data: pl.DataFrame = read_export_sheets()
-    if not existing_data.is_empty():
-        data = data.join(other=existing_data, on='materialid', how='anti')
+        if data.is_empty():
+            warn(text="No new data found to export!")
 
-    if data.is_empty():
-        warn(text="No new data found to export!")
+        full_data = full_data.filter(
+            (pl.col(name="material_id").is_in(other=data["materialid"]))
+            & (pl.col(name="workflow_status") == "Done")
+        )
+        material_ids_exported: list[str] = data["Material id"].to_list()
 
-    full_data = full_data.filter((pl.col(name='material_id').is_in(other=data['materialid'])) & (pl.col(name='workflow_status') == 'Done'))
-    material_ids_exported: list[str] = data["Material id"].to_list()
+        if not print_overview:
+            return material_ids_exported
 
+        # messy code to print some data on what is being exported
+        overview = {
+            "Number of items per faculty": full_data.group_by("faculty")
+            .len()
+            .sort("len", descending=True)
+            .to_dicts(),
+            "Number of items per classification": full_data.group_by(
+                "manual_classification"
+            )
+            .len()
+            .sort("len", descending=True)
+            .to_dicts(),
+            "Number of items per ml_prediction": full_data.group_by("ml_prediction")
+            .len()
+            .sort("len", descending=True)
+            .to_dicts(),
+            "man_class per ml_pred": full_data.group_by(
+                ["ml_prediction", "manual_classification"]
+            )
+            .agg(pl.len().alias(name="len"))
+            .sort("ml_prediction", "len", descending=[False, True])
+            .to_dicts(),
+        }
+        print(overview)
+        info(text=f"Creating export sheet with {data.shape[0]} rows.")
+        print()
+        print()
+        for key, value in overview.items():
+            print(
+                "    -------------------------------------------------------------------"
+            )
+            print(f"                                   {key}")
+            print(
+                "    -------------------------------------------------------------------"
+            )
+            if "man_class per ml_pred" in key:
+                batch_num = 3
 
-    export_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
-    data.write_excel(workbook=export_file_path)
-    full_details_file_path: Path = SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
-    full_data.write_excel(workbook=full_details_file_path)
+            else:
+                batch_num = 2
+            maxgap: int = max(
+                [max([len(str(object=val)) for val in item.values()]) for item in value]
+            )
+            if batch_num == 3:
+                maxgap = maxgap * 2
+            for n, item in enumerate(value):
+                item: dict[str, int] = item
+                if n == 0:
+                    if batch_num == 3:
+                        print(
+                            f"      {list(item.keys())[0]}:{list(item.keys())[1]}{' ' * (maxgap - len(list(item.keys())[0]) - len(list(item.keys())[1]))} |     {list(item.keys())[2]}"
+                        )
+                        print(
+                            f" {'-' * (len(str(list(item.keys())[0]) + ':' + str(list(item.keys())[1])) + 5)}{'-' * (maxgap - len(str(list(item.keys())[0]) + ':' + str(list(item.keys())[1])) + 4)}|{'-' * (len(list(item.keys())[2]) + 10)}"
+                        )
 
-    if not print_overview:
-        return material_ids_exported
+                    else:
+                        print(
+                            f"      {list(item.keys())[0]}{' ' * (maxgap - len(list(item.keys())[0]) - 3)} |     {list(item.keys())[1]}"
+                        )
+                        print(
+                            f" {'-' * (len(list(item.keys())[0]) + 5)}{'-' * (maxgap - len(list(item.keys())[0]) + 4)}|{'-' * (len(list(item.keys())[1]) + 10)}"
+                        )
+                for results in batched(item.items(), batch_num):
+                    if batch_num != 3:
+                        key = results[0][1]
+                        value = results[1][1]
+                    else:
+                        key = f"{results[0][1]} --> {results[1][1]}"
+                        value = results[2][1]
+                    print(f"      {key}{' ' * (maxgap - len(key) + 3)} |     {value}")
 
-    # messy code to print some data on what is being exported
-    overview = {
+    data = retrieve_copyright_items()
+    # get all data from db
+    # filter out only 'Done' items (?)
+    # write to the two excel files with different sets of cols
+    export_file_path: Path = (
+        SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full
+        / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
+    )
+    full_details_file_path: Path = (
+        SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full
+        / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
+    )
+    info(f"Exporting data to {export_file_path} and {full_details_file_path}")
+    data = data.filter(pl.col(name="workflow_status") == "Done")
+    data.select(COL_NAMES).write_excel(export_file_path)
 
-        "Number of items per faculty": full_data.group_by("faculty").len().sort("len", descending=True).to_dicts(),
-        "Number of items per classification": full_data.group_by("manual_classification").len().sort("len", descending=True).to_dicts(),
-        "Number of items per ml_prediction": full_data.group_by("ml_prediction").len().sort("len", descending=True).to_dicts(),
-        "man_class per ml_pred": full_data.group_by(["ml_prediction", "manual_classification"]).agg(pl.len().alias(name='len')).sort("ml_prediction","len", descending=[False, True]).to_dicts(),
-    }
-    print(overview)
-    info(text=f'Creating export sheet with {data.shape[0]} rows.')
-    print()
-    print()
-    for key, value in overview.items():
-        print("    -------------------------------------------------------------------")
-        print(f"                                   {key}")
-        print("    -------------------------------------------------------------------")
-        if 'man_class per ml_pred' in key:
-            batch_num = 3
-
-        else:
-            batch_num = 2
-        maxgap: int = max([max([len(str(object=val)) for val in item.values()]) for item in value])
-        if batch_num == 3:
-            maxgap = maxgap * 2
-        for n, item in enumerate(value):
-            item: dict[str, int] = item
-            if n == 0:
-                if batch_num == 3:
-                    print(f"      {list(item.keys())[0]}:{list(item.keys())[1]}{" "*(maxgap-len(list(item.keys())[0])-len(list(item.keys())[1]))} |     {list(item.keys())[2]}")
-                    print(f" {'-'*(len(str(list(item.keys())[0])+":"+str(list(item.keys())[1]))+5)}{"-"*(maxgap-len(str(list(item.keys())[0])+":"+str(list(item.keys())[1]))+4)}|{'-'*(len(list(item.keys())[2])+10)}")
-
-                else:
-                    print(f"      {list(item.keys())[0]}{" "*(maxgap-len(list(item.keys())[0])-3)} |     {list(item.keys())[1]}")
-                    print(f" {'-'*(len(list(item.keys())[0])+5)}{"-"*(maxgap-len(list(item.keys())[0])+4)}|{'-'*(len(list(item.keys())[1])+10)}")
-            for results in batched(item.items(),batch_num):
-                if batch_num != 3:
-                    key = results[0][1]
-                    value = results[1][1]
-                else:
-                    key = f"{results[0][1]} --> {results[1][1]}"
-                    value = results[2][1]
-                print(f"      {key}{" "*(maxgap-len(key)+3)} |     {value}")
-
-
-    return material_ids_exported
+    # store formatted / styled export file with all details
+    full_export_file = File(full_details_file_path)
+    store_complete_data(file=full_export_file, data=data)
 
 
 def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
@@ -394,9 +469,14 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     return the joined dataframe
     """
 
-    llm_data = retrieve_llm_classifications(selected_material_ids=data.select("material_id").unique("material_id").to_series().to_list())
+    llm_data = retrieve_llm_classifications(
+        selected_material_ids=data.select("material_id")
+        .unique("material_id")
+        .to_series()
+        .to_list()
+    )
     if not isinstance(llm_data, pl.DataFrame):
-        warn(f'No llm classification data found.')
+        warn("No llm classification data found.")
         return None
     else:
         joined_data = data.join(llm_data, on="material_id", how="left")
@@ -431,7 +511,7 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
         "course_name",
         "topic_llm",
         "pagecount",
-        "pdf_page_count_llm"
+        "pdf_page_count_llm",
     ]
     col_order = [col for col in col_order if col in joined_data.columns]
     # print missing expected columns
