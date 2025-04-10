@@ -65,6 +65,7 @@ from easy_access.sheets.backup import (
     RestoreOptions,
     RestoreStrategy,
 )
+from easy_access.sheets.sheet import create_export_sheet
 from easy_access.utils import cool, info, warn
 
 cli_app = typer.Typer()
@@ -198,9 +199,21 @@ def cli(
             rich_help_panel="Enrichment",
         ),
     ] = False,
+    export: Annotated[
+        bool,
+        typer.Option(
+            help="Create export sheets for data ingestion.",
+            rich_help_panel="Functions",
+        ),
+    ] = False,
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
 
+    if export:
+        info("Creating export sheets.")
+        create_export_sheet()
+        cool("Done creating export sheets. Exiting tool!")
+        raise typer.Exit(code=0)
     backupper = Backupper()
     backup = BackupFlag(backup)
     match backup:
