@@ -1,6 +1,7 @@
 # dash.py
 
 import contextlib
+import json
 import math
 import traceback
 from enum import auto
@@ -10,11 +11,13 @@ import fasthtml.common as fh
 import polars as pl
 from fastcore.xml import FT
 from fasthtml.common import *
+from fasthtml.components import Htmx_toasts
 from monsterui.all import *
 from monsterui.foundations import VEnum, str2ukcls
 from rich import print
 
 from easy_access.db.retrieve import retrieve_copyright_items
+from easy_access.db.update import update_copyright_items
 
 # --- monsterui fixes ---
 
@@ -43,15 +46,15 @@ def _headers_theme(
     mode_script = {
         "auto": f"""
             {franken_init}
-          if (
+        if (
             __FRANKEN__.mode === "dark" ||
             (!__FRANKEN__.mode &&
-              window.matchMedia("(prefers-color-scheme: dark)").matches)
-          ) {{
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ) {{
             htmlElement.classList.add("dark");
-          }} else {{
+        }} else {{
             htmlElement.classList.remove("dark");
-          }}
+        }}
 
         """,
         "light": f'{franken_init} htmlElement.classList.remove("dark");',
@@ -111,12 +114,12 @@ GLOBAL_STYLES = Style("""
     #data-table .col-workflow-status { width: 130px; text-align: center; }
     #data-table .col-status { width: 130px; text-align: center; }
     #data-table .col-remarks {
-         white-space: normal;
-         min-width: 150px;
+        white-space: normal;
+        min-width: 150px;
     }
     #data-table .col-title {
-         white-space: normal;
-         min-width: 150px;
+        white-space: normal;
+        min-width: 150px;
     }
     #data-table .col-filename {
         white-space: normal;
@@ -128,6 +131,17 @@ GLOBAL_STYLES = Style("""
         display: inline-block;
     }
 
+    #modal-loading-indicator {
+        opacity: 0;
+        transition: opacity 200ms ease-in;
+        pointer-events: none;
+    }
+
+    .htmx-request #modal-loading-indicator,
+    .htmx-request#modal-loading-indicator {
+        opacity: 1;
+        pointer-events: auto;
+    }
 
 
 
@@ -207,6 +221,10 @@ app, rt = fast_app(
             href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
             type="text/css",
         ),
+        Script(
+            src="https://unpkg.com/@htmx/htmx-toasts@latest/dist/index.js",
+            type="module",
+        ),
     ),
     exts="loading-states",
 )
@@ -279,7 +297,7 @@ def get_filtered_sorted_df(
     sort_desc: bool = False,
     filters: dict[str, str] | None = None,
 ) -> pl.DataFrame:
-    """Applies filtering and sorting. (Logic unchanged)"""
+    """Applies filtering and sorting."""
     df = copyright_df_global
     if filters:
         filter_expressions = []
@@ -322,53 +340,62 @@ def get_filtered_sorted_df(
     return df
 
 
+async def store_item_changes(
+    input_data: list[dict[str, str | int]] | dict[str, str | int],
+) -> None:
+    """
+    For a list of dicts containing at least a material_id and updated fields,
+    for each item, retrieve the full item data for the other fields from the copyright_df_global
+    make sure the updated fields in the dict are not overwritten with the original values
+
+    then send the new list of dicts to the database for update
+    """
+    full_data_list = []
+    if not isinstance(input_data, list):
+        input_data = [input_data]
+    for item in input_data:
+        material_id = item.get("material_id")
+        if material_id is not None:
+            full_item_data = copyright_df_global.filter(
+                pl.col("material_id") == material_id
+            ).to_dicts()
+            if full_item_data:
+                print(f"Updating material_id {material_id}")
+                full_item_data = full_item_data[0]
+                # update fields that are in the input item
+                for key, value in item.items():
+                    if key == "material_id":
+                        continue
+                    if key == "faculty":
+                        # special case for faculty, we need to update the faculty_id instead
+                        full_item_data["faculty_id"] = value
+                        del full_item_data["faculty"]
+                        continue
+                    if key in full_item_data:
+                        if value != full_item_data[key]:
+                            print(f"Updating {key}: {full_item_data[key]} --> {value}")
+                        full_item_data[key] = value
+                full_data_list.append(full_item_data)
+
+    await update_copyright_items(full_data_list, update_relations=False, overwrite=True)
+
+
 # --- Component rendering ---
+
+
 def render_table_rows(
     df_slice: pl.DataFrame,
     current_page_for_modal: int,
     per_page_for_modal: int,
-    sort_by_for_modal: Optional[str],
+    sort_by_for_modal: str | None,
     sort_desc_for_modal: bool,
-    filters_for_modal: Optional[Dict[str, str]],
+    filters_for_modal: dict[str, str] | None,
 ) -> tuple[FT, ...]:
     """Renders Tbody rows with custom formatting and HTMX attributes."""
     rows: list[FT] = []
     if df_slice is not None and df_slice.height > 0:
         cols_to_display = [col for col in DISPLAY_COLUMNS if col in df_slice.columns]
         display_df_slice = df_slice.select(cols_to_display)
-
-        # --- Define Pill Styles ---
-        workflow_styles = {
-            "ToDo": LabelT.destructive,
-            "InProgress": LabelT.secondary,
-            "Done": LabelT.primary,
-        }
-        status_styles = {
-            "Published": LabelT.primary,
-            "Unpublished": LabelT.secondary,
-            "Deleted": LabelT.destructive,
-        }
-        # --- Define Classification Styles ---
-        primary_classifications = {
-            "open access",
-            "eigen materiaal - powerpoint",
-            "eigen materiaal - titelindicatie",
-            "eigen materiaal - overig",
-            "eigen materiaal",
-        }
-        secondary_classifications = {
-            "onbekend",
-            "niet geanalyseerd",
-            "in onderzoek",
-            "licentie beschikbaar",
-            "verwijderverzoek verstuurd",
-        }
-        destructive_classifications = {
-            "korte overname",
-            "middellange overname",
-            "lange overname",
-        }
-        # --- End Define Styles ---
 
         for row_dict in display_df_slice.iter_rows(named=True):
             cells = []
@@ -378,7 +405,6 @@ def render_table_rows(
 
             for col in cols_to_display:
                 val = row_dict.get(col)
-                # Normalize value for comparisons where applicable
                 val_str_norm = str(val).lower().strip() if val is not None else ""
                 cell_content: Any = str(val) if val is not None else ""
                 td_class = f"col-{col.replace('_', '-')}"
@@ -402,32 +428,30 @@ def render_table_rows(
                             title="No URL provided",
                         )
                 elif col == "workflow_status":
-                    # Use original value for display, normalized for lookup
-                    style = workflow_styles.get(str(val))
+                    style = WORKFLOW_STYLES.get(str(val))
                     cell_content = Label(
                         str(val) if val else "N/A", cls=style + " badge-sm"
                     )
                 elif col == "status":
-                    # Use original value for display, normalized for lookup
-                    style = status_styles.get(str(val))
+                    style = STATUS_STYLES.get(str(val))
                     cell_content = Label(
                         str(val) if val else "N/A", cls=style + " badge-sm"
                     )
 
                 elif col in ("manual_classification", "ml_prediction"):
-                    if not val_str_norm:  # Handle empty/None case
+                    if not val_str_norm:
                         display_text = "-"
                         style = ""
-                    elif val_str_norm in primary_classifications:
+                    elif val_str_norm in PRIMARY_CLASSIFICATIONS:
                         style = LabelT.primary
-                        display_text = str(val)  # Use original casing for display
-                    elif val_str_norm in secondary_classifications:
+                        display_text = str(val)
+                    elif val_str_norm in SECONDARY_CLASSIFICATIONS:
                         style = LabelT.secondary
                         display_text = str(val)
-                    elif val_str_norm in destructive_classifications:
+                    elif val_str_norm in DESTRUCTIVE_CLASSIFICATIONS:
                         style = LabelT.destructive
                         display_text = str(val)
-                    else:  # Fallback for any unexpected values
+                    else:
                         display_text = str(val)
                         style = ""
 
@@ -455,13 +479,7 @@ def render_table_rows(
                 "hx_target": "#modal-placeholder",
                 "hx_swap": "innerHTML",
             }
-            row_attrs: dict[str, Any] = {
-                "id": f"row-{material_id}",
-                "class": "hover:bg-primary/10 cursor-pointer transition-colors duration-150",
-                "hx_get": show_item_details.to(material_id=material_id),
-                "hx_target": "#modal-placeholder",
-                "hx_swap": "innerHTML",
-            }
+
             rows.append(Tr(*cells, **row_attrs))
     if not rows:
         rows.append(
@@ -477,12 +495,12 @@ def render_table_rows(
 
 
 def page_header_component(
-    current_filters: Dict[str, str],
+    current_filters: dict[str, str],
     per_page: int,
-    sort_by: Optional[str],
+    sort_by: str | None,
     sort_desc: bool,
 ) -> FT:
-    """Renders the header area with Title and Filters. (Unchanged)"""
+    """Renders the header area with Title and Filters."""
     current_filters = current_filters or {}
     filter_inputs = []
     for col in FILTERABLE_COLUMNS:
@@ -540,20 +558,19 @@ def render_data_grid_component(
     per_page: int,
     total_filtered_rows: int,
     offset: int,
-    sort_by: Optional[str] = None,
+    sort_by: str | None = None,
     sort_desc: bool = False,
-    current_filters: Optional[Dict[str, str]] = None,
+    current_filters: dict[str, str] | None = None,
 ) -> FT:
     """Renders the main content area: Item count, table, pagination."""
     current_filters = current_filters or {}
+    print(f"filters in render_data_grid: {current_filters}")
 
-    # --- Table Header ---
     header_cells = []
     cols_in_header = [
         col for col in DISPLAY_COLUMNS if col in copyright_df_global.columns
     ]
     for col in cols_in_header:
-        # --- RENAME Header ---
         header_text = "ID" if col == "material_id" else col.replace("_", " ").title()
 
         sort_indicator_icon, next_sort_desc = "", "False"
@@ -570,7 +587,7 @@ def render_data_grid_component(
             **filter_params,
         }
         header_content = Button(
-            header_text,  # Use renamed text
+            header_text,
             UkIcon(
                 sort_indicator_icon, cls="inline-block ml-1.5 w-3 h-3 stroke-current"
             )
@@ -581,11 +598,9 @@ def render_data_grid_component(
             hx_indicator="#grid-loading-indicator",
             cls=f"{ButtonT.ghost} text-xs uppercase tracking-wider p-1.5 h-auto min-h-0 font-bold text-base-content/70 hover:text-primary transition-colors duration-150",
         )
-        # --- ADD CSS Class to TH ---
-        th_class = f"col-{col.replace('_', '-')}"  # Generate class name
-        header_cells.append(
-            Th(header_content, cls=f"px-4 py-2 {th_class}")
-        )  # Add class
+        th_class = f"col-{col.replace('_', '-')}"
+        header_cells.append(Th(header_content, cls=f"px-4 py-2 {th_class}"))
+    print(f"filters in render_data_grid: {current_filters}")
 
     header = Thead(Tr(*header_cells))
     body = Tbody(
@@ -633,9 +648,9 @@ def render_pagination(
     current_page: int,
     total_pages: int,
     per_page: int,
-    sort_by: Optional[str] = None,
+    sort_by: str | None = None,
     sort_desc: bool = False,
-    current_filters: Optional[Dict[str, str]] = None,
+    current_filters: dict[str, str] | None = None,
 ) -> FT:
     """Renders pagination controls using flexbox. (Unchanged)"""
     if total_pages <= 1:
@@ -648,6 +663,7 @@ def render_pagination(
         "sort_desc": str(sort_desc),
         **filter_params,
     }
+    print(f"filters in render_pagination: {current_filters}")
 
     pagination_items = []
 
@@ -680,6 +696,7 @@ def render_pagination(
         current_page >= total_pages,
         min(total_pages, current_page + 1),
     )
+    print("base_params in render_pagination:", base_params)
     next_attrs = {
         "hx_get": data_grid.to(page=next_page, **base_params),
         "hx_target": "#data-grid-component",
@@ -713,7 +730,6 @@ def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
 
     style = DEFAULT_PILL_STYLE
 
-    # --- Pills & Icons ---
     if col_name == "url":
         if value:
             return A(
@@ -786,26 +802,114 @@ def render_labelled_item(
 @rt("/modal/{material_id:int}")
 async def show_item_details(
     material_id: int,
-    # Add params matching data_grid
     page: int = 1,
     per_page: int = DEFAULT_PER_PAGE,
-    sort_by: Optional[str] = None,
+    sort_by: str | None = None,
     sort_desc: str = "False",
     filter_department: str = "",
     filter_course_name: str = "",
     filter_manual_classification: str = "",
-    filter_ml_prediction: str = "",  # Assuming ml_prediction filter exists
+    filter_ml_prediction: str = "",
     filter_status: str = "",
-    filter_faculty: str = "",  # Assuming faculty filter exists
+    filter_faculty: str = "",
     filter_author: str = "",
     filter_publisher: str = "",
     filter_workflow_status: str = "",
 ):
     """Fetches data and returns structured INNER content for the modal dialog
     using direct Tailwind classes."""
+
+    def get_val(key, default=None):
+        return item_data.get(key, default)
+
+    def create_editable_pill_div(label_text: str, field_name: str, options_map: dict):
+        current_value = get_val(field_name)
+
+        content_component, html_tag = render_modal_field(field_name, current_value)
+        label_el, _ = render_labelled_item(label_text, content_component, html_tag)
+
+        original_value_str = str(current_value) if current_value is not None else ""
+        original_style_class = DEFAULT_PILL_STYLE + " badge-sm"
+        component_with_id = content_component
+
+        if "attrs" in content_component.__dict__:
+            attrs_orig = content_component.__dict__["attrs"]
+
+            attrs_new = attrs_orig.copy() if isinstance(attrs_orig, dict) else {}
+            attrs_new["id"] = f"pill-display-{field_name}"
+
+            component_with_id.__setattr__("attrs", attrs_new)
+
+            current_classes = attrs_new.get("class", "").split()
+            labelt_values = {str(lt) for lt in LabelT}
+            found_style = next(
+                (cls for cls in current_classes if cls in labelt_values), None
+            )
+            if found_style:
+                original_style_class = found_style
+
+        dropdown_items = []
+        for opt_val, opt_style_enum in options_map.items():
+            opt_style_class = str(opt_style_enum)
+            onclick_js = f"updatePill('{field_name}', {repr(str(opt_val))}, {repr(str(opt_val))}, '{opt_style_class}'); return false;"
+            dropdown_items.append(
+                Li(
+                    A(
+                        Label(opt_val, cls=opt_style_enum + " badge-sm"),
+                        href="#",
+                        onclick=onclick_js,
+                    )
+                )
+            )
+
+        hidden_input = Input(
+            type="hidden",
+            id=f"input-{field_name}",
+            name=field_name,
+            value=original_value_str,
+            data_original_value=original_value_str,
+            data_original_text=original_value_str,
+            data_original_style=original_style_class,
+        )
+
+        pill_wrapper = Div(cls="inline-block uk-inline")(
+            Button(
+                component_with_id,  #
+                type="button",
+                cls="p-0 m-0 bg-transparent border-none hover:opacity-80 focus:outline-none ring-0",
+            ),
+            Div(
+                Ul(*dropdown_items, cls="uk-nav uk-dropdown-nav"),
+                cls="uk-dropdown w-auto z-10",
+                uk_drop="mode: click; pos: bottom-right",
+            ),
+            hidden_input,
+        )
+
+        return Div(
+            label_el,
+            Div(pill_wrapper, cls="text-right"),
+            cls="flex items-center justify-between space-x-2 mb-2",
+        )
+
+    def create_readonly_item_div(
+        label_text: str, field_name: str, is_inline: bool = False
+    ):
+        content_component, html_tag = render_modal_field(
+            field_name, get_val(field_name)
+        )
+        label_el, content_el = render_labelled_item(
+            label_text, content_component, html_tag
+        )
+        container_cls = (
+            "flex items-center justify-between space-x-2 mb-2" if is_inline else "mb-3"
+        )
+        content_wrapper_cls = "text-right" if is_inline else ""
+        return Div(
+            label_el, Div(content_el, cls=content_wrapper_cls), cls=container_cls
+        )
+
     try:
-        # --- Determine Current List Order ---
-        # Reconstruct filters from incoming parameters
         current_modal_filters: dict[str, str] = {
             "department": filter_department.strip(),
             "course_name": filter_course_name.strip(),
@@ -817,6 +921,15 @@ async def show_item_details(
             "publisher": filter_publisher.strip(),
             "workflow_status": filter_workflow_status.strip(),
         }
+        nav_params = {
+            "page": page,
+            "per_page": per_page,
+            "sort_by": sort_by or "",
+            "sort_desc": sort_desc,
+            **{f"filter_{k}": v for k, v in current_modal_filters.items()},
+        }
+        print(f"nav_params in show_item_details: {nav_params}")
+        print(f"current_modal_filters in show_item_details: {current_modal_filters}")
         current_modal_filters = {k: v for k, v in current_modal_filters.items() if v}
         modal_sort_desc_bool = sort_desc.lower() == "true"
         ordered_df = get_filtered_sorted_df(
@@ -833,92 +946,15 @@ async def show_item_details(
             if current_index != -1 and current_index < len(ordered_ids) - 1
             else None
         )
-        # --- End Re-filtering ---
 
         item_df = ordered_df.filter(pl.col("material_id") == material_id)
-        if item_df.height == 0:  # ... (error handling) ...
-            # ...
+        if item_df.height == 0:
             return (modal_box_content, modal_backdrop), HtmxResponseHeaders(
                 trigger="openModalEvent"
             )
 
         item_data = item_df.to_dicts()[0]
 
-        def get_val(key, default=None):
-            return item_data.get(key, default)
-
-        # --- Helper Function for Dropdown Pills ---
-        def create_editable_pill_div(
-            label_text: str, field_name: str, options_map: dict
-        ):
-            current_value = get_val(field_name)
-            content_component, _ = render_modal_field(
-                field_name, current_value
-            )  # Get current pill
-            label_el, _ = render_labelled_item(
-                label_text, content_component
-            )  # Get label
-
-            # Store original value and style for reset
-            original_value_str = str(current_value) if current_value is not None else ""
-            original_style_class = getattr(
-                content_component, "class", [DEFAULT_PILL_STYLE + " badge-sm"]
-            )[0].split()[0]  # Heuristic to get base style class
-
-            # Dropdown Items
-            dropdown_items = []
-            for opt_val, opt_style_enum in options_map.items():
-                # Get the actual style class string from the enum
-                opt_style_class = str(opt_style_enum)
-                # Use repr to safely quote strings in JS call
-                onclick_js = f"updatePill('{field_name}', {repr(opt_val)}, {repr(opt_val)}, '{opt_style_class}'); return false;"
-                dropdown_items.append(
-                    Li(
-                        A(
-                            Label(opt_val, cls=opt_style_enum + " badge-sm"),
-                            href="#",
-                            onclick=onclick_js,
-                        )
-                    )
-                )
-
-            # Hidden input to store current value
-            hidden_input = Input(
-                type="hidden",
-                id=f"input-{field_name}",
-                name=field_name,  # Important for potential future form submission
-                value=original_value_str,
-                data_original_value=original_value_str,  # Store original value
-                data_original_text=original_value_str,  # Store original text
-                data_original_style=original_style_class,  # Store original style
-            )
-
-            # Wrap the pill in a Button for dropdown trigger, add ID to the pill itself
-            pill_wrapper = Div(
-                cls="inline-block"
-            )(  # Dropdown container
-                Button(
-                    # Add ID to the visual pill element itself for easy JS targeting
-                    content_component(id=f"pill-display-{field_name}"),
-                    type="button",
-                    cls="p-0 m-0 bg-transparent border-none hover:opacity-80",  # Make button invisible
-                ),
-                DropDownNavContainer(
-                    *dropdown_items, cls="uk-dropdown-nav", uk_drop="mode: click"
-                ),
-                hidden_input,  # Include hidden input
-            )
-
-            # Apply inline layout classes
-            return Div(
-                label_el,
-                Div(pill_wrapper, cls="text-right"),
-                cls="flex items-center justify-between space-x-2 mb-2",  # label-inline-item styling
-            )
-
-        # --- End Dropdown Helper ---
-
-        # --- Create Combined Options for Manual Classification ---
         manual_classification_options = {}
         for val in PRIMARY_CLASSIFICATIONS:
             manual_classification_options[val] = LabelT.primary
@@ -926,12 +962,10 @@ async def show_item_details(
             manual_classification_options[val] = LabelT.secondary
         for val in DESTRUCTIVE_CLASSIFICATIONS:
             manual_classification_options[val] = LabelT.destructive
-        # Add 'onbekend' if not already present
         if "onbekend" not in manual_classification_options:
             manual_classification_options["onbekend"] = LabelT.secondary
 
         # --- 1. Header Row ---
-        # ... (header_content generation remains the same) ...
         filename = get_val("filename", "N/A") or "(file deleted or not found)"
         filename_content = H4(filename, cls="font-semibold text-lg break-all")
         file_url = get_val("url")
@@ -955,171 +989,130 @@ async def show_item_details(
             ),
         )
 
-        # --- 2. Main Content Row (2 Columns) ---
+        # --- 2/3. Main Content & Details (Wrap in Form) ---
         block_classes = "border border-[hsl(var(--ring))] rounded-md p-4 shadow-sm"
 
-        # Using the simplified create_labelled_item_div for non-editable fields
-        def create_readonly_item_div(
-            label_text: str, field_name: str, is_inline: bool = False
-        ):
-            content_component, html_tag = render_modal_field(
-                field_name, get_val(field_name)
-            )
-            label_el, content_el = render_labelled_item(
-                label_text, content_component, html_tag
-            )
-            container_cls = (
-                "flex items-center justify-between space-x-2 mb-2"
-                if is_inline
-                else "mb-3"
-            )
-            content_wrapper_cls = "text-right" if is_inline else ""
-            return Div(
-                label_el, Div(content_el, cls=content_wrapper_cls), cls=container_cls
-            )
-
-        item_info_block = Div(cls=f"{block_classes} space-y-1")(
-            create_readonly_item_div(
-                "Classification", "classification", is_inline=True
-            ),
-            create_readonly_item_div(
-                "ML Prediction", "ml_prediction", is_inline=True
-            ),  # Keep ML readonly for now
-            create_readonly_item_div("Period", "period"),
-            create_readonly_item_div("Faculty", "faculty"),
-            create_readonly_item_div("Owner", "owner"),
-            create_readonly_item_div("Department", "department"),
-            create_readonly_item_div("Course Name", "course_name"),
-            create_readonly_item_div("Course Code", "course_code"),
-        )
-
-        data_entry_block = Div(
-            cls=f"{block_classes} space-y-1"
-        )(
-            create_editable_pill_div(
-                "Workflow Status", "workflow_status", WORKFLOW_STYLES
-            ),  # Editable
-            create_editable_pill_div(
-                "Manual Classification",
-                "manual_classification",
-                manual_classification_options,
-            ),  # Editable
-            # Remarks (Editable)
-            Div(
-                Strong(
-                    "Remarks", cls="block text-xs font-medium text-base-content/80 mb-1"
-                ),
-                TextArea(
-                    get_val("remarks", ""),
-                    id="modal_remarks",
-                    name="remarks",
-                    rows="5",
-                    cls="textarea textarea-bordered w-full text-sm bg-base-100",  # Use base-100 for editable
-                    # Store original value and add JS trigger
-                    data_original_value=get_val("remarks", ""),
-                    oninput="markDirty()",
-                ),
-                cls="mb-3",
-            ),
-            Div(cls="flex justify-end space-x-2 mt-4")(
-                # Add onclick for Reset
-                Button(
-                    "Reset",
-                    cls=ButtonT.secondary + " btn-sm",
-                    onclick="resetModalForm(); return false;",
-                ),
-                # Add Save indicator and onclick alert, disable initially
-                Button(
-                    # Save indicator structure (initially hidden)
-                    Span(  # Relative container for positioning the ping
-                        Span(
-                            cls="relative flex size-3 mr-2"
-                        )(  # Use relative positioning
-                            Span(
-                                cls="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"
-                            ),
-                            UkIcon(
-                                "alert-triangle",
-                                cls="relative inline-flex size-3 text-red-500",
-                            ),  # Icon instead of solid circle
-                        ),
-                        id="save-indicator",
-                        cls="hidden",  # Hide initially
+        # Form wrapper for editable fields + hidden ID + save/reset
+        modal_form_content = Form(
+            # Hidden input for material_id MUST be inside the form
+            Input(type="hidden", name="material_id", value=material_id),
+            Input(type="hidden", name="page", value=nav_params["page"]),
+            Input(type="hidden", name="per_page", value=nav_params["per_page"]),
+            Input(type="hidden", name="sort_by", value=nav_params["sort_by"]),
+            Input(type="hidden", name="sort_desc", value=nav_params["sort_desc"]),
+            *[
+                Input(type="hidden", name=f"filter_{k}", value=v)
+                for k, v in current_modal_filters.items()
+            ],
+            # Main Content Grid (Item Info + Data Entry)
+            Div(cls="grid grid-cols-1 md:grid-cols-2 gap-4")(
+                # Left Column (Item Info Block - Readonly within form)
+                Div(cls=f"{block_classes}")(
+                    create_readonly_item_div(
+                        "Classification", "classification", is_inline=True
                     ),
-                    "Save",  # Button text
-                    id="modal-save-btn",  # Button ID
-                    cls=ButtonT.primary + " btn-sm",
-                    onclick="alert('Save functionality is not yet implemented.'); return false;",
-                    disabled=True,  # Disabled initially
+                    create_readonly_item_div(
+                        "ML Prediction", "ml_prediction", is_inline=True
+                    ),
+                    create_readonly_item_div("Period", "period"),
+                    create_readonly_item_div("Faculty", "faculty"),
+                    create_readonly_item_div("Owner", "owner"),
+                    create_readonly_item_div("Department", "department"),
+                    create_readonly_item_div("Course Name", "course_name"),
+                    create_readonly_item_div("Course Code", "course_code"),
+                ),
+                # Right Column (Data Entry Block - Interactive within form)
+                Div(cls=f"{block_classes} ")(
+                    create_editable_pill_div(
+                        "Workflow Status", "workflow_status", WORKFLOW_STYLES
+                    ),
+                    create_editable_pill_div(
+                        "Manual Classification",
+                        "manual_classification",
+                        manual_classification_options,
+                    ),
+                    Div(  # Remarks block layout
+                        Strong(
+                            "Remarks",
+                            cls="block text-xs font-medium text-base-content/80 mb-1 underline decoration-pink-300",
+                        ),
+                        TextArea(
+                            get_val("remarks", ""),
+                            id="modal_remarks",
+                            name="remarks",
+                            rows="5",
+                            cls="textarea textarea-bordered w-full text-sm bg-base-100",
+                            data_original_value=get_val("remarks", ""),
+                            oninput="markDirty()",
+                        ),
+                    ),
+                    # Save/Reset Buttons are part of this form now
+                    Div(cls="flex justify-end space-x-2 mt-4")(
+                        Button(
+                            "Reset",
+                            type="button",
+                            cls=ButtonT.secondary + " btn-sm",
+                            onclick="resetModalForm(); return false;",
+                        ),  # type=button prevents form submission
+                        Button(  # Save Button
+                            "Save",
+                            id="modal-save-btn",
+                            type="submit",
+                            cls=ButtonT.primary + " btn-sm",
+                            disabled=True,
+                        ),
+                        Span(  # Indicator Span
+                            Span(
+                                cls="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-500 opacity-75"
+                            ),
+                            Span(
+                                cls="relative inline-flex rounded-full h-3 w-3 bg-pink-500"
+                            ),
+                            id="save-indicator",
+                            cls="hidden flex relative h-3 w-3 top-0 right-4 -mt-2 -mr-1",
+                        ),
+                    ),
+                ),
+            ),  # End Main Content Grid
+            # Item Details Grid (Readonly info outside form scope, but within modal body)
+            Div(cls="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4")(  # Added mt-4
+                # Left Block (Text Details)
+                Div(cls=f"{block_classes} md:col-span-4")(
+                    create_readonly_item_div("Title", "title"),
+                    create_readonly_item_div("Author", "author"),
+                    create_readonly_item_div("Publisher", "publisher"),
+                    create_readonly_item_div("DOI", "doi"),
+                    create_readonly_item_div("ISBN", "isbn"),
+                ),
+                # Right Block (Numeric Details)
+                Div(cls=f"{block_classes} md:col-span-1")(  # Apply block styles
+                    Div(
+                        Strong("Pages"),
+                        Div(get_val("pagecount", "N/A"), cls="num-detail-val"),
+                        cls="num-detail-item",
+                    ),
+                    Div(
+                        Strong("Words"),
+                        Div(get_val("wordcount", "N/A"), cls="num-detail-val"),
+                        cls="num-detail-item",
+                    ),
+                    Div(
+                        Strong("Pictures"),
+                        Div(get_val("picturecount", "N/A"), cls="num-detail-val"),
+                        cls="num-detail-item",
+                    ),
                 ),
             ),
-        )
-
-        main_content_grid = Div(
-            item_info_block,
-            data_entry_block,
-            cls="grid grid-cols-1 md:grid-cols-2 gap-4",
-        )
-
-        # --- 3. Item Details Row (Split Blocks) ---
-        text_details_block = Div(
-            cls=f"{block_classes} space-y-1"
-        )(  # Apply block styles
-            create_readonly_item_div("Title", "title"),
-            create_readonly_item_div("Author", "author"),
-            create_readonly_item_div("Publisher", "publisher"),
-            create_readonly_item_div("DOI", "doi"),
-            create_readonly_item_div("ISBN", "isbn"),
-        )
-        numeric_details_block = Div(
-            cls=f"{block_classes} space-y-0.5"
-        )(  # Apply block styles
-            Div(
-                Strong("Pages"),
-                Div(
-                    get_val("pagecount", "N/A"),
-                    cls="p-1 px-1.5 border rounded bg-base-200 text-sm text-red-600 font-mono text-right min-w-[40px]",
-                ),
-                cls="flex justify-between items-baseline text-sm mb-1",
-            ),
-            Div(
-                Strong("Words"),
-                Div(
-                    get_val("wordcount", "N/A"),
-                    cls="p-1 px-1.5 border rounded bg-base-200 text-sm text-red-600 font-mono text-right min-w-[40px]",
-                ),
-                cls="flex justify-between items-baseline text-sm mb-1",
-            ),
-            Div(
-                Strong("Pictures"),
-                Div(
-                    get_val("picturecount", "N/A"),
-                    cls="p-1 px-1.5 border rounded bg-base-200 text-sm text-red-600 font-mono text-right min-w-[40px]",
-                ),
-                cls="flex justify-between items-baseline text-sm mb-1",
-            ),
-        )
-
-        # Use 5 columns for 80/20 split, apply gap
-        item_details_grid = Div(
-            text_details_block(cls="md:col-span-4"),  # Takes 4 columns
-            numeric_details_block(cls="md:col-span-1"),  # Takes 1 column
-            cls="grid grid-cols-1 md:grid-cols-5 gap-4",
+            id="modal-details-form",
+            hx_post=save_item_details.to(),
+            hx_indicator="#modal-loading-indicator",
         )
 
         # --- 4. Footer Row (with HTMX for Next/Prev) ---
-        nav_params = {  # ... (nav_params setup remains the same) ...
-            "page": page,
-            "per_page": per_page,
-            "sort_by": sort_by or "",
-            "sort_desc": sort_desc,
-            **{f"filter_{k}": v for k, v in current_modal_filters.items()},
-        }
 
-        # Add hx-indicator to buttons
-        indicator_attrs = {"hx_indicator": "#modal-loading-indicator"}  # Define once
+        indicator_attrs = {"hx_indicator": "#modal-loading-indicator"}
 
-        prev_button_attrs = {  # ... (existing attrs) ...
+        prev_button_attrs = {
             "id": "modal-prev-btn",
             "cls": ButtonT.secondary + " btn-sm",
             "disabled": prev_id is None,
@@ -1135,7 +1128,7 @@ async def show_item_details(
             )
         prev_button = Button("< Prev", **prev_button_attrs)
 
-        next_button_attrs = {  # ... (existing attrs) ...
+        next_button_attrs = {
             "id": "modal-next-btn",
             "cls": ButtonT.secondary + " btn-sm",
             "disabled": next_id is None,
@@ -1158,30 +1151,19 @@ async def show_item_details(
                 next_button,
             )
         )
-
         # --- Assemble Modal Box Content ---
         modal_box_content = Div(
-            # Add ID for form reset targeting
-            id="modal-details-form",
-            cls="modal-box w-[85vw] max-w-none h-[calc(100vh-5rem)] max-h-none flex flex-col",
+            cls="modal-box w-[85vw] max-w-none h-[calc(100vh-5rem)] max-h-none flex flex-col"
         )(
             Div(header_content, cls="border-b pb-2 flex-shrink-0"),
-            # Add loading indicator inside scroll area but outside specific blocks
-            Div(
-                # Loading indicator element (initially hidden by htmx-indicator rules)
+            Div(cls="relative py-4 flex-grow overflow-y-auto ")(
                 Div(
                     id="modal-loading-indicator",
                     cls="htmx-indicator absolute inset-0 bg-base-100/50 flex items-center justify-center z-50",
-                )(
-                    Span(
-                        "Loading...", cls="loading loading-lg"
-                    )  # Or use monsterui Loading
-                ),
-                main_content_grid,
-                item_details_grid,
-                cls="relative py-4 flex-grow overflow-y-auto space-y-4",  # Add relative for indicator positioning
+                )(Span("Loading...", cls="loading loading-lg")),
+                modal_form_content,
             ),
-            footer_content(cls="flex-shrink-0"),  # Ensure footer doesn't grow
+            footer_content(cls="flex-shrink-0"),
         )
 
         # --- Backdrop ---
@@ -1194,15 +1176,14 @@ async def show_item_details(
         response_content = (modal_box_content, modal_backdrop)
         return response_content, HtmxResponseHeaders(
             trigger="openModalEvent"
-        )  # Still trigger open
+        )  # Trigger open on initial load/next/prev
 
     except Exception as e:
-        # ... (Error handling remains similar) ...
         print(f"Error generating modal content for ID {material_id}: {e}")
         print(traceback.format_exc())
         modal_box_content = Div(cls="modal-box")(
             H3("Error"),
-            P(f"An error occurred: {e}"),  # ...
+            P(f"An error occurred: {e}"),
         )
         modal_backdrop = Form(method="dialog", cls="modal-backdrop")(
             NotStr(
@@ -1219,15 +1200,14 @@ async def data_grid(
     request: Request,
     page: int = 1,
     per_page: int = DEFAULT_PER_PAGE,
-    sort_by: Optional[str] = None,
+    sort_by: str | None = None,
     sort_desc: str = "False",
-    # Explicit filter args (unchanged)
     filter_department: str = "",
     filter_course_name: str = "",
     filter_manual_classification: str = "",
     filter_ml_classification: str = "",
     filter_status: str = "",
-    filter_faculty_id: str = "",
+    filter_faculty: str = "",
     filter_author: str = "",
     filter_publisher: str = "",
     filter_workflow_status: str = "",
@@ -1239,12 +1219,14 @@ async def data_grid(
         "manual_classification": filter_manual_classification.strip(),
         "ml_classification": filter_ml_classification.strip(),
         "status": filter_status.strip(),
-        "faculty_id": filter_faculty_id.strip(),
+        "faculty": filter_faculty.strip(),
         "author": filter_author.strip(),
         "publisher": filter_publisher.strip(),
         "workflow_status": filter_workflow_status.strip(),
     }
     current_filters = {k: v for k, v in current_filters.items() if v}
+    print(f"filters in data_grid route: {current_filters}")
+
     sort_desc_bool = sort_desc.lower() == "true"
 
     filtered_sorted_df = get_filtered_sorted_df(
@@ -1255,7 +1237,7 @@ async def data_grid(
     page = max(1, min(page, total_pages if total_pages > 0 else 1))
     offset = (page - 1) * per_page
     df_slice = filtered_sorted_df.slice(offset, per_page)
-
+    print(f"filters in data_grid route: {current_filters}")
     grid_component = render_data_grid_component(
         df_slice=df_slice,
         current_page=page,
@@ -1281,95 +1263,8 @@ async def data_grid(
         modal_placeholder = Dialog(
             id="modal-placeholder", cls="modal modal-bottom sm:modal-middle"
         )
-        modal_interaction_script = Script("""
-            // Function to update a pill's appearance and hidden input value
-            function updatePill(fieldName, newValue, newText, newStyleClass) {
-                const pillElement = document.getElementById(`pill-display-${fieldName}`);
-                const inputElement = document.getElementById(`input-${fieldName}`);
-                if (pillElement && inputElement) {
-                    // Update hidden input
-                    inputElement.value = newValue;
-                    // Update visible pill text
-                    pillElement.textContent = newText;
-                    // Update visible pill style (remove old, add new)
-                    // Assumes style classes are like 'uk-label-primary', 'uk-label-secondary', etc.
-                    pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive');
-                    if (newStyleClass) { // Add new style if provided
-                       pillElement.classList.add(newStyleClass);
-                    } else { // Fallback if no specific style maps (e.g., for 'N/A')
-                        pillElement.classList.add('uk-label-secondary'); // Or your default
-                    }
-                    // Close the dropdown (assuming uk-drop is used)
-                    const drop = UIkit.drop(pillElement.closest('[uk-drop]'));
-                    if (drop) { drop.hide(false); }
-
-                    markDirty(); // Mark form as dirty
-                } else {
-                    console.error(`Cannot find pill or input elements for ${fieldName}`);
-                }
-            }
-
-            // Function to mark the form as dirty (show save indicator)
-            function markDirty() {
-                const indicator = document.getElementById('save-indicator');
-                const saveButton = document.getElementById('modal-save-btn');
-                if (indicator) {
-                    indicator.classList.remove('hidden');
-                }
-                 if (saveButton) {
-                    saveButton.disabled = false; // Enable save button
-                }
-            }
-
-            // Function to reset the modal form fields to original values
-            function resetModalForm() {
-                const form = document.getElementById('modal-details-form'); // Need to add this ID to the modal-box div or a form wrapper
-                if (!form) return;
-
-                // Reset Pills (Workflow Status, Manual Classification)
-                const pillInputs = form.querySelectorAll('input[data-original-value]');
-                pillInputs.forEach(input => {
-                    const originalValue = input.dataset.originalValue;
-                    const originalText = input.dataset.originalText; // Need to store this
-                    const originalStyle = input.dataset.originalStyle; // Need to store this
-                    const fieldName = input.id.replace('input-', ''); // Extract field name
-
-                    // Reset hidden input
-                    input.value = originalValue;
-
-                    // Reset visible pill
-                    const pillElement = document.getElementById(`pill-display-${fieldName}`);
-                    if (pillElement) {
-                        pillElement.textContent = originalText;
-                        pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive');
-                         if (originalStyle) {
-                             pillElement.classList.add(originalStyle);
-                         } else {
-                             pillElement.classList.add('uk-label-secondary'); // Default
-                         }
-                    }
-                });
-
-                // Reset Remarks Textarea
-                const remarksTextarea = form.querySelector('#modal_remarks');
-                if (remarksTextarea && remarksTextarea.dataset.originalValue) {
-                    remarksTextarea.value = remarksTextarea.dataset.originalValue;
-                }
-
-                // Hide save indicator and disable save button
-                const indicator = document.getElementById('save-indicator');
-                const saveButton = document.getElementById('modal-save-btn');
-                 if (indicator) {
-                    indicator.classList.add('hidden');
-                }
-                 if (saveButton) {
-                    saveButton.disabled = true;
-                }
-            }
-        """)
         modal_trigger_script = Script("""
             document.body.addEventListener('openModalEvent', function(evt) {
-                // Target the persistent dialog element directly by its ID
                 const modalDialog = document.getElementById('modal-placeholder');
                 if (modalDialog && typeof modalDialog.showModal === 'function') {
                     console.log('Opening modal via openModalEvent (Target: #modal-placeholder)');
@@ -1379,7 +1274,163 @@ async def data_grid(
                 }
             });
         """)
-        # Update the return tuple for the full page load
+
+        modal_interaction_script = Script(f"""
+            // Function to update a pill's appearance and hidden input value
+            function updatePill(fieldName, newValue, newText, newStyleClass) {{
+                const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
+                const inputElement = document.getElementById(`input-${{fieldName}}`);
+                if (pillElement && inputElement) {{
+                    // Update hidden input
+                    inputElement.value = newValue;
+                    // Update visible pill text
+                    pillElement.textContent = newText;
+                    // Update visible pill style (remove old, add new)
+                    // Assumes style classes are like 'uk-label-primary', 'uk-label-secondary', etc.
+                    pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive');
+                    if (newStyleClass) {{ // Add new style if provided
+                    pillElement.classList.add(newStyleClass);
+                    }} else {{ // Fallback if no specific style maps (e.g., for 'N/A')
+                        pillElement.classList.add('uk-label-secondary'); // Or your default
+                    }}
+                    // Close the dropdown (assuming uk-drop is used)
+                    const drop = UIkit.drop(pillElement.closest('[uk-drop]'));
+                    if (drop) {{ drop.hide(false); }}
+                    markDirty(); // Mark form as dirty
+                }} else {{
+                    console.error(`Cannot find pill or input elements for ${{fieldName}}`);
+                }}
+            }}
+            function markDirty() {{
+                const indicator = document.getElementById('save-indicator');
+                const saveButton = document.getElementById('modal-save-btn');
+                if (indicator) indicator.classList.remove('hidden');
+                if (saveButton) saveButton.disabled = false; // Make sure it's enabled
+            }}
+
+            // Function to reset the modal form fields to original values
+            function resetModalForm() {{
+                console.log('Resetting modal form'); // Debug log
+                const form = document.getElementById('modal-details-form');
+                if (!form) return;
+
+                const pillInputs = form.querySelectorAll('input[data-original-value][id^="input-"]'); // Target only pill inputs
+                pillInputs.forEach(input => {{
+                    const originalValue = input.dataset.originalValue;
+                    const originalText = input.dataset.originalText || originalValue; // Fallback text
+                    const originalStyle = input.dataset.originalStyle || '{str(DEFAULT_PILL_STYLE)}'; // Fallback style
+                    const fieldName = input.id.replace('input-', '');
+
+                    // Reset hidden input
+                    input.value = originalValue;
+
+                    // Reset visible pill
+                    const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
+                    if (pillElement) {{
+                        pillElement.textContent = originalText;
+                        pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive');
+                        if (originalStyle && originalStyle.startsWith('uk-label-')) {{ // Ensure it's a valid style class
+                            pillElement.classList.add(originalStyle);
+                        }} else {{
+                             pillElement.classList.add('{str(DEFAULT_PILL_STYLE)}'); // Default
+                        }}
+                    }}
+                }});
+
+                const remarksTextarea = form.querySelector('#modal_remarks');
+                if (remarksTextarea && typeof remarksTextarea.dataset.originalValue !== 'undefined') {{ // Check if attribute exists
+                    remarksTextarea.value = remarksTextarea.dataset.originalValue;
+                }}
+
+                // Hide save indicator and disable save button
+                const indicator = document.getElementById('save-indicator');
+                const saveButton = document.getElementById('modal-save-btn');
+                if (indicator) {{
+                    indicator.classList.add('hidden');
+                }}
+                if (saveButton) {{
+                    saveButton.disabled = true;
+                }}
+            }}
+        """)
+
+        htmx_toast_template = Template(
+            Div(
+                Span(slot="message"),
+                Button(
+                    "✕",
+                    type="button",
+                    cls="btn btn-sm btn-outline",
+                    aria_label="Close",
+                    slot="close",
+                ),
+                cls="alert",
+                slot="alert",
+            ),
+            id="htmx-toasts-template",
+        )
+
+        htmx_toast_settings = Htmx_toasts(
+            timeout="30000",
+            cls="toast",
+            role="status",
+            aria_live="polite",
+            error_class="alert-error",
+            info_class="alert-info",
+            warn_class="alert-warning",
+            success_class="alert-success",
+        )
+
+        htmx_toast_script = Script("""
+        document.addEventListener("save_success", function(evt) {
+                window.dispatchEvent(new CustomEvent('htmx-toasts:notify', {
+                    detail: {
+                        message: 'Successfully saved data for material ID: ' + evt.detail.material_id,
+                        level: 'success'
+                    }
+                }));
+
+                // 2. Reset modal dirty state
+                // Hide save indicator
+                const indicator = document.getElementById('save-indicator');
+                if (indicator) indicator.classList.add('hidden');
+
+                const saveButton = document.getElementById('modal-save-btn');
+                if (saveButton) saveButton.disabled = true;
+
+                const form = document.getElementById('modal-details-form');
+                if (form) {
+                    const fieldsToUpdate = ['input-workflow_status', 'input-manual_classification', 'modal_remarks'];
+                    fieldsToUpdate.forEach(id => {
+                        const element = form.querySelector('#' + id);
+                        if (element) {
+                            element.dataset.originalValue = element.value;
+                            if(id.startsWith('input-')) {
+                                const fieldName = id.replace('input-', '');
+                                const pillElement = document.getElementById(`pill-display-${fieldName}`);
+                                if(pillElement) {
+                                    element.dataset.originalText = pillElement.textContent;
+                                    const styleClass = Array.from(pillElement.classList).find(cls => cls.startsWith('uk-label-')) || '';
+                                    element.dataset.originalStyle = styleClass;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+
+
+        document.addEventListener("save_error", function(evt) {
+                window.dispatchEvent(new CustomEvent('htmx-toasts:notify', {
+                    detail: {
+                        message: 'Error saving data for material ID: ' + evt.detail.material_id,
+                        level: 'error'
+                    }
+                }));
+            });
+        """)
+
+        # Update the return tuple
         return (
             Title("Copyright Data Dashboard"),
             Div(  # page-container
@@ -1388,12 +1439,115 @@ async def data_grid(
             ),
             modal_placeholder,
             modal_trigger_script,
-            modal_interaction_script,  # Add the new script
+            modal_interaction_script,
+            htmx_toast_template,
+            htmx_toast_settings,
+            htmx_toast_script,
         )
 
     else:
-        # HTMX swap: Replace just the grid component
         return grid_component
+
+
+@rt("/save_details", methods=["POST"])
+async def save_item_details(
+    request: Request,
+    # Editable fields
+    material_id: int,
+    workflow_status: str = "",
+    manual_classification: str = "",
+    remarks: str = "",
+    # State fields from hidden inputs
+    page: int = 1,
+    per_page: int = DEFAULT_PER_PAGE,
+    sort_by: Optional[str] = None,
+    sort_desc: str = "False",
+    filter_department: str = "",
+    filter_course_name: str = "",
+    filter_manual_classification: str = "",  # Note: might conflict with editable field?
+    filter_ml_prediction: str = "",
+    filter_status: str = "",
+    filter_faculty: str = "",
+    filter_author: str = "",
+    filter_publisher: str = "",
+    filter_workflow_status: str = "",  # Note: might conflict with editable field?
+):
+    """Handles saving changes, updates global df, returns OOB grid refresh + JS trigger."""
+    global copyright_df_global
+
+    print(f"Saving changes for material_id: {material_id}")
+    update_data = {
+        "material_id": material_id,
+        "workflow_status": workflow_status,
+        "manual_classification": manual_classification,
+        "remarks": remarks,
+    }
+
+    oob_grid_swap = Div()  # Default empty div
+    trigger_name = ""
+
+    try:
+        await store_item_changes(update_data)
+
+        print("Reloading global DataFrame after save...")
+        copyright_df_global = retrieve_copyright_items()
+        print("Global DataFrame reloaded.")
+
+        current_grid_filters: dict[str, str] = {
+            "department": filter_department.strip(),
+            "course_name": filter_course_name.strip(),
+            "manual_classification": filter_manual_classification.strip(),
+            "ml_prediction": filter_ml_prediction.strip(),
+            "status": filter_status.strip(),
+            "faculty": filter_faculty.strip(),
+            "author": filter_author.strip(),
+            "publisher": filter_publisher.strip(),
+            "workflow_status": filter_workflow_status.strip(),
+        }
+        current_grid_filters = {k: v for k, v in current_grid_filters.items() if v}
+        grid_sort_desc_bool = sort_desc.lower() == "true"
+
+        # Re-filter and slice for the current page view
+        filtered_sorted_df = get_filtered_sorted_df(
+            sort_by, grid_sort_desc_bool, current_grid_filters
+        )
+        total_filtered_rows = filtered_sorted_df.height
+        total_pages = math.ceil(total_filtered_rows / per_page) if per_page > 0 else 1
+        page = max(1, min(page, total_pages if total_pages > 0 else 1))
+        offset = (page - 1) * per_page
+        df_slice = filtered_sorted_df.slice(offset, per_page)
+
+        # Render the grid component HTML
+        updated_grid_component = render_data_grid_component(
+            df_slice=df_slice,
+            current_page=page,
+            total_pages=total_pages,
+            per_page=per_page,
+            total_filtered_rows=total_filtered_rows,
+            offset=offset,
+            sort_by=sort_by,
+            sort_desc=grid_sort_desc_bool,
+            current_filters=current_grid_filters,
+        )
+
+        # --- Create OOB Swap Div for the Grid ---
+        oob_grid_swap = Div(
+            to_xml(updated_grid_component),
+            hx_swap_oob="outerHTML:#data-grid-component",
+        )
+
+        trigger_name = {"save_success": {"material_id": material_id}}
+
+    except Exception as e:
+        print(f"Error saving changes for {material_id}: {e}")
+        trigger_name: dict[str, dict[str, int]] = {
+            "save_error": {"material_id": material_id}
+        }
+
+    return oob_grid_swap, HtmxResponseHeaders(
+        reswap="none",
+        trigger=json.dumps(trigger_name),  # Directly trigger the JS function name
+    )
 
 
 @rt("/")

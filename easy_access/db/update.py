@@ -2,12 +2,15 @@
 functions to update existing data in the database
 """
 
-from datetime import datetime, timezone
+import contextlib
+import traceback
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 import polars as pl
 from loguru import logger
+from rich import print
 from tortoise import Tortoise
 
 from easy_access.db.base import copyright_item_from_dict, init, standardize_dataframe
@@ -134,7 +137,9 @@ async def update_copyright_relations() -> None:
 
 
 async def update_copyright_items(
-    data: pl.DataFrame | list[dict], update_relations: bool = True
+    data: pl.DataFrame | list[dict],
+    update_relations: bool = True,
+    overwrite: bool = False,
 ) -> None:
     """
     Update the db with copyrightitems from the dataframe (or pre-filtered list of dicts from a df).
@@ -142,36 +147,38 @@ async def update_copyright_items(
     See `compare_items` and the dicts added_fields, changeable_fields, core_fields for details on how the comparison is done.
 
     Once done, and if any updates were made, will call `update_copyright_relations` to update the m2m relations.
+
+    Options:
+    - `update_relations`: if True, will call `update_copyright_relations` to update the m2m relations after the update.
+    - `overwrite`: if True, will overwrite the existing items in the db with the new ones instead of using the comparison logic.
     """
+
+    def change(
+        changes: dict, field: str, new_value: Any, old_value: Any, reason: str
+    ) -> dict:
+        logger.debug(f"[{reason}] [{field}] {old_value} --> {new_value}")
+        changes[field] = {"old": str(old_value), "new": str(new_value)}
+        setattr(db_item, field, new_value)
+        return changes
 
     def compare_fields(
         new_item: dict, db_item: CopyrightItem, fielddict: dict, changes: dict
     ) -> tuple[dict, CopyrightItem]:
-        def change(
-            changes: dict, field: str, new_value: Any, old_value: Any, reason: str
-        ) -> dict:
-            logger.debug(f"[{reason}] [{field}] {old_value} --> {new_value}")
-            changes[field] = {"old": str(old_value), "new": str(new_value)}
-            setattr(db_item, field, new_value)
-            return changes
-
         if not changes:
             changes = {
                 "material_id": new_item.get("material_id"),
                 "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-
         for field, ordering in fielddict.items():
             new_value = new_item.get(field)
             old_value = getattr(db_item, field)
-
             try:
                 if isinstance(old_value, datetime):
                     new_value = None
                     try:
                         new_value = (
                             datetime.strptime(new_value, "%Y-%m-%d %H:%M:%S%z").replace(
-                                tzinfo=timezone.utc
+                                tzinfo=UTC
                             )
                             if new_value
                             else None
@@ -181,23 +188,20 @@ async def update_copyright_items(
                             new_value = (
                                 datetime.strptime(
                                     new_value, "%Y-%m-%d %H:%M:%S"
-                                ).replace(tzinfo=timezone.utc)
+                                ).replace(tzinfo=UTC)
                                 if new_value
                                 else None
                             )
                         except Exception:
-                            try:
+                            with contextlib.suppress(Exception):
                                 new_value = (
                                     datetime.strptime(new_value, "%Y-%m-%d").replace(
-                                        tzinfo=timezone.utc
+                                        tzinfo=UTC
                                     )
                                     if new_value
                                     else None
                                 )
-                            except Exception:
-                                ...
-
-                    old_value = old_value.replace(tzinfo=timezone.utc)
+                    old_value = old_value.replace(tzinfo=UTC)
                 if isinstance(old_value, Enum):
                     old_value = old_value.value
                 if isinstance(old_value, float):
@@ -370,62 +374,68 @@ async def update_copyright_items(
     info(f"Updating {len(update_items)} existing items.")
     changelist = []
     updates = {}
-
     for new_item in update_items:
-        try:
-            db_item = await CopyrightItem.get(material_id=new_item.get("material_id"))
-            changes = {}
-            changes, db_item = compare_fields(new_item, db_item, added_fields, changes)
-            changes, db_item = compare_fields(
-                new_item, db_item, changeable_fields, changes
-            )
+        if overwrite:
+            try:
+                # if overwrite is True, just create a new item and skip the rest
+                db_item = await CopyrightItem.get(
+                    material_id=new_item.get("material_id")
+                )
 
-            if new_item.get("last_change"):
-                # if new_item has a newer last_change value, we need to update the core CopyRight fields
-                item_last_changed = None
-                db_last_changed = None
-                try:
-                    item_last_changed = datetime.strptime(
-                        new_item.get("last_change"), "%Y-%m-%d"
-                    ).replace(tzinfo=timezone.utc)
-                    db_last_changed = (
-                        db_item.last_change.replace(tzinfo=timezone.utc)
-                        if db_item.last_change
-                        else None
-                    )
-                except Exception:
-                    pass
+                changes = {
+                    "material_id": new_item.get("material_id"),
+                    "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                print(f"now in overwrite function for {new_item.get('material_id')}")
+                for k in changeable_fields:
+                    if new_item.get(k) != getattr(db_item, k):
+                        changes = change(
+                            changes,
+                            k,
+                            new_item.get(k),
+                            getattr(db_item, k),
+                            "[overwrite] new value != old value",
+                        )
+                # if any changes were made we'll have 3 or more keys in the changes dict
+                # if not, no need to update the db
+                if len(changes) >= 3:
+                    changes["modified_at"] = datetime.now()
+                    updates[new_item.get("material_id")] = changes
+                    changelist.append(db_item)
+                else:
+                    print(f"No changes for item {new_item.get('material_id')}.")
+            except Exception as e:
+                warn(f"Could not update item {new_item.get('material_id')}: {e}")
+                warn(traceback.format_exc())
+        else:
+            try:
+                db_item = await CopyrightItem.get(
+                    material_id=new_item.get("material_id")
+                )
+                changes = {}
+                changes, db_item = compare_fields(
+                    new_item, db_item, added_fields, changes
+                )
+                changes, db_item = compare_fields(
+                    new_item, db_item, changeable_fields, changes
+                )
 
-                if isinstance(item_last_changed, datetime) and isinstance(
-                    db_last_changed, datetime
-                ):
-                    if item_last_changed > db_last_changed:
-                        # replace the core fields in the db item with new values
-                        for field in core_fields:
-                            if new_item.get("field"):
-                                if new_item.get("field") != getattr(db_item, field):
-                                    logger.debug(
-                                        f"[core field] Changing field {field} for item {db_item.material_id} from {getattr(db_item, field)} to {new_item.get(field)}"
-                                    )
-                                    changes[field] = {
-                                        "old": getattr(db_item, field),
-                                        "new": str(new_item.get(field)),
-                                    }
-                                    setattr(db_item, field, new_item.get(field))
-        except Exception as e:
-            warn(f"Could not update item {new_item.get('material_id')}: {e}")
-        finally:
-            if len(list(changes.keys())) >= 3:
-                changes["modified_at"] = datetime.now()
-                updates[new_item.get("material_id")] = changes
-                changelist.append(db_item)
+            except Exception as e:
+                warn(f"Could not update item {new_item.get('material_id')}: {e}")
+            finally:
+                if len(list(changes.keys())) >= 3:
+                    changes["modified_at"] = datetime.now()
+                    updates[new_item.get("material_id")] = changes
+                    changelist.append(db_item)
 
     if changelist:
+        print(f"changelist: {changelist}")
+        print(f"updates: {updates}")
         # get all values from 'updates'
         # then get list of all distinct keys from all those dicts
         # then drop keys 'material_id' and 'update_time'
         # then add all those keys to the fields to update
-        all_keys = {key for item in updates.values() for key in item.keys()}
+        all_keys = {key for item in updates.values() for key in item}
         all_keys.discard("material_id")
         all_keys.discard("update_time")
         changed_fields = list(all_keys)
@@ -441,7 +451,7 @@ async def update_copyright_items(
         )
 
         # now add each ItemUpdate as a m2m relation to the corresponding CopyrightItem
-        for mat_id in updates.keys():
+        for mat_id in updates:
             item = await CopyrightItem.get(material_id=mat_id)
             update = (
                 await ItemUpdate.filter(material_id=mat_id)

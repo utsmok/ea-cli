@@ -2,6 +2,7 @@
 Base & util functions for db-related operations
 """
 
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -73,7 +74,7 @@ def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
         .with_columns(
             pl.when(pl.col(pl.String) != "-").then(pl.col(pl.String)).name.keep()
         )
-        .filter((pl.col("material_id").is_not_null()))
+        .filter(pl.col("material_id").is_not_null())
     )
 
     if "filetype" in df.columns:
@@ -150,11 +151,17 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
             if isinstance(item.get("last_change"), str)
             else None
         )
+
         item["retrieved_from_copyright_on"] = (
-            datetime.strptime(item.get("retrieved_from_copyright_on", ""), "%Y-%m-%d")
+            (
+                datetime.strptime(
+                    item["retrieved_from_copyright_on"].split(" ")[0], "%Y-%m-%d"
+                )
+            )
             if item.get("retrieved_from_copyright_on")
             else None
         )
+
         item["pagecount"] = int(item.get("pagecount")) if item.get("pagecount") else 0
         item["wordcount"] = int(item.get("wordcount")) if item.get("wordcount") else 0
         item["picturecount"] = (
@@ -180,7 +187,7 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
         if not item.get("course_name"):
             item["course_name"] = item.get("course_name_canvas")
         final_dict = {}
-        for key in item.keys():
+        for key in item:
             if key in copyright_item_keys:
                 final_dict[key] = item[key]
 
@@ -191,5 +198,7 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
         warn(
             f"Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}"
         )
+        print(traceback.format_exc())
         print(item)
+
         return None
