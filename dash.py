@@ -12,12 +12,12 @@ import fasthtml.common as fh
 import polars as pl
 from fastcore.xml import FT
 from fasthtml.common import *
-from fasthtml.components import Htmx_toasts
+from fasthtml.components import Button, Htmx_toasts
 from monsterui.all import *
 from monsterui.foundations import VEnum, str2ukcls
 from rich import print
 
-from easy_access.db.retrieve import retrieve_copyright_items
+from easy_access.db.retrieve import retrieve_copyright_items, retrieve_osiris_data
 from easy_access.db.update import update_copyright_items
 
 # --- monsterui fixes ---
@@ -88,6 +88,72 @@ def _headers_theme(
 
 
 # --- app setup ---
+
+
+def ItemDetailCard(
+    title: str,
+    *body_content: Any,
+    card_id: str,
+    col_span: int = 1,
+    start_collapsed: bool = False,
+    color: str = "[var(--ring)]",
+    lazy_load_url: str | None = None,
+) -> FT:
+    """
+    Creates a collapsible card component for the modal using <details>.
+    Includes optional lazy loading via HTMX.
+    """
+    col_span = max(1, min(col_span, 3))
+    col_span_class = f"md:col-span-{col_span}"
+
+    border_color_class = (
+        f"border-{color}-500" if color != "base" else "border-[var(--ring)]"
+    )
+    card_classes = f"bg-{color}-100 border {border_color_class} rounded-lg shadow-sm  {col_span_class}"
+
+    summary_classes = f"p-3 bg-{color}-100 hover:bg-{color}-200 cursor-pointer list-none flex items-center justify-between"
+    content_classes = "p-4 border-t border-[var(--ring)]"
+    chevron_icon = Span(
+        "▼", cls="text-xs transition-transform duration-200 chevron-icon"
+    )
+
+    content_target_id = f"{card_id}-content"
+    summary_htmx_attrs = {}
+    if lazy_load_url:
+        # If lazy loading, initial content is a placeholder + indicator
+        actual_body_content = (
+            Span("Loading...", cls="italic text-sm text-base-content/70"),
+            Div(id=f"{card_id}-loading", cls="htmx-indicator text-center p-2")(
+                Span(cls="loading loading-sm")
+            ),
+        )
+        # --- Set HTMX attributes on the <summary> tag ---
+        summary_htmx_attrs = {
+            "hx_get": lazy_load_url,
+            "hx_target": f"#{content_target_id}",  # Target the inner div
+            "hx_swap": "innerHTML",
+            "hx_trigger": "click once",  # Trigger on first click of the summary
+            "hx_indicator": f"#{card_id}-loading",
+        }
+    else:
+        actual_body_content = body_content
+
+    content_div = Div(*actual_body_content, id=content_target_id, cls=content_classes)
+    summary_element = Summary(
+        H5(title, cls="font-semibold text-sm m-0"),
+        chevron_icon,
+        cls=summary_classes,
+        **summary_htmx_attrs,  # Add HTMX attributes HERE
+    )
+    return Details(
+        summary_element,
+        content_div,
+        id=card_id,
+        cls=card_classes,
+        **({} if start_collapsed else {"open": True}),
+    )
+
+
 GLOBAL_STYLES = Style("""
     * {
         font-family: "Inter", sans-serif;
@@ -126,7 +192,6 @@ GLOBAL_STYLES = Style("""
         white-space: normal;
         min-width: 150px;
     }
-    /* Pill styling  */
     #data-table .badge { /* If using daisyUI badges instead of Label */
         min-width: 80px;
         display: inline-block;
@@ -205,10 +270,17 @@ GLOBAL_STYLES = Style("""
         --chart-5: 78 73% 30%;
     }
 
-
+    /* text highlight color */
     mark {
         background-color: hsl(78 70% 50%) !important;
     }
+
+    /* styles for the card element */
+    details > summary { transition: margin 150ms ease-out; }
+    details[open] > summary { margin-bottom: 0; }
+    details summary .chevron-icon { transition: transform 0.2s ease-in-out; }
+    details[open] summary .chevron-icon { transform: rotate(-180deg); }
+
 """)
 
 reg_re_param(
@@ -233,6 +305,10 @@ app, rt = fast_app(
         Script(
             src="https://unpkg.com/@htmx/htmx-toasts@latest/dist/index.js",
             type="module",
+        ),
+        Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit.min.js"),
+        Script(
+            src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit-icons.min.js"
         ),
     ),
     exts="loading-states",
@@ -776,7 +852,7 @@ def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
     elif value is None:
         return Span("N/A", cls="text-base-content/70 text-sm"), "span"
     elif isinstance(value, int | float):
-        return value, "number"
+        return Label(value, cls=style + " badge-sm"), "label"
     else:
         return Span(display_text, cls="text-sm break-words"), "span"
 
@@ -789,7 +865,7 @@ def render_labelled_item(
     """Helper to create a standard label Strong tag and return the content component.
     Layout is handled by the caller."""
     label_element = Strong(
-        label_text, cls="block text-xs font-medium text-base-content/80 mb-1"
+        label_text, cls="block text-sm font-medium text-base-content/80 mb-1"
     )
     if html_tag == "number":
         content_element = Div(
@@ -835,23 +911,20 @@ async def show_item_details(
 
     def create_editable_pill_div(label_text: str, field_name: str, options_map: dict):
         current_value = get_val(field_name)
-
         content_component, html_tag = render_modal_field(field_name, current_value)
         label_el, _ = render_labelled_item(label_text, content_component, html_tag)
-
         original_value_str = str(current_value) if current_value is not None else ""
         original_style_class = DEFAULT_PILL_STYLE + " badge-sm"
         component_with_id = content_component
-
-        if "attrs" in content_component.__dict__:
+        if (
+            hasattr(content_component, "__dict__")
+            and "attrs" in content_component.__dict__
+        ):
             attrs_orig = content_component.__dict__["attrs"]
-
             attrs_new = attrs_orig.copy() if isinstance(attrs_orig, dict) else {}
             attrs_new["id"] = f"pill-display-{field_name}"
-
             component_with_id.__setattr__("attrs", attrs_new)
-
-            current_classes = attrs_new.get("class", "").split()
+            current_classes = attrs_new.get("cls", "").split()
             labelt_values = {str(lt) for lt in LabelT}
             found_style = next(
                 (cls for cls in current_classes if cls in labelt_values), None
@@ -883,23 +956,20 @@ async def show_item_details(
             data_original_style=original_style_class,
         )
 
-        pill_wrapper = Div(cls="inline-block uk-inline")(
-            Button(
-                component_with_id,  #
-                type="button",
-                cls="p-0 m-0 bg-transparent border-none hover:opacity-80 focus:outline-none ring-0",
-            ),
+        pill_container = Div(
+            component_with_id,
             Div(
                 Ul(*dropdown_items, cls="uk-nav uk-dropdown-nav"),
-                cls="uk-dropdown w-auto z-10",
-                uk_drop="mode: click; pos: bottom-right",
+                cls="uk-dropdown w-auto bg-base-100 p-2 shadow-lg rounded-md border border-base-300",
+                uk_drop="mode: click; pos: bottom-right; boundary: !.modal-box; flip: false",
             ),
             hidden_input,
+            cls="inline-block uk-inline",
         )
 
         return Div(
             label_el,
-            Div(pill_wrapper, cls="text-right"),
+            Div(pill_container, cls="text-right"),
             cls="flex items-center justify-between space-x-2 mb-2",
         )
 
@@ -958,13 +1028,11 @@ async def show_item_details(
             else None
         )
 
-        item_df = ordered_df.filter(pl.col("material_id") == material_id)
-        if item_df.height == 0:
-            return (modal_box_content, modal_backdrop), HtmxResponseHeaders(
-                trigger="openModalEvent"
-            )
+        nested_data_list = retrieve_osiris_data([material_id])
+        item_data = nested_data_list[0]
+        if "faculty_id" in item_data:
+            item_data["faculty"] = item_data.pop("faculty_id")
 
-        item_data = item_df.to_dicts()[0]
         manual_classification_options = {}
         for val in PRIMARY_CLASSIFICATIONS:
             manual_classification_options[val] = LabelT.primary
@@ -999,125 +1067,367 @@ async def show_item_details(
             ),
         )
 
-        # --- 2/3. Main Content & Details (Wrap in Form) ---
-        block_classes = "border border-[hsl(var(--ring))] rounded-md p-4 shadow-sm"
-
-        # Form wrapper for editable fields + hidden ID + save/reset
-        modal_form_content = Form(
-            # Hidden input for material_id MUST be inside the form
-            Input(type="hidden", name="material_id", value=material_id),
-            Input(type="hidden", name="page", value=nav_params["page"]),
-            Input(type="hidden", name="per_page", value=nav_params["per_page"]),
-            Input(type="hidden", name="sort_by", value=nav_params["sort_by"]),
-            Input(type="hidden", name="sort_desc", value=nav_params["sort_desc"]),
-            *[
-                Input(type="hidden", name=f"filter_{k}", value=v)
-                for k, v in current_modal_filters.items()
-            ],
-            # Main Content Grid (Item Info + Data Entry)
-            Div(cls="grid grid-cols-1 md:grid-cols-2 gap-4")(
-                # Left Column (Item Info Block - Readonly within form)
-                Div(cls=f"{block_classes}")(
-                    create_readonly_item_div(
-                        "Classification", "classification", is_inline=True
-                    ),
-                    create_readonly_item_div(
-                        "ML Prediction", "ml_prediction", is_inline=True
-                    ),
-                    create_readonly_item_div("Period", "period"),
-                    create_readonly_item_div("Faculty", "faculty"),
-                    create_readonly_item_div("Owner", "owner"),
-                    create_readonly_item_div("Department", "department"),
-                    create_readonly_item_div("Course Name", "course_name"),
-                    create_readonly_item_div("Course Code", "course_code"),
+        # Card 1: Data Entry
+        data_entry_content = (
+            create_editable_pill_div(
+                "Workflow Status", "workflow_status", WORKFLOW_STYLES
+            ),
+            create_editable_pill_div(
+                "Manual Classification",
+                "manual_classification",
+                manual_classification_options,
+            ),
+            Div(
+                Strong(
+                    "Remarks", cls="block text-xs font-medium text-base-content/80 mb-1"
                 ),
-                # Right Column (Data Entry Block - Interactive within form)
-                Div(cls=f"{block_classes} ")(
-                    create_editable_pill_div(
-                        "Workflow Status", "workflow_status", WORKFLOW_STYLES
-                    ),
-                    create_editable_pill_div(
-                        "Manual Classification",
-                        "manual_classification",
-                        manual_classification_options,
-                    ),
-                    Div(  # Remarks block layout
-                        Strong(
-                            "Remarks",
-                            cls="block text-xs font-medium text-base-content/80 mb-1 underline decoration-pink-300",
-                        ),
-                        TextArea(
-                            get_val("remarks", ""),
-                            id="modal_remarks",
-                            name="remarks",
-                            rows="5",
-                            cls="textarea textarea-bordered w-full text-sm bg-base-100",
-                            data_original_value=get_val("remarks", ""),
-                            oninput="markDirty()",
-                        ),
-                    ),
-                    # Save/Reset Buttons are part of this form now
-                    Div(cls="flex justify-end space-x-2 mt-4")(
-                        Button(
-                            "Reset",
-                            type="button",
-                            cls=ButtonT.secondary + " btn-sm",
-                            onclick="resetModalForm(); return false;",
-                        ),  # type=button prevents form submission
-                        Button(  # Save Button
-                            "Save",
-                            id="modal-save-btn",
-                            type="submit",
-                            cls=ButtonT.primary + " btn-sm",
-                            disabled=True,
-                        ),
-                        Span(  # Indicator Span
+                TextArea(
+                    get_val("remarks", ""),
+                    id="modal_remarks",
+                    name="remarks",
+                    rows="5",
+                    cls="textarea textarea-bordered w-full text-sm bg-base-100",
+                    data_original_value=get_val("remarks", ""),
+                    oninput="markDirty()",
+                ),
+                cls="mb-3",
+            ),
+            Div(cls="flex justify-end space-x-2 mt-4")(
+                Button(
+                    "Reset",
+                    type="button",
+                    cls=ButtonT.secondary + " btn-sm",
+                    onclick="resetModalForm(); return false;",
+                ),
+                Button(
+                    Span(
+                        Span(cls="relative flex size-3 mr-2")(
                             Span(
-                                cls="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-500 opacity-75"
+                                cls="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"
                             ),
-                            Span(
-                                cls="relative inline-flex rounded-full h-3 w-3 bg-pink-500"
+                            UkIcon(
+                                "alert-triangle",
+                                cls="relative inline-flex size-3 text-red-500",
                             ),
-                            id="save-indicator",
-                            cls="hidden flex relative h-3 w-3 top-0 right-4 -mt-2 -mr-1",
                         ),
+                        id="save-indicator",
+                        cls="hidden",
                     ),
-                ),
-            ),  # End Main Content Grid
-            # Item Details Grid (Readonly info outside form scope, but within modal body)
-            Div(cls="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4")(  # Added mt-4
-                # Left Block (Text Details)
-                Div(cls=f"{block_classes} md:col-span-4")(
-                    create_readonly_item_div("Title", "title"),
-                    create_readonly_item_div("Author", "author"),
-                    create_readonly_item_div("Publisher", "publisher"),
-                    create_readonly_item_div("DOI", "doi"),
-                    create_readonly_item_div("ISBN", "isbn"),
-                ),
-                # Right Block (Numeric Details)
-                Div(cls=f"{block_classes} md:col-span-1")(  # Apply block styles
-                    Div(
-                        Strong("Pages"),
-                        Div(get_val("pagecount", "N/A"), cls="num-detail-val"),
-                        cls="num-detail-item",
-                    ),
-                    Div(
-                        Strong("Words"),
-                        Div(get_val("wordcount", "N/A"), cls="num-detail-val"),
-                        cls="num-detail-item",
-                    ),
-                    Div(
-                        Strong("Pictures"),
-                        Div(get_val("picturecount", "N/A"), cls="num-detail-val"),
-                        cls="num-detail-item",
-                    ),
+                    "Save",
+                    id="modal-save-btn",
+                    type="submit",
+                    cls=ButtonT.primary + " btn-sm",
+                    disabled=True,
                 ),
             ),
-            id="modal-details-form",
-            hx_post=save_item_details.to(),
-            hx_indicator="#modal-loading-indicator",
+        )
+        # Card 2: Item Info
+        item_info_content = (
+            create_readonly_item_div(
+                "Classification", "classification", is_inline=True
+            ),
+            create_readonly_item_div("ML Prediction", "ml_prediction", is_inline=True),
+            create_readonly_item_div("Period", "period"),
+            create_readonly_item_div("Faculty", "faculty"),
+            create_readonly_item_div("Owner", "owner"),
+            create_readonly_item_div("Department", "department"),
+            create_readonly_item_div("Course Name", "course_name"),
+            create_readonly_item_div("Course Code", "course_code"),
+        )
+        # Card 3: Text Details Content
+        text_details_content = (  # Tuple of elements for the card body
+            create_readonly_item_div("Title", "title"),
+            create_readonly_item_div("Author", "author"),
+            create_readonly_item_div("Publisher", "publisher"),
+            create_readonly_item_div("DOI", "doi"),
+            create_readonly_item_div("ISBN", "isbn"),
         )
 
+        # Card 4: Numeric Details Content
+        numeric_details_content = (  # Tuple of elements for the card body
+            create_readonly_item_div("Pages", "pagecount", is_inline=True),
+            create_readonly_item_div("Words", "wordcount", is_inline=True),
+            create_readonly_item_div("Pictures", "picturecount", is_inline=True),
+        )
+
+        # Card 5: Contact Info Content
+        contact_persons = []
+        all_contact_emails = []
+        courses = item_data.get("courses") or []
+        for course in courses:
+            persons = course.get("persons") or []
+            for person in persons:
+                if person.get("role") == "contact":
+                    contact_persons.append(person)  # Keep the whole person dict
+                    if person.get("email"):
+                        all_contact_emails.append(person["email"])
+
+        contact_info_items = []
+        emails_str = ";".join(all_contact_emails)
+        copy_js = f"navigator.clipboard.writeText('{emails_str}');"
+        contact_info_items.append(
+            Div(
+                fh.Button(
+                    UkIcon("copy", cls="w-4 h-4 mr-1"),
+                    "Copy all email addresses",
+                    cls="btn btn-primary btn-sm btn-block",
+                    onclick=copy_js,
+                )
+            )
+        )
+        if not contact_persons:
+            contact_info_items.append(
+                P("No contact persons found.", cls="text-sm text-base-content/70")
+            )
+        else:
+            # Use a set to avoid duplicate person entries if they are contacts for multiple courses
+            added_person_ids = set()
+            for person in contact_persons:
+                person_id = person.get("id")
+                if person_id in added_person_ids:
+                    continue
+                added_person_ids.add(person_id)
+
+                email = person.get("email")
+                people_page_url = person.get("people_page_url")
+                orgs = person.get("organizations") or []
+                highest_level = -1
+                top_org_abbrs = set()
+                for org in orgs:
+                    level = org.get("hierarchy_level")
+                    if level is not None:
+                        if level > highest_level:
+                            highest_level = level
+                            top_org_abbrs = {org.get("full_abbreviation", "?")}
+                        elif level == highest_level:
+                            top_org_abbrs.add(org.get("full_abbreviation", "?"))
+
+                contact_info_items.append(
+                    Div(
+                        cls="flex items-center justify-between space-x-2 py-1 border-b border-base-200 last:border-b-0"
+                    )(
+                        Span(person.get("main_name", "Unknown Name"), cls="text-sm"),
+                        Div(cls="flex items-center space-x-1 flex-shrink-0")(
+                            *[
+                                Label(abbr, cls="badge badge-sm " + LabelT.secondary)
+                                for abbr in sorted(list(top_org_abbrs))
+                            ],
+                            A(
+                                UkIcon("mail", cls="w-4 h-4"),
+                                href=f"mailto:{email}",
+                                title=f"Email {email}",
+                                cls="link text-primary",
+                            )
+                            if email
+                            else Span(
+                                UkIcon(
+                                    "mail-question", cls="w-4 h-4 text-base-content/50"
+                                ),
+                                title="No email",
+                            ),
+                            A(
+                                UkIcon("external-link", cls="w-4 h-4"),
+                                href=people_page_url,
+                                target="_blank",
+                                title="Open people page",
+                                cls="link text-primary",
+                            )
+                            if people_page_url
+                            else Span(
+                                UkIcon(
+                                    "link-2-off", cls="w-4 h-4  text-base-content/50"
+                                ),
+                                title="No people page URL",
+                            ),
+                        ),
+                    )
+                )
+        contact_info_content = tuple(contact_info_items)
+
+        # Card 6: Course Details Content
+        course_details_items = []
+        all_course_orgs = set()
+        if not courses:
+            course_details_items.append(
+                P("No course data found.", cls="text-sm text-base-content/70")
+            )
+        else:
+            for course in courses:
+                course_details_items.append(
+                    Div(cls="mb-3 p-2 border rounded border-base-300")(
+                        H6(
+                            f"{course.get('name', 'Unknown Course')} ({course.get('cursuscode', '?')})",
+                            cls="font-semibold text-sm mb-1",
+                        ),
+                        P(
+                            f"Year: {course.get('year', 'N/A')}, Programme: {course.get('programme', 'N/A')}, Faculty: {course.get('faculty_id', 'N/A')}",
+                            cls="text-xs text-base-content/80",
+                        ),
+                    )
+                )
+                persons = course.get("persons") or []
+                for person in persons:
+                    orgs = person.get("organizations") or []
+                    for org in orgs:
+                        if org.get("abbreviation"):
+                            all_course_orgs.add(org.get("full_abbreviation"))
+
+        if all_course_orgs:
+            course_details_items.append(Divider(cls="my-2"))
+            course_details_items.append(
+                Strong("Related Organizations:", cls="text-xs font-medium block mb-1")
+            )
+            course_details_items.append(
+                Div(cls="flex flex-wrap gap-1")(
+                    *[
+                        Label(org_abbr, cls="badge badge-sm " + LabelT.secondary)
+                        for org_abbr in sorted(list(all_course_orgs))
+                    ]
+                )
+            )
+        course_details_content = tuple(course_details_items)
+
+        # Card 7: Teacher Info Content
+        teacher_persons = {}
+        for course in courses:
+            persons = course.get("persons") or []
+            for person in persons:
+                person_id = person.get("id")
+                if person_id and person_id not in teacher_persons:
+                    teacher_persons[person_id] = person
+
+        teacher_info_items = []
+        if not teacher_persons:
+            teacher_info_items.append(
+                P("No teachers/persons found.", cls="text-sm text-base-content/70")
+            )
+        else:
+            sorted_teachers = sorted(
+                teacher_persons.values(), key=lambda p: p.get("main_name", "")
+            )
+            for person in sorted_teachers:
+                people_page_url = person.get("people_page_url")
+                orgs = person.get("organizations") or []
+                highest_level = -1
+                top_org_abbrs = set()
+                for org in orgs:
+                    level = org.get("hierarchy_level")
+                    if level is not None:
+                        if level > highest_level:
+                            highest_level = level
+                            top_org_abbrs = {org.get("full_abbreviation", "?")}
+                        elif level == highest_level:
+                            top_org_abbrs.add(org.get("full_abbreviation", "?"))
+
+                teacher_info_items.append(
+                    Div(
+                        cls="flex items-center justify-between space-x-2 py-1 border-b border-base-200 last:border-b-0"
+                    )(
+                        Span(person.get("main_name", "Unknown Name"), cls="text-sm"),
+                        Div(cls="flex items-center space-x-1 flex-shrink-0")(
+                            *[
+                                Label(abbr, cls="badge badge-sm " + LabelT.secondary)
+                                for abbr in sorted(list(top_org_abbrs))
+                            ],
+                            A(
+                                UkIcon("external-link", cls="w-4 h-4"),
+                                href=people_page_url,
+                                target="_blank",
+                                title="Open people page",
+                                cls="link text-primary",
+                            )
+                            if people_page_url
+                            else Span(
+                                UkIcon(
+                                    "link-2-off", cls="w-4 h-4 text-base-content/50"
+                                ),
+                                title="No people page URL",
+                            ),
+                        ),
+                    )
+                )
+        teachers_content = tuple(teacher_info_items)
+
+        modal_cards_grid = Div(
+            # --- Column 1 ---
+            Div(cls="flex flex-col space-y-4")(
+                ItemDetailCard(
+                    "Data Entry",
+                    *data_entry_content,
+                    card_id="data-entry-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Entities",
+                    Span("Click to load...", cls="italic text-sm"),
+                    card_id="entities-card",
+                    col_span=1,
+                    start_collapsed=True,
+                    lazy_load_url=get_entities_element.to(material_id=material_id),
+                ),
+            ),
+            # --- Column 2 ---
+            Div(cls="flex flex-col space-y-4")(
+                ItemDetailCard(
+                    "Item Info",
+                    *item_info_content,
+                    card_id="item-info-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Text Details",
+                    *text_details_content,
+                    card_id="text-details-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Counts",
+                    *numeric_details_content,
+                    card_id="counts-card",
+                    col_span=1,
+                ),
+            ),
+            # --- Column 3 ---
+            Div(cls="flex flex-col space-y-4")(
+                ItemDetailCard(
+                    "Contact Info",
+                    *contact_info_content,
+                    card_id="contact-info-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Course Details",
+                    *course_details_content,
+                    card_id="course-details-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Teachers",
+                    *teachers_content,
+                    card_id="teachers-card",
+                    col_span=1,
+                ),
+            ),
+            # --- Full Width Cards (Lazy Loaded) ---
+            ItemDetailCard(
+                "PDF Viewer",
+                Span("Click to load...", cls="italic text-sm"),
+                card_id="pdf-card",
+                col_span=3,
+                start_collapsed=True,
+                lazy_load_url=get_pdf_element.to(material_id=material_id),
+            ),
+            ItemDetailCard(
+                "Extracted Text",
+                Span("Click to load...", cls="italic text-sm"),
+                card_id="text-card",
+                col_span=3,
+                start_collapsed=True,
+                lazy_load_url=get_extracted_text_element.to(material_id=material_id),
+            ),
+            # Grid layout definition
+            cls="grid grid-cols-1 md:grid-cols-3 gap-4",
+        )
         # --- 4. Footer Row (with HTMX for Next/Prev) ---
 
         indicator_attrs = {"hx_indicator": "#modal-loading-indicator"}
@@ -1161,18 +1471,35 @@ async def show_item_details(
                 next_button,
             )
         )
-        # --- Assemble Modal Box Content ---
         modal_box_content = Div(
             cls="modal-box w-[85vw] max-w-none h-[calc(100vh-5rem)] max-h-none flex flex-col"
         )(
+            # Fixed Header
             Div(header_content, cls="border-b pb-2 flex-shrink-0"),
-            Div(cls="relative py-4 flex-grow overflow-y-auto ")(
+            # Scrollable Body Content - Contains the Form wrapping the grid
+            Div(cls="relative py-4 flex-grow overflow-y-auto")(  # Scrollable wrapper
                 Div(
                     id="modal-loading-indicator",
                     cls="htmx-indicator absolute inset-0 bg-base-100/50 flex items-center justify-center z-50",
                 )(Span("Loading...", cls="loading loading-lg")),
-                modal_form_content,
-            ),
+                # Form still wraps the main grid structure
+                Form(
+                    # Hidden Inputs
+                    Input(type="hidden", name="material_id", value=material_id),
+                    *[
+                        Input(type="hidden", name=f"filter_{k}", value=v)
+                        for k, v in current_modal_filters.items()
+                    ],  # Filter inputs etc.
+                    # ... other hidden state inputs (page, sort...) ...
+                    # The Grid containing all the cards
+                    modal_cards_grid,  # This now includes the new lazy-loaded cards
+                    # Form attributes
+                    id="modal-details-form",
+                    hx_post=save_item_details.to(),
+                    hx_indicator="#modal-loading-indicator",
+                ),
+            ),  # End Scrollable wrapper
+            # Fixed Footer
             footer_content(cls="flex-shrink-0"),
         )
 
@@ -1561,33 +1888,38 @@ async def save_item_details(
 
 
 @rt("/pdf/{material_id:int}")
-async def get_text(material_id: int):
+async def get_pdf_element(material_id: int):
     """
-    returns:
-        - an embed element with the PDF file for the given material_id
-        - a markdown element with the extracted (& annotated?) text extracted from the PDF
+    Returns element displaying the PDF file for the given material_id as an embedded PDF viewer.
+    If the PDF file is not found, a message will be displayed.
     """
     root_folder = Path("pdf_downloads")
 
     pdf_file_path = root_folder / f"{material_id}.pdf"
-    extracted_text_path = root_folder / f"{material_id}_annotated.md"
-    entities_path = root_folder / f"{material_id}_annotated.json"
     print(f"PDF file path: {pdf_file_path}")
-    print(f"Extracted text file path: {extracted_text_path}")
     pdf_element = None
-    text_element = None
     if not pdf_file_path.exists():
         pdf_element = Div("PDF file not found", cls="text-red-500")
     else:
-        pdf_element = Div(
-            Embed(
-                src=ROOT_URL + f"/file/{material_id}",
-                type="application/pdf",
-                width="100%",
-                height="800px",
-            ),
-            cls="col-span-1",
+        pdf_element = Embed(
+            src=ROOT_URL + f"/file/{material_id}",
+            type="application/pdf",
+            width="100%",
+            height="800px",
         )
+
+    return pdf_element
+
+
+@rt("/text/{material_id:int}")
+async def get_extracted_text_element(material_id: int):
+    """
+    Returns element displaying extracted text from the PDF file for the given material_id.
+    If annotated text is available, it will be used; otherwise, the plain text will be returned.
+    If neither are available, a message will be displayed.
+    """
+    root_folder = Path("pdf_downloads")
+    extracted_text_path = root_folder / f"{material_id}_annotated.md"
     if not extracted_text_path.exists():
         extracted_text_path = root_folder / f"{material_id}_annotated.txt"
         if not extracted_text_path.exists():
@@ -1595,19 +1927,53 @@ async def get_text(material_id: int):
         if not extracted_text_path.exists():
             extracted_text_path = root_folder / f"{material_id}.txt"
         if not extracted_text_path.exists():
-            text_element = Div("Extracted text not found", cls="text-red-500")
+            return Div("No extracted text found.", cls="text-red-500 p-4")
 
+    text_element = Div("Error loading text.", cls="text-red-500 p-4")
     if extracted_text_path.exists():
-        with open(extracted_text_path, encoding="utf-8") as f:
-            text_content = f.read()
-        text_element = Titled(
-            "Extracted text",
-            Div(id="content"),
-            Script(
-                f"document.getElementById('content').innerHTML = marked.parse(`{text_content}`);"
-            ),
-            cls="mt-4",
-        )
+        try:
+            with open(extracted_text_path, encoding="utf-8") as f:
+                text_content = f.read()
+            text_content_safe = text_content.replace("`", "\\`").replace("${", "\\${")
+            content_div_id = f"text-content-{material_id}"
+            text_element = Div(  #
+                Div(id=content_div_id, cls="prose prose-sm max-w-none"),
+                Script(
+                    f"let targetDiv = document.getElementById('{content_div_id}'); if(targetDiv && typeof marked !== 'undefined') {{ targetDiv.innerHTML = marked.parse(`{text_content_safe}`); }} else {{ console.error('Marked library or target div {content_div_id} not found.'); }}"
+                ),
+            )
+        except Exception as e:
+            print(f"Error processing text file {extracted_text_path}: {e}")
+            text_element = Div(f"Error loading text file: {e}", cls="text-red-500 p-4")
+
+    return text_element
+
+
+@rt("/osiris/{material_id:int}")
+async def get_osiris_data(material_id: int):
+    """
+    Returns enriched data for the given material_id.
+    should always return the base item data, even if no enriched data is found.
+    """
+    data = retrieve_osiris_data([material_id])
+    if not data or len(data) == 0 or not isinstance(data, list):
+        return []
+    return data[0]
+
+
+@rt("/entities/{material_id:int}")
+async def get_entities_element(material_id: int):
+    """
+    Returns element displaying entities extracted from the annotated text for the given material_id.
+    If no entities are found, a message will be displayed.
+    """
+    root_folder = Path("pdf_downloads")
+    entities_path = root_folder / f"{material_id}_annotated.json"
+    entities_element = Div(
+        H4("No entities found (yet?) in the text"),
+        cls="mt-4",
+    )
+
     if entities_path.exists():
         with open(entities_path, encoding="utf-8") as f:
             entities = json.load(f)
@@ -1624,32 +1990,17 @@ async def get_text(material_id: int):
                 entities_by_label[label] = []
             entities_by_label[label].append(Li(Mark(ent["text"])))
 
-        entities_element = Titled(
-            "Entities found",
+        entities_element = Div(
             *[
                 Div(
                     H5(label),
                     Ul(*entities_by_label[label], cls="list-disc"),
                 )
                 for label in entities_by_label
-            ],
-            cls="mt-4",
+            ]
         )
 
-    else:
-        entities_element = Div(
-            H4("No entities found (yet?) in the text"),
-            cls="mt-4",
-        )
-    return Div(
-        pdf_element,
-        Div(
-            entities_element,
-            text_element,
-            cls="col-span-1",
-        ),
-        cls="grid grid-cols-2 gap-4",
-    )
+    return entities_element
 
 
 @rt(r"/file/{material_id:int}")

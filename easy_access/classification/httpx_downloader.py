@@ -91,7 +91,7 @@ class HttpxDownloader:
         Downloads a file from a canvas URL using httpx.
 
         Args:
-            url: The *initial* URL (e.g., https://.../files/XXXX)
+            url: The *initial* URL
 
         Returns:
             tuple: (success: bool, downloaded_filepath: Path | None, error_message: str | None)
@@ -102,7 +102,7 @@ class HttpxDownloader:
             return False, None, error_msg
 
         try:
-            material_id = url.split("files/")[1].split("?")[0].strip("/")
+            material_id: str = url.split("files/")[1].split("?")[0].strip("/")
         except IndexError:
             error_msg = f"Could not extract material_id from URL: {url}"
             info(error_msg)
@@ -284,6 +284,36 @@ async def get_urls_from_full_data() -> pl.DataFrame:
         f"{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) ."
     )
     return urls
+
+
+async def replace_canvas_id_with_material_id() -> None:
+    """
+    pull all items from db
+    get material_id and url
+    extract the "canvas_id" from the url
+    then go through all files in the download dir
+    and replace each occurrence of the canvas_id in any filename with the material_id
+    """
+
+    await init()
+    all_items = await CopyrightItem.all().values("material_id", "url")
+
+    download_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
+    all_files = download_dir.files
+    info(f"Fixing the filenames of {len(all_files)} files...")
+    for item in all_items:
+        url = item["url"]
+        if not url or "files/" not in url or "?" not in url:
+            continue
+        canvas_id: str = url.split("files/")[1].split("?")[0].strip("/")
+        material_id = item["material_id"]
+        [
+            file.rename(file.name.replace(canvas_id, str(material_id)))
+            for file in all_files
+            if canvas_id in file.name
+        ]
+    info(f"Done renaming {len(all_files)} files.")
+    return
 
 
 # --- Example Usage ---
