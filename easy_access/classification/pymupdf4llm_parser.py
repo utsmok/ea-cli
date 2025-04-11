@@ -47,11 +47,7 @@ async def extract_list_with_ocr(pdfs: list[File]):
                 else:
                     extension = ".txt"
                 filename: str = pdf.name.replace(".pdf", extension)
-                save_path = (
-                    SETTINGS.dirs[DirSetting.SCRIPT_DATA].full
-                    / "parsed_pdf_text"
-                    / filename
-                )
+                save_path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / filename
                 print(f"Saving {filename} to {save_path}")
                 with open(save_path, "w", encoding="utf-8") as f:
                     f.write(result.content)
@@ -63,9 +59,7 @@ def parse_pdfs():
     all_pdfs = [f for f in pdf_dir.files if f.extension == ".pdf"]
     existing_parsed_files = [
         f
-        for f in Directory(
-            SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "parsed_pdf_text"
-        ).files
+        for f in Directory(SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full).files
         if f.extension in [".md", ".txt"]
     ]
     pdf_ids = [pdf.name.replace(".pdf", "") for pdf in all_pdfs]
@@ -86,11 +80,7 @@ def parse_pdfs():
                 retry_list.append(pdf)
 
             markdown_file: str = pdf.name.replace(".pdf", ".md")
-            save_path = (
-                SETTINGS.dirs[DirSetting.SCRIPT_DATA].full
-                / "parsed_pdf_text"
-                / markdown_file
-            )
+            save_path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / markdown_file
             print(f"Saving {markdown_file} to {save_path}")
             with open(save_path, "w", encoding="utf-8") as f:
                 f.write(text)

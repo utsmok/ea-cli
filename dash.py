@@ -5,6 +5,7 @@ import json
 import math
 import traceback
 from enum import auto
+from pathlib import Path
 from typing import Any
 
 import fasthtml.common as fh
@@ -94,7 +95,7 @@ GLOBAL_STYLES = Style("""
         font-weight: 400;
         font-style: normal;
     }
-    html, body { scrollbar-gutter: auto !important; height: 100%; overflow: hidden; margin: 0; padding: 0; background-color: hsl(var(--b2)); }
+    html, body { scrollbar-gutter: auto !important; height: 100%; margin: 0; padding: 0; background-color: hsl(var(--b2)); }
     #page-container { display: flex; flex-direction: column; height: 100vh; background-color: hsl(var(--b1)); }
     #content-area {  padding: 1rem 1.5rem; flex-grow: 1; overflow-y: auto; overflow-x: hidden; }
     #table-wrapper { overflow-x: auto; overflow-y: hidden; }
@@ -142,7 +143,6 @@ GLOBAL_STYLES = Style("""
         opacity: 1;
         pointer-events: auto;
     }
-
 
 
 
@@ -204,9 +204,17 @@ GLOBAL_STYLES = Style("""
         --chart-4: 198 70% 33%;
         --chart-5: 78 73% 30%;
     }
+
+
+    mark {
+        background-color: hsl(78 70% 50%) !important;
+    }
 """)
 
-
+reg_re_param(
+    "static",
+    "ico|gif|jpg|jpeg|webm|css|js|woff|png|svg|mp4|webp|ttf|otf|eot|woff2|txt|xml|html|pdf|md",
+)
 app, rt = fast_app(
     hdrs=(
         Theme.slate.headers(
@@ -216,6 +224,7 @@ app, rt = fast_app(
             shadows=ThemeShadows.lg,
         ),
         GLOBAL_STYLES,
+        Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
         Link(
             rel="stylesheet",
             href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
@@ -229,6 +238,8 @@ app, rt = fast_app(
     exts="loading-states",
 )
 
+PORT = 8000
+ROOT_URL = f"http://localhost:{PORT}"
 DEFAULT_PER_PAGE = 15
 MAX_CELL_LENGTH = 35
 
@@ -1549,6 +1560,109 @@ async def save_item_details(
     )
 
 
+@rt("/pdf/{material_id:int}")
+async def get_text(material_id: int):
+    """
+    returns:
+        - an embed element with the PDF file for the given material_id
+        - a markdown element with the extracted (& annotated?) text extracted from the PDF
+    """
+    root_folder = Path("pdf_downloads")
+
+    pdf_file_path = root_folder / f"{material_id}.pdf"
+    extracted_text_path = root_folder / f"{material_id}_annotated.md"
+    entities_path = root_folder / f"{material_id}_annotated.json"
+    print(f"PDF file path: {pdf_file_path}")
+    print(f"Extracted text file path: {extracted_text_path}")
+    pdf_element = None
+    text_element = None
+    if not pdf_file_path.exists():
+        pdf_element = Div("PDF file not found", cls="text-red-500")
+    else:
+        pdf_element = Div(
+            Embed(
+                src=ROOT_URL + f"/file/{material_id}",
+                type="application/pdf",
+                width="100%",
+                height="800px",
+            ),
+            cls="col-span-1",
+        )
+    if not extracted_text_path.exists():
+        extracted_text_path = root_folder / f"{material_id}_annotated.txt"
+        if not extracted_text_path.exists():
+            extracted_text_path = root_folder / f"{material_id}.md"
+        if not extracted_text_path.exists():
+            extracted_text_path = root_folder / f"{material_id}.txt"
+        if not extracted_text_path.exists():
+            text_element = Div("Extracted text not found", cls="text-red-500")
+
+    if extracted_text_path.exists():
+        with open(extracted_text_path, encoding="utf-8") as f:
+            text_content = f.read()
+        text_element = Titled(
+            "Extracted text",
+            Div(id="content"),
+            Script(
+                f"document.getElementById('content').innerHTML = marked.parse(`{text_content}`);"
+            ),
+            cls="mt-4",
+        )
+    if entities_path.exists():
+        with open(entities_path, encoding="utf-8") as f:
+            entities = json.load(f)
+
+        # sort entities by their start position
+        entities.sort(key=lambda x: x["start"])
+
+        # group by label
+        entities_by_label: dict[str, list[str]] = {}
+
+        for ent in entities:
+            label = ent["label"]
+            if label not in entities_by_label:
+                entities_by_label[label] = []
+            entities_by_label[label].append(Li(Mark(ent["text"])))
+
+        entities_element = Titled(
+            "Entities found",
+            *[
+                Div(
+                    H5(label),
+                    Ul(*entities_by_label[label], cls="list-disc"),
+                )
+                for label in entities_by_label
+            ],
+            cls="mt-4",
+        )
+
+    else:
+        entities_element = Div(
+            H4("No entities found (yet?) in the text"),
+            cls="mt-4",
+        )
+    return Div(
+        pdf_element,
+        Div(
+            entities_element,
+            text_element,
+            cls="col-span-1",
+        ),
+        cls="grid grid-cols-2 gap-4",
+    )
+
+
+@rt(r"/file/{material_id:int}")
+async def get_file(material_id: int):
+    pdf_root_dir = Path("pdf_downloads")
+    ext = "pdf"
+    file_path = pdf_root_dir / f"{material_id}.{ext}"
+    print(f"requested file: {file_path}")
+    if not file_path.exists():
+        return HTMLResponse("File not found", status_code=404)
+    return FileResponse(file_path)
+
+
 @rt("/")
 async def root_redirect():
     """Redirect root to data grid."""
@@ -1557,4 +1671,4 @@ async def root_redirect():
 
 if __name__ == "__main__":
     print("Starting FastHTML server...")
-    serve(port=8000, reload=True)
+    serve(port=PORT, reload=True)

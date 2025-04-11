@@ -15,8 +15,7 @@ from pathlib import Path
 import numpy as np
 import pikepdf
 from fastembed import TextEmbedding
-from kreuzberg import batch_extract_file
-from pdfminer.high_level import extract_text
+from kreuzberg import batch_extract_file, extract_file
 from pydantic import BaseModel
 from qdrant_client import QdrantClient, models
 from tortoise.queryset import QuerySet
@@ -44,7 +43,7 @@ async def batch_extract_pdf_text(
     pdfs = [p for p in pdfs if p.path.exists() and not p.extracted_text]
     file_paths = [pdf.path for pdf in pdfs]
     results = await batch_extract_file(file_paths)
-    for pdf, result in zip(pdfs, results):
+    for pdf, result in zip(pdfs, results, strict=False):
         content = result.content
         metadata = result.metadata
 
@@ -120,20 +119,18 @@ async def extract_pdf_text(
         cur_max_len = (
             pdf.extracted_text_max_length if pdf.extracted_text_max_length else 0
         )
-        if cur_max_len:
-            if str_limit:
-                if cur_max_len >= str_limit:
-                    info(f"pdf already has extracted text of length {cur_max_len}")
-                    return pdf
+        if cur_max_len and str_limit and cur_max_len >= str_limit:
+            info(f"pdf already has extracted text of length {cur_max_len}")
+            return pdf
         try:
             pdf_text: str = await asyncio.wait_for(
                 asyncio.to_thread(
-                    extract_text, pdf_file=path, maxpages=max_pages, codec="utf-8"
+                    extract_file, pdf_file=path, maxpages=max_pages, codec="utf-8"
                 ),
                 TIMEOUT,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             warn(
                 f"Timeout extracting text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}"
             )
@@ -157,9 +154,8 @@ async def extract_pdf_text(
             await pdf.save()
             return pdf
 
-        if str_limit:
-            if len(pdf_text) > str_limit:
-                pdf_text = pdf_text[:str_limit]
+        if str_limit and len(pdf_text) > str_limit:
+            pdf_text = pdf_text[:str_limit]
 
         if pdf_text and cur_len:
             if len(str(pdf_text)) <= int(cur_len):
@@ -207,7 +203,7 @@ async def extract_metadata(pdf: PDF) -> PDF:
             asyncio.to_thread(pikepdf.open, pdf.path), TIMEOUT
         )
         metadata = file_data.docinfo
-    except asyncio.TimeoutError:
+    except TimeoutError:
         warn(f"Timeout extracting metadata from PDF: {pdf.path}")
         return pdf
     except Exception as e:

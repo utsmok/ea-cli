@@ -8,6 +8,7 @@ compare/*.*
 *.ndjson
 *.db
 *.parquet
+*.md
 
 *.html
 *.sqlite3*
