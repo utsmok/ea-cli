@@ -402,7 +402,8 @@ def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
     if not material_ids:
         warn("No material IDs provided. Returning empty list.")
         return []
-
+    if not isinstance(material_ids, Iterable):
+        material_ids = [material_ids]  # Convert to list if not already
     if len(material_ids) == 1:
         mat_id_query = f"WHERE cd.material_id = {material_ids[0]}"
     else:

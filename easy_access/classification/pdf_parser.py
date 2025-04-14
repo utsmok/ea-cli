@@ -4,19 +4,22 @@ to prepare them for NLP analysis.
 """
 
 import hashlib
-from _collections_abc import dict_keys
-from easy_access.classification.downloader import Downloader
-from easy_access.utils import File, Directory,  warn, info
-from easy_access.settings import SETTINGS, DirSetting
-import polars as pl
-from pathlib import Path
-import torch
-from torch.utils.data import Dataset
-import spacy
-from spacy_layout import spaCyLayout
-from typing import Any
 import os
+from _collections_abc import dict_keys
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import polars as pl
+import spacy
+import torch
+from spacy_layout import spaCyLayout
+from torch.utils.data import Dataset
+
+from easy_access.classification.downloader import Downloader
+from easy_access.settings import SETTINGS, DirSetting
+from easy_access.utils import Directory, File, info, warn
+
 
 def retrieve_files() -> list[File] | list[None]:
     """
@@ -27,9 +30,10 @@ def retrieve_files() -> list[File] | list[None]:
         return []
     if not pdf_dir.files:
         return []
-    return [file for file in pdf_dir.files if file.extension == '.pdf']
+    return [file for file in pdf_dir.files if file.extension == ".pdf"]
 
-def retrieve_manually_classified() -> dict[str, dict[str,str]]:
+
+def retrieve_manually_classified() -> dict[str, dict[str, str]]:
     """
     Retrieves all currently finalized manual classifications from SETTINGS.dirs[DirSetting.SCRIPT_DATA] / full_data.parquet.
     """
@@ -38,27 +42,40 @@ def retrieve_manually_classified() -> dict[str, dict[str,str]]:
     if isinstance(possible_classifications[0], list):
         possible_classifications = possible_classifications[0]
 
-    manual_classifications_file = File(path=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / 'full_data.parquet')
+    manual_classifications_file = File(
+        path=SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "full_data.parquet"
+    )
     if not manual_classifications_file.exists:
         return {}
-    data = pl.read_parquet(source=manual_classifications_file.path, columns=['material_id', 'manual_classification', 'filename', 'workflow_status'])
-    data = data.filter(data['workflow_status'] == 'Done')
-    data = data.with_columns(pl.col('manual_classification').str.to_lowercase().replace("-",new="").str.strip_chars().str.replace("",None)).filter(data['manual_classification'].is_not_null())
+    data = pl.read_parquet(
+        source=manual_classifications_file.path,
+        columns=["material_id", "manual_classification", "filename", "workflow_status"],
+    )
+    data = data.filter(data["workflow_status"] == "Done")
+    data = data.with_columns(
+        pl.col("manual_classification")
+        .str.to_lowercase()
+        .replace("-", new="")
+        .str.strip_chars()
+        .str.replace("", None)
+    ).filter(data["manual_classification"].is_not_null())
 
-    data = data.filter(data['manual_classification'].is_in(possible_classifications))
+    data = data.filter(data["manual_classification"].is_in(possible_classifications))
     info(f"Found {len(data)} manual classifications.")
     data_dict = data.to_dicts()
-    return {item['material_id']: item for item in data_dict}
+    return {item["material_id"]: item for item in data_dict}
 
 
-def get_manual_classification_for_files() -> dict[str, dict[str, str|Path]] | dict[None]:
+def get_manual_classification_for_files() -> (
+    dict[str, dict[str, str | Path]] | dict[None]
+):
     """
     Retrieves all manual classifications for all files in SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].
     """
     manual_classifications = retrieve_manually_classified()
     downloader = Downloader()
     subset: dict_keys[str, dict[str, str]] = manual_classifications.keys()
-    info(f'Checking {len(subset)} files for a pdf, or downloading.')
+    info(f"Checking {len(subset)} files for a pdf, or downloading.")
     downloader.download_pdfs(subset=subset)
     files = retrieve_files()
     if not files or not manual_classifications:
@@ -66,18 +83,27 @@ def get_manual_classification_for_files() -> dict[str, dict[str, str|Path]] | di
     manual_classifications_for_files = {}
     for file in files:
         try:
-            mat_id = file.name.split('_')[0]
-        except Exception as e:
-            warn(f'Could not extract material_id from {file.name}')
+            mat_id = file.name.split("_")[0]
+        except Exception:
+            warn(f"Could not extract material_id from {file.name}")
             continue
         if mat_id in manual_classifications:
-            manual_classifications_for_files[mat_id] ={"classification":manual_classifications[mat_id].get('manual_classification'), "file_path": file.path}
-    info(f'Found {len(manual_classifications_for_files)} manual classifications for {len(files)} files.')
+            manual_classifications_for_files[mat_id] = {
+                "classification": manual_classifications[mat_id].get(
+                    "manual_classification"
+                ),
+                "file_path": file.path,
+            }
+    info(
+        f"Found {len(manual_classifications_for_files)} manual classifications for {len(files)} files."
+    )
     return manual_classifications_for_files
+
 
 @dataclass
 class PDFDataset(Dataset):
     """Dataset for training the model"""
+
     texts: list[str]
     labels: list[int]
     tokenizer: Any
@@ -94,15 +120,16 @@ class PDFDataset(Dataset):
             text,
             truncation=True,
             max_length=self.max_length,
-            padding='max_length',
-            return_tensors='pt'
+            padding="max_length",
+            return_tensors="pt",
         )
 
         return {
-            'input_ids': encoding['input_ids'][0],
-            'attention_mask': encoding['attention_mask'][0],
-            'labels': torch.tensor(label)
+            "input_ids": encoding["input_ids"][0],
+            "attention_mask": encoding["attention_mask"][0],
+            "labels": torch.tensor(label),
         }
+
 
 def extract_text_from_pdfs_batch(file_paths: list[Path]) -> dict[Path, str]:
     """
@@ -115,10 +142,10 @@ def extract_text_from_pdfs_batch(file_paths: list[Path]) -> dict[Path, str]:
 
     # First check for cached versions
     for file_path in file_paths:
-        text_path = file_path.with_suffix('.txt')
+        text_path = file_path.with_suffix(".txt")
         if text_path.exists():
             try:
-                with open(text_path, 'r', encoding='utf-8') as f:
+                with open(text_path, encoding="utf-8") as f:
                     results[file_path] = f.read()
             except Exception as e:
                 warn(f"Error reading cached text file {text_path}: {e}")
@@ -148,9 +175,9 @@ def extract_text_from_pdfs_batch(file_paths: list[Path]) -> dict[Path, str]:
                 results[file_path] = extracted_text
 
                 # Cache the extracted text
-                text_path = file_path.with_suffix('.txt')
+                text_path = file_path.with_suffix(".txt")
                 try:
-                    with open(text_path, 'w', encoding='utf-8') as f:
+                    with open(text_path, "w", encoding="utf-8") as f:
                         f.write(extracted_text)
                 except Exception as e:
                     warn(f"Error caching extracted text to {text_path}: {e}")
@@ -159,6 +186,7 @@ def extract_text_from_pdfs_batch(file_paths: list[Path]) -> dict[Path, str]:
             warn(f"Error in batch PDF processing: {e}")
 
     return results
+
 
 def extract_text_from_pdf(file_path: Path) -> str:
     """
@@ -182,8 +210,8 @@ def deduplicate_pdfs() -> None:
         info("No PDF files found for deduplication.")
         return
 
-    file_hashes:dict[str, list[Path]] = {}
-    pdf_texts:dict[Path, str] = {}
+    file_hashes: dict[str, list[Path]] = {}
+    pdf_texts: dict[Path, str] = {}
 
     for file in pdf_dir.files:
         if file.extension.lower() != ".pdf":
@@ -208,11 +236,11 @@ def deduplicate_pdfs() -> None:
                 info(f"Duplicate PDF files found with hash {pdf_hash}: {paths}")
                 filenames = [file.name for file in paths]
                 filenames.sort()
-                main_mat_id = filenames[0].split('_')[0]
+                main_mat_id = filenames[0].split("_")[0]
                 for i, path in enumerate(paths):
                     if i == 0:
                         continue
-                    orig_mat_id = path.name.split('_')[0]
+                    orig_mat_id = path.name.split("_")[0]
                     new_file = f"{orig_mat_id}_{main_mat_id}.replace"
                     # create new_file
                     new_file_path = pdf_dir.full / new_file

@@ -5,7 +5,7 @@ import pymupdf4llm
 from kreuzberg import ExtractionConfig, PSMMode, TesseractConfig, extract_file
 
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import Directory, File
+from easy_access.utils import File
 
 pdf_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
 
@@ -59,7 +59,7 @@ def parse_pdfs():
     all_pdfs = [f for f in pdf_dir.files if f.extension == ".pdf"]
     existing_parsed_files = [
         f
-        for f in Directory(SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full).files
+        for f in SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
         if f.extension in [".md", ".txt"]
     ]
     pdf_ids = [pdf.name.replace(".pdf", "") for pdf in all_pdfs]
@@ -70,10 +70,40 @@ def parse_pdfs():
 
     pdfs = [pdf for pdf in all_pdfs if pdf.name.replace(".pdf", "") in pdf_ids]
     retry_list = []
+    # check if there is any 'last_' file in the directory, if so, find the corresponding pdf and remove it from the list and delete the file
+    last_files = [
+        f
+        for f in SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
+        if f.name.startswith("last_")
+    ]
+    # if there are any last_ files, remove the corresponding pdf from the list and delete the last_ file
+    # this is to prevent processing the same pdf file again, this one appears to crash pymupdf4llm
+    if last_files:
+        for last_file in last_files:
+            pdf_name = last_file.name.replace("last_", "").replace(".DATA", ".pdf")
+            pdf = [f for f in all_pdfs if f.name == pdf_name]
+            if pdf:
+                pdfs.remove(pdf[0])
+                last_file.delete()
     for counter, pdf in enumerate(pdfs):
         try:
             print(f"Processing {counter + 1}/{len(pdfs)}")
             print(pdf.path)
+            # logging which pdf file we are processing in case of crash
+            # remove all existing last_ files from the directory
+            last_files = [
+                f
+                for f in SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
+                if f.name.startswith("last_")
+            ]
+            if last_files:
+                for last_file in last_files:
+                    last_file.delete()
+
+            # create a new last_ file with the name of the pdf file
+            last_file_name = f"last_{pdf.name}".replace(".pdf", ".DATA")
+            (SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / last_file_name).touch()
+
             doc = pymupdf.open(pdf.path)
             text = extract_md(doc)
             if not text:
@@ -91,3 +121,5 @@ def parse_pdfs():
     if retry_list:
         print(f"Trying OCR for {len(retry_list)} files that failed to parse initially.")
         asyncio.run(extract_list_with_ocr(retry_list))
+
+    return True

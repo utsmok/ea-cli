@@ -4,23 +4,69 @@ import contextlib
 import json
 import math
 import traceback
+from collections import defaultdict
+from dataclasses import dataclass, field
 from enum import auto
 from pathlib import Path
 from typing import Any
 
 import fasthtml.common as fh
 import polars as pl
+from fastcore.utils import *
 from fastcore.xml import FT
 from fasthtml.common import *
-from fasthtml.components import Button, Htmx_toasts
+from fasthtml.components import Button
+from fastlite import database
 from monsterui.all import *
 from monsterui.foundations import VEnum, str2ukcls
 from rich import print
+from starlette.staticfiles import StaticFiles
 
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_osiris_data
 from easy_access.db.update import update_copyright_items
+from easy_access.settings import SETTINGS, DirSetting
 
 # --- monsterui fixes ---
+
+"""
+UT Logo Variants
+<!-- Logo Variant 1: Black / Green -->
+<div class="ut-logo-base logo-variant-1">
+  <p>UNIVERSITY</p>
+  <p>OF TWENTE</p>
+  <p>CDD//UT.</p>
+</div>
+
+<hr> <!-- Separator for clarity -->
+
+<!-- Logo Variant 2: Black / Red -->
+<div class="ut-logo-base logo-variant-2">
+  <p>UNIVERSITY</p>
+  <p>OF TWENTE</p>
+  <p>CDD//UT.</p>
+</div>
+
+<hr> <!-- Separator for clarity -->
+
+<!-- Logo Variant 3: Blue / Blue-Orange Split -->
+<!-- Note the <span> around //UT. for split color -->
+<div class="ut-logo-base logo-variant-3">
+  <p>UNIVERSITY</p>
+  <p>OF TWENTE</p>
+  <p>CDD<span class="split">//UT.</span></p>
+</div>
+
+<hr> <!-- Separator for clarity -->
+
+<!-- Logo Variant 4: Blue / Blue-Purple-Red Split -->
+<!-- Note the <span> around //UT. for split color -->
+<div class="ut-logo-base logo-variant-4">
+  <p>UNIVERSITY</p>
+  <p>OF TWENTE</p>
+  <p>CDD<span class="split">//UT.</span></p>
+</div>
+
+"""
 
 
 class LabelT(VEnum):
@@ -34,7 +80,7 @@ class LabelT(VEnum):
     destructive = auto()
 
 
-# NOTE: do a manual replace of this function to fix theme switching
+# NOTE: do a manual replace of this function in the monsterui library in order to fix theme switching
 def _headers_theme(
     color, mode="auto", radii=ThemeRadii.sm, shadows=ThemeShadows.sm, font=ThemeFont.sm
 ):
@@ -87,80 +133,241 @@ def _headers_theme(
     return fh.Script(return_val)
 
 
-# --- app setup ---
+# --- globals ---
 
 
-def ItemDetailCard(
-    title: str,
-    *body_content: Any,
-    card_id: str,
-    col_span: int = 1,
-    start_collapsed: bool = False,
-    color: str = "[var(--ring)]",
-    lazy_load_url: str | None = None,
-) -> FT:
+copyright_df_global: pl.DataFrame = retrieve_copyright_items()
+
+db = database("db.sqlite3")
+
+items = db.t.items
+
+PORT = 8000
+ROOT_URL = f"http://localhost:{PORT}"
+DEFAULT_PER_PAGE = 15
+MAX_CELL_LENGTH = 35
+
+
+@dataclass
+class Login:
+    email: str
+    pwd: str
+
+
+@dataclass
+class AppState:
     """
-    Creates a collapsible card component for the modal using <details>.
-    Includes optional lazy loading via HTMX.
+    data structure to hold the state of the app
     """
-    col_span = max(1, min(col_span, 3))
-    col_span_class = f"md:col-span-{col_span}"
 
-    border_color_class = (
-        f"border-{color}-500" if color != "base" else "border-[var(--ring)]"
-    )
-    card_classes = f"bg-{color}-100 border {border_color_class} rounded-lg shadow-sm  {col_span_class}"
+    page: int = 1
+    per_page: int = DEFAULT_PER_PAGE
+    sort_by: str | None = None
+    sort_desc: bool = False
+    filters: dict[str, str] = field(default_factory=dict)
 
-    summary_classes = f"p-3 bg-{color}-100 hover:bg-{color}-200 cursor-pointer list-none flex items-center justify-between"
-    content_classes = "p-4 border-t border-[var(--ring)]"
-    chevron_icon = Span(
-        "▼", cls="text-xs transition-transform duration-200 chevron-icon"
-    )
+    def update_from_req(self, params: dict[str, Any], auth_details: dict = None):
+        self.page = int(params.get("page", self.page))
+        self.per_page = int(params.get("per_page", self.per_page))
+        self.sort_by = params.get("sort_by") if params.get("sort_by") else self.sort_by
+        self.sort_desc = params.get("sort_desc", str(self.sort_desc)).lower() == "true"
 
-    content_target_id = f"{card_id}-content"
-    summary_htmx_attrs = {}
-    if lazy_load_url:
-        # If lazy loading, initial content is a placeholder + indicator
-        actual_body_content = (
-            Span("Loading...", cls="italic text-sm text-base-content/70"),
-            Div(id=f"{card_id}-loading", cls="htmx-indicator text-center p-2")(
-                Span(cls="loading loading-sm")
-            ),
-        )
-        # --- Set HTMX attributes on the <summary> tag ---
-        summary_htmx_attrs = {
-            "hx_get": lazy_load_url,
-            "hx_target": f"#{content_target_id}",  # Target the inner div
-            "hx_swap": "innerHTML",
-            "hx_trigger": "click once",  # Trigger on first click of the summary
-            "hx_indicator": f"#{card_id}-loading",
+        new_filters = {}
+        for k, v in params.items():
+            if k.startswith("filter_"):
+                filter_key = k.removeprefix("filter_")
+                if v:
+                    new_filters[filter_key] = str(v)
+
+        self.filters = {**self.filters, **new_filters}
+        for k, v in params.items():
+            if k.startswith("filter_") and not v:
+                filter_key = k.removeprefix("filter_")
+                if filter_key in self.filters:
+                    del self.filters[filter_key]
+
+        if auth_details:
+            auth_faculty = auth_details.get("faculty")
+            auth_role = auth_details.get("role")
+            # Apply faculty filter ONLY if user is not admin and has a specific faculty
+            if auth_faculty and auth_faculty != "all" and auth_role != "admin":
+                self.filters["faculty"] = auth_faculty
+
+    # Helper to generate params for HTMX links (excluding filters)
+    def nav_params_dict(self) -> dict[str, Any]:
+        return {
+            "page": self.page,
+            "per_page": self.per_page,
+            "sort_by": self.sort_by or "",
+            "sort_desc": str(self.sort_desc),
         }
-    else:
-        actual_body_content = body_content
 
-    content_div = Div(*actual_body_content, id=content_target_id, cls=content_classes)
-    summary_element = Summary(
-        H5(title, cls="font-semibold text-sm m-0"),
-        chevron_icon,
-        cls=summary_classes,
-        **summary_htmx_attrs,  # Add HTMX attributes HERE
-    )
-    return Details(
-        summary_element,
-        content_div,
-        id=card_id,
-        cls=card_classes,
-        **({} if start_collapsed else {"open": True}),
-    )
+    # Helper to generate filter params for HTMX links/forms
+    def filter_params_dict(self) -> dict[str, str]:
+        return {f"filter_{k}": v for k, v in self.filters.items()}
+
+    # Helper to get combined params for full state links/forms if needed
+    def all_params_dict(self) -> dict[str, Any]:
+        return {**self.nav_params_dict(), **self.filter_params_dict()}
+
+    # Helper to get filter dict compatible with get_filtered_sorted_df
+    def get_active_filters(self) -> dict[str, str]:
+        # Return a copy of the filters dict
+        return self.filters.copy()
 
 
-GLOBAL_STYLES = Style("""
+# --- auth ---
+
+
+def create_users_from_secrets():
+    # read in users.json.secret from root
+    with open("users.json.secret", encoding="utf-8") as f:
+        users_data = json.load(f)
+    existing_users: list[dict[str, str]] = db.q(f"select email from {users}")
+    existing_users = [user.get("email") for user in existing_users]
+    for email, data in users_data.items():
+        if email not in existing_users:
+            users.insert(
+                name=data["name"],
+                email=email,
+                pwd=data["password"],
+                faculty=data["faculty"],
+                role=data["role"],
+            )
+
+
+users = db.t.users
+
+if users not in db.t:
+    users.create(dict(email=str, name=str, pwd=str, faculty=str, role=str), pk="email")
+
+create_users_from_secrets()
+
+login_redir = RedirectResponse("/login", status_code=303)
+
+
+def before(req, sess):
+    auth = req.scope["auth"] = sess.get("auth", None)
+    if not auth:
+        return login_redir
+
+
+# --- app setup including CSS + JS ---
+
+CSS = Style("""
     * {
         font-family: "Inter", sans-serif;
         font-optical-sizing: auto;
         font-weight: 400;
         font-style: normal;
     }
+    @font-face {
+    font-family: 'linotype_univers330_light';
+    src: url('linotype_univers_330_light-229790e6f7c56ae5de7a50a0e9404f0a2abb57b023bed877a08ddf385b6244f1-webfont.woff2') format('woff2'),
+        url('linotype_univers_330_light-229790e6f7c56ae5de7a50a0e9404f0a2abb57b023bed877a08ddf385b6244f1-webfont.woff') format('woff');
+    font-weight: normal; /* Or adjust if needed, e.g., 300 for light */
+    font-style: normal;
+    }
+
+    /* Base styles for all logo variants */
+    .ut-logo-base {
+    /* Font applied here mainly sets context, but the children rule is key */
+    font-family: 'linotype_univers330_light', sans-serif !important;
+    text-transform: uppercase;
+    font-weight: bold; /* Explicitly set bold */
+    font-size: 2em;
+    line-height: 1.1;
+    display: inline-block;
+    white-space: nowrap;
+    /* Resetting potentially interfering properties inherited from * or libraries */
+    letter-spacing: normal; /* Reset letter spacing before applying specific values */
+    font-optical-sizing: auto; /* Reset */
+    font-style: normal; /* Reset */
+    }
+
+    .ut-logo-base p {
+
+    font-family: 'linotype_univers330_light', sans-serif !important; /* Apply directly */
+    font-weight: bold !important; /* Ensure bold weight is also applied here */
+    /* Reset properties that might be inherited incorrectly or set by '*' */
+    font-optical-sizing: auto !important;
+    font-style: normal !important;
+    /* Keep original margin/padding resets */
+    margin: 0;
+    padding: 0;
+    }
+    .ut-logo-base p span{
+
+    font-family: 'linotype_univers330_light', sans-serif !important; /* Apply directly */
+    font-weight: bold !important; /* Ensure bold weight is also applied here */
+    /* Reset properties that might be inherited incorrectly or set by '*' */
+    font-optical-sizing: auto !important;
+    font-style: normal !important;
+    /* Keep original margin/padding resets */
+    margin: 0;
+    padding: 0;
+    }
+
+
+    /* --- Letter Spacing Adjustments --- */
+    .ut-logo-base p:nth-child(1) { /* UNIVERSITY */
+    letter-spacing: 0em !important;
+    }
+    .ut-logo-base p:nth-child(2) {
+    letter-spacing: 0em !important;
+    }
+    .ut-logo-base p:nth-child(3) {
+    letter-spacing: 0.1em !important;
+    }
+
+    /* --- Color Variants (keep as they were) --- */
+
+    /* Variant 1: Black / Green */
+    .logo-variant-1 p:nth-child(1),
+    .logo-variant-1 p:nth-child(2) {
+    color: #000000; /* Black */
+    }
+    .logo-variant-1 p:nth-child(3) {
+    color: #00675A; /* Green */
+    }
+
+    /* Variant 2: Black / Red */
+    .logo-variant-2 p:nth-child(1),
+    .logo-variant-2 p:nth-child(2) {
+    color: #000000; /* Black */
+    }
+    .logo-variant-2 p:nth-child(3) {
+    color: #822433; /* Red */
+    }
+
+    /* Variant 3: Blue / Blue-Orange Split */
+    .logo-variant-3 p:nth-child(1),
+    .logo-variant-3 p:nth-child(2),
+    .logo-variant-3 p:nth-child(3) {
+    color: #002C5F; /* Blue */
+    }
+    .logo-variant-3 p:nth-child(3) .split {
+    color: #EC7A08; /* Orange */
+    }
+
+    /* Variant 4: Blue / Blue-Purple-Red Split */
+    .logo-variant-4 p:nth-child(1),
+    .logo-variant-4 p:nth-child(2) {
+    color: #002C5F; /* Blue */
+    }
+    .logo-variant-4 p:nth-child(3) {
+        color: #4F2D7F; /* Purple */
+    }
+    .logo-variant-4 p:nth-child(3) .split {
+        color: #822433; /* Red */
+    }
+    /* Note: The original image 4 had Blue/Purple/Red distribution.
+    Another interpretation could be:
+    .logo-variant-4 p:nth-child(1) { color: #002C5F; } // Blue
+    .logo-variant-4 p:nth-child(2) { color: #4F2D7F; } // Purple
+    .logo-variant-4 p:nth-child(3) { color: #822433; } // Red
+    Choose the interpretation you prefer. The code above uses the split similar to Variant 3.
+    */
     html, body { scrollbar-gutter: auto !important; height: 100%; margin: 0; padding: 0; background-color: hsl(var(--b2)); }
     #page-container { display: flex; flex-direction: column; height: 100vh; background-color: hsl(var(--b1)); }
     #content-area {  padding: 1rem 1.5rem; flex-grow: 1; overflow-y: auto; overflow-x: hidden; }
@@ -283,41 +490,124 @@ GLOBAL_STYLES = Style("""
 
 """)
 
+FONT = Link(
+    rel="stylesheet",
+    href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
+    type="text/css",
+)
+
+ALPINE_TOOLTIP_JS = r"""
+    document.addEventListener('alpine:init', () => {
+
+        Alpine.directive('tooltip', (el, { modifiers, expression }, { cleanup }) => {
+            let tooltipText = expression;
+            let tooltipArrow = modifiers.includes('noarrow') ? false : true;
+            let tooltipPosition = 'top';
+            let tooltipId = 'tooltip-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
+            let positions = ['top', 'bottom', 'left', 'right'];
+            let elementPosition = getComputedStyle(el).position;
+
+            for (let position of positions) {
+                if (modifiers.includes(position)) {
+                    tooltipPosition = position;
+                    break;
+                }
+            }
+
+            if(!['relative', 'absolute', 'fixed'].includes(elementPosition)){
+                el.style.position='relative';
+            }
+
+            let tooltipHTML = `
+                <div id="${tooltipId}" x-data="{ tooltipVisible: false, tooltipText: '${tooltipText}', tooltipArrow: ${tooltipArrow}, tooltipPosition: '${tooltipPosition}' }" x-ref="tooltip" x-init="setTimeout(function(){ tooltipVisible = true; }, 1);" x-show="tooltipVisible" :class="{ 'top-0 left-1/2 -translate-x-1/2 -mt-0.5 -translate-y-full' : tooltipPosition == 'top', 'top-1/2 -translate-y-1/2 -ml-1.5 left-0 -translate-x-full' : tooltipPosition == 'left', 'bottom-0 left-1/2 -translate-x-1/2 -mb-0.5 translate-y-full' : tooltipPosition == 'bottom', 'top-1/2 -translate-y-1/2 -mr-1.5 right-0 translate-x-full' : tooltipPosition == 'right' }" class="absolute w-auto text-sm" x-cloak>
+                    <div x-show="tooltipVisible"
+                        x-transition:enter="transition ease-out duration-200"
+                        x-transition:enter-start="opacity-0 scale-90 -translate-x-2"
+                        x-transition:enter-end="opacity-100 scale-100 translate-x-0"
+                        x-transition:leave="transition ease-in duration-200"
+                        x-transition:leave-start="opacity-100 scale-100 translate-x-0"
+                        x-transition:leave-end="opacity-0 scale-90 -translate-x-2"
+                    class="relative px-2 py-1 text-white bg-emerald-500 rounded bg-opacity-90">
+                        <p x-text="tooltipText" class="flex-shrink-0 block text-xs whitespace-nowrap"></p>
+                        <div x-ref="tooltipArrow" x-show="tooltipArrow" :class="{ 'bottom-0 -translate-x-1/2 left-1/2 w-2.5 translate-y-full' : tooltipPosition == 'top', 'right-0 -translate-y-1/2 top-1/2 h-2.5 -mt-px translate-x-full' : tooltipPosition == 'left', 'top-0 -translate-x-1/2 left-1/2 w-2.5 -translate-y-full' : tooltipPosition == 'bottom', 'left-0 -translate-y-1/2 top-1/2 h-2.5 -mt-px -translate-x-full' : tooltipPosition == 'right' }" class="absolute inline-flex items-center justify-center overflow-hidden">
+                            <div :class="{ 'origin-top-left -rotate-45' : tooltipPosition == 'top', 'origin-top-left rotate-45' : tooltipPosition == 'left', 'origin-bottom-left rotate-45' : tooltipPosition == 'bottom', 'origin-top-right -rotate-45' : tooltipPosition == 'right' }" class="w-1.5 h-1.5 transform bg-black bg-opacity-90"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            el.dataset.tooltip = tooltipId;
+
+            let mouseEnter = function(event){
+                el.innerHTML += tooltipHTML;
+            };
+
+            let mouseLeave = function(event){
+                document.getElementById(event.target.dataset.tooltip).remove();
+            };
+
+            el.addEventListener('mouseenter', mouseEnter);
+            el.addEventListener('mouseleave', mouseLeave);
+
+            cleanup(() => {
+                el.removeEventListener('mouseenter', mouseEnter);
+                el.removeEventListener('mouseleave', mouseLeave);
+            })
+        })
+
+    })
+
+
+"""
+
+
+JS = (
+    Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit.min.js"),
+    Script(
+        src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit-icons.min.js"
+    ),
+    Script(src="https://unpkg.com/alpinejs", defer="defer"),
+    Script(
+        ALPINE_TOOLTIP_JS,
+    ),
+    Script(src="https://cdn.tailwindcss.com"),
+)
+
+
+# for static files, use the following regex to match the file extensions
 reg_re_param(
     "static",
     "ico|gif|jpg|jpeg|webm|css|js|woff|png|svg|mp4|webp|ttf|otf|eot|woff2|txt|xml|html|pdf|md",
 )
+
+bware = Beforeware(
+    before, skip=[r"/favicon\.ico", r"/static/.*", r"/imgs/.*", r".*\.css", "/login"]
+)
+
 app, rt = fast_app(
+    before=bware,
     hdrs=(
         Theme.slate.headers(
             mode="light",
             daisy=True,
+            katex=False,
             radii=ThemeRadii.lg,
             shadows=ThemeShadows.lg,
         ),
-        GLOBAL_STYLES,
-        Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
-        Link(
-            rel="stylesheet",
-            href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
-            type="text/css",
-        ),
-        Script(
-            src="https://unpkg.com/@htmx/htmx-toasts@latest/dist/index.js",
-            type="module",
-        ),
-        Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit.min.js"),
-        Script(
-            src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit-icons.min.js"
-        ),
+        CSS,
+        FONT,
+        *JS,
     ),
     exts="loading-states",
+    debug=True,
 )
 
-PORT = 8000
-ROOT_URL = f"http://localhost:{PORT}"
-DEFAULT_PER_PAGE = 15
-MAX_CELL_LENGTH = 35
+# Mount static files directory AFTER creating the app instance
+app.mount("/imgs", StaticFiles(directory="."), name="images")
+
+setup_toasts(app)
+
+# --- constants / mappings ---
 
 WORKFLOW_STYLES = {
     "ToDo": LabelT.destructive,
@@ -348,28 +638,22 @@ DESTRUCTIVE_CLASSIFICATIONS = {
     "middellange overname",
     "lange overname",
 }
-DEFAULT_PILL_STYLE = LabelT.secondary  # Use secondary as default for unknown pills
-
-
-# --- data setup ---
-copyright_df_global: pl.DataFrame = retrieve_copyright_items()
-
+DEFAULT_PILL_STYLE = LabelT.secondary
 FILTERABLE_COLUMNS: list[str] = [
+    "workflow_status",
+    "classification",
+    "status",
+    "manual_classification",
+    "faculty",
     "department",
     "course_name",
-    "manual_classification",
-    "ml_prediction",
-    "status",
-    "faculty",
-    "author",
-    "publisher",
-    "workflow_status",
 ]
 DISPLAY_COLUMNS: list[str] = [
     "material_id",
     "url",
     "workflow_status",
     "status",
+    "classification",
     "ml_prediction",
     "manual_classification",
     "remarks",
@@ -379,13 +663,83 @@ DISPLAY_COLUMNS: list[str] = [
 ]
 
 
+# --- component templates ---
+def ItemDetailCard(
+    title: str,
+    *body_content: Any,
+    card_id: str,
+    col_span: int = 1,
+    start_collapsed: bool = False,
+    color: str = "[var(--ring)]",
+    lazy_load_url: str | None = None,
+) -> FT:
+    """
+    Creates a collapsible card component for the modal using <details>.
+    Includes optional lazy loading via HTMX.
+    """
+    col_span = max(1, min(col_span, 3))
+    col_span_class = f"md:col-span-{col_span}"
+
+    border_color_class = (
+        f"border-{color}-500" if color != "base" else "border-[var(--ring)]"
+    )
+    card_classes = f"bg-{color}-100 border {border_color_class} rounded-lg shadow-sm  {col_span_class}"
+
+    summary_classes = f"p-3 bg-{color}-100 hover:bg-{color}-200 cursor-pointer list-none flex items-center justify-between"
+    content_classes = "p-4 border-t border-[var(--ring)]"
+    chevron_icon = Span(
+        "▼", cls="text-xs transition-transform duration-200 chevron-icon"
+    )
+
+    content_target_id = f"{card_id}-content"
+    summary_htmx_attrs = {}
+    if lazy_load_url:
+        # If lazy loading, initial content is a placeholder + indicator
+        actual_body_content = (
+            Span("Loading...", cls="italic text-sm text-base-content/70"),
+            Div(id=f"{card_id}-loading", cls="htmx-indicator text-center p-2")(
+                Span(cls="loading loading-sm")
+            ),
+        )
+        # --- Set HTMX attributes on the <summary> tag ---
+        summary_htmx_attrs = {
+            "hx_get": lazy_load_url,
+            "hx_target": f"#{content_target_id}",  # Target the inner div
+            "hx_swap": "innerHTML",
+            "hx_trigger": "click once",  # Trigger on first click of the summary
+            "hx_indicator": f"#{card_id}-loading",
+        }
+    else:
+        actual_body_content = body_content
+
+    content_div = Div(*actual_body_content, id=content_target_id, cls=content_classes)
+    summary_element = Summary(
+        H5(title, cls="font-semibold text-sm m-0"),
+        chevron_icon,
+        cls=summary_classes,
+        **summary_htmx_attrs,  # Add HTMX attributes HERE
+    )
+    return Details(
+        summary_element,
+        content_div,
+        id=card_id,
+        cls=card_classes,
+        **({} if start_collapsed else {"open": True}),
+    )
+
+
+# --- filter dataframe ---
+
+
 def get_filtered_sorted_df(
-    sort_by: str | None = None,
-    sort_desc: bool = False,
-    filters: dict[str, str] | None = None,
+    app_state: AppState,
 ) -> pl.DataFrame:
-    """Applies filtering and sorting."""
+    """Applies filtering and sorting to the global df."""
     df = copyright_df_global
+    filters = app_state.get_active_filters()
+    sort_by = app_state.sort_by
+    sort_desc = app_state.sort_desc
+
     if filters:
         filter_expressions = []
         for col, value in filters.items():
@@ -427,6 +781,7 @@ def get_filtered_sorted_df(
     return df
 
 
+# --- save changes ---
 async def store_item_changes(
     input_data: list[dict[str, str | int]] | dict[str, str | int],
 ) -> None:
@@ -467,16 +822,577 @@ async def store_item_changes(
     await update_copyright_items(full_data_list, update_relations=False, overwrite=True)
 
 
-# --- Component rendering ---
+@rt("/save_details", methods=["POST"])
+async def save_item_details(
+    request: Request,
+    session,
+    # Editable fields
+    material_id: int,
+    workflow_status: str = "",
+    manual_classification: str = "",
+    remarks: str = "",
+):
+    """
+    Route to store an edited item back to the database.
+    Update logic is in the store_item_changes function, and of course in db.update.update_copyright_items.
+    Uses the material_id as a primary key to identify the item.
+    For now, only three field can be updated: workflow_status, manual_classification and remarks.
+    This route should only be called from the item detail view at the moment.
+    Might be extended to do bulk updates from the table view in the future.
+    """
+    global copyright_df_global
+    app_state_dict = session.get("app_state", {})
+    app_state = AppState(**app_state_dict)  # Convert dict back to instance
+
+    print(f"Saving changes for material_id: {material_id}")
+    update_data = {
+        "material_id": material_id,
+        "workflow_status": workflow_status,
+        "manual_classification": manual_classification,
+        "remarks": remarks,
+    }
+
+    oob_grid_swap = Div()  # Default empty div
+
+    try:
+        await store_item_changes(update_data)
+
+        print("Reloading global DataFrame after save...")
+        copyright_df_global = retrieve_copyright_items()
+        print("Global DataFrame reloaded.")
+
+        # Re-filter and slice for the current page view
+        filtered_sorted_df = get_filtered_sorted_df(app_state)  # Pass the state object
+        total_filtered_rows = filtered_sorted_df.height
+        total_pages = (
+            math.ceil(total_filtered_rows / app_state.per_page)
+            if app_state.per_page > 0
+            else 1
+        )
+        app_state.page = max(
+            1, min(app_state.page, total_pages if total_pages > 0 else 1)
+        )
+        session["app_state"] = asdict(app_state)  # Convert back to dict
+
+        offset = (app_state.page - 1) * app_state.per_page
+        df_slice = filtered_sorted_df.slice(
+            offset, per_page=app_state.per_page
+        )  # Use per_page from state
+
+        # Render the grid component HTML using AppState
+        updated_grid_component = render_data_grid_component(
+            df_slice=df_slice,
+            app_state=app_state,  # Pass the whole state object
+            total_filtered_rows=total_filtered_rows,
+            total_pages=total_pages,
+        )
+
+        # --- Create OOB Swap Div for the Grid ---
+        oob_grid_swap = Div(
+            to_xml(updated_grid_component),
+            hx_swap_oob="outerHTML:#data-grid-component",
+        )
+
+        add_toast(session, f"Successfully updated {material_id}", "success")
+
+    except Exception as e:
+        print(f"Error saving changes for {material_id}: {e}")
+        traceback.print_exc()
+        add_toast(session, f"Error saving changes for {material_id}: {e}", "error")
+
+    return oob_grid_swap, HtmxResponseHeaders(
+        reswap="none",
+    )
+
+
+# --- retrieve detailed data  ---
+@rt("/osiris/{material_id:int}")
+async def get_osiris_data(material_id: int):
+    """
+    Returns enriched data for the given material_id.
+    should always return at least base item data, even if no enriched data is found.
+    Logic is almost completely found in the db.retrieve module.
+
+    """
+    data = retrieve_osiris_data([material_id])
+    if not data or len(data) == 0 or not isinstance(data, list):
+        return []
+    return data[0]
+
+
+# --- retrieve pdfs ---
+@rt(r"/file/{material_id:int}")
+async def get_file(material_id: int):
+    """
+    Directly returns the PDF file for the given material_id.
+    """
+    pdf_root_dir = Path("pdf_downloads")
+    ext = "pdf"
+    file_path = pdf_root_dir / f"{material_id}.{ext}"
+    print(f"requested file: {file_path}")
+    if not file_path.exists():
+        return HTMLResponse("File not found", status_code=404)
+    return FileResponse(file_path)
+
+
+@rt("/pdf/{material_id:int}")
+async def get_pdf_element(material_id: int):
+    """
+    Returns element displaying the PDF file for the given material_id as an embedded PDF viewer.
+    If the PDF file is not found, a message will be displayed instead.
+    """
+    root_folder = Path("pdf_downloads")
+
+    pdf_file_path = root_folder / f"{material_id}.pdf"
+    print(f"PDF file path: {pdf_file_path}")
+    pdf_element = None
+    if not pdf_file_path.exists():
+        pdf_element = Div("PDF file not found", cls="text-red-500")
+    else:
+        pdf_element = Embed(
+            src=ROOT_URL + f"/file/{material_id}",
+            type="application/pdf",
+            width="100%",
+            height="800px",
+        )
+
+    return pdf_element
+
+
+# --- retrieve extracted text ---
+
+
+def get_extracted_text(material_id: int) -> str:
+    """
+    Returns extracted text from the PDF file for the given material_id.
+    If annotated text is available, it will be used; otherwise, the plain text will be returned.
+    If neither are available, an str with an error message will be returned.
+    """
+    root_folder = Path("pdf_downloads")
+    # suffixes to check in order of priority
+    suffixes = ["_annotated.md", "_paddle.txt", ".md", ".txt"]
+    for suff in suffixes:
+        extracted_text_path = root_folder / f"{material_id}{suff}"
+        if extracted_text_path.exists():
+            break
+    if not extracted_text_path.exists():
+        return "No extracted text found."
+
+    print(f"retrieving extracted text for {material_id} from {extracted_text_path}")
+
+    text_element = f"Error loading text from {extracted_text_path.name}."
+    if extracted_text_path.exists():
+        try:
+            with open(extracted_text_path, encoding="utf-8") as f:
+                text_element = f.read()
+
+        except Exception as e:
+            print(f"Error processing text file {extracted_text_path}: {e}")
+
+    return text_element
+
+
+@rt("/text/{material_id:int}", methods=["GET"])
+async def get_extracted_text_element(material_id: int) -> FT:
+    text = get_extracted_text(material_id)
+    return Div(NotStr(text))
+
+
+# --- retrieve found entities ---
+
+
+# dataclasses for entities
+@dataclass
+class Entity:
+    """
+    Represents an entity extracted from the text.
+    Attributes:
+        start (int): The starting index of the entity in the text.
+        end (int): The ending index of the entity in the text.
+        label (str): The label of the entity.
+        text (str): The text of the entity.
+        score (float | None): The confidence score of the entity (optional).
+    """
+
+    start: int
+    end: int
+    label: str
+    text: str
+    score: float | None = None
+
+
+@dataclass
+class Entities:
+    """
+    Represents a collection of entities extracted from the text.
+    Attributes:
+        items (list[Entity]): A list of Entity objects.
+
+    Functions:
+        group_by_label: Groups entities by their labels.
+        group_and_sort: Sorts the grouped entities by label and alphabetically within each group.
+    """
+
+    items: list[Entity] = field(init=False, default_factory=list)
+    grouped_by_label: dict[str, list[Entity]] = field(init=False, default=None)
+
+    def __init__(self, entities: list[dict[str, int | str | float]]):
+        self.items = [Entity(**ent) for ent in entities]
+
+    def group_by_label(self):
+        self.grouped_by_label: dict[str, list[Entity]] = defaultdict(list)
+
+        for ent in self.items:
+            self.grouped_by_label[ent.label].append(ent)
+
+    def group_and_sort(self):
+        if not self.grouped_by_label:
+            self.group_by_label()
+
+        sorted_labels = sorted(
+            self.grouped_by_label.keys(),
+            key=lambda x: (
+                0
+                if "recognized" in x.lower()
+                # recognized first
+                else 1
+                if "copyright" in x.lower() or "license" in x.lower()
+                # copyright or license next
+                else 2
+                if "university" in x.lower()
+                # university next
+                else 3  # everything else last
+            ),
+        )
+
+        for label in sorted_labels:
+            # sort alphabetically within each label group
+            self.grouped_by_label[label] = sorted(
+                self.grouped_by_label[label], key=lambda x: x.label.lower()
+            )
+
+        return self.grouped_by_label, sorted_labels
+
+
+def get_entities(material_id: int) -> Entities | None:
+    """
+    This function retrieves the entities extracted from the annotated text for the given material_id.
+    Entities are stored in a JSON file named "{material_id}_annotated.json" in the "pdf_downloads" folder.
+    """
+    root_folder = Path("pdf_downloads")
+    entities_path = root_folder / f"{material_id}_annotated.json"
+    if not entities_path.exists():
+        return None
+    try:
+        with open(entities_path, encoding="utf-8") as f:
+            entities = Entities(json.load(f))
+    except Exception as e:
+        print(f"Error processing entities file {entities_path}: {e}")
+        return None
+
+    return entities
+
+
+@rt("/entities/{material_id:int}")
+async def get_entities_element(material_id: int):
+    """
+    Returns element displaying entities extracted from the annotated text for the given material_id.
+    If no entities are found, a message will be displayed.
+    """
+    entities_element = Div(
+        H4("No entities found (yet?) in the text"),
+        cls="mt-4",
+    )
+
+    entities: Entities | None = get_entities(material_id)
+    if not entities:
+        return entities_element
+
+    entities_by_label, sorted_labels = entities.group_and_sort()
+    entities_elements: list[tuple[str, list[FT]]] = []
+    for label in sorted_labels:
+        entity_list = entities_by_label[label]
+        cur_list = []
+        seen_items = defaultdict(int)
+        for entity in entity_list:
+            seen_items[entity.text] += 1
+            if entity.text in seen_items and seen_items[entity.text] > 1:
+                continue
+        added_items = set()
+        for entity in entity_list:
+            entity_element = []
+            if entity.text in added_items:
+                continue
+            if seen_items[entity.text] > 1:
+                entity_element.append(
+                    Span(
+                        Span(
+                            f"{seen_items[entity.text]}x",
+                            cls="badge badge-info mr-2 ml-1",
+                        ),
+                        Span(f"{entity.text}"),
+                    )
+                )
+            else:
+                entity_element.append(Span(entity.text, cls="ml-1"))
+            added_items.add(entity.text)
+            if "recognized" in label.lower():
+                color_cls = "badge badge-accent badge-outline"
+                entity.score = 1.0
+            elif entity.score is not None:
+                if entity.score < 0.9:
+                    color_cls = "badge badge-warning"
+                else:
+                    color_cls = "badge badge-success"
+            else:
+                color_cls = "badge badge-outline"
+                entity.score = 1
+            entity_element.append(
+                Span(f"{entity.score:.0%}", cls=f"ml-4 gap-2 {color_cls}")
+            )
+            cur_list.append(
+                Li(
+                    *entity_element,
+                )
+            )
+
+        entities_elements.append((label, cur_list))
+
+    entities_element = Div(
+        *[
+            Div(
+                H5(label),
+                Ul(
+                    *entity_list_objs,
+                    cls="list-disc",
+                ),
+            )
+            for label, entity_list_objs in entities_elements
+        ]
+    )
+
+    return entities_element
+
+
+# --- component rendering ---
+
+
+def render_course_details(item_data):
+    """
+    Renders the contents for the course details card.
+    This includes course name, year, programme, faculty, and related organizations.
+    """
+    course_details_items = []
+    all_course_orgs = set()
+    courses = item_data.get("courses") or []
+
+    if not courses:
+        course_details_items.append(
+            P("No course data found.", cls="text-sm text-base-content/70")
+        )
+    else:
+        for course in courses:
+            course_details_items.append(
+                Div(cls="mb-3 p-2 border rounded border-base-300")(
+                    H6(
+                        f"{course.get('name', 'Unknown Course')} ({course.get('cursuscode', '?')})",
+                        cls="font-semibold text-sm mb-1",
+                    ),
+                    P(
+                        f"Year: {course.get('year', 'N/A')}, Programme: {course.get('programme', 'N/A')}, Faculty: {course.get('faculty_id', 'N/A')}",
+                        cls="text-xs text-base-content/80",
+                    ),
+                )
+            )
+            persons = course.get("persons") or []
+            for person in persons:
+                orgs = person.get("organizations") or []
+                for org in orgs:
+                    if org.get("abbreviation"):
+                        all_course_orgs.add(org.get("full_abbreviation"))
+
+    if all_course_orgs:
+        course_details_items.append(Divider(cls="my-2"))
+        course_details_items.append(
+            Strong("Related Organizations:", cls="text-xs font-medium block mb-1")
+        )
+        course_details_items.append(
+            Div(cls="flex flex-wrap gap-1")(
+                *[
+                    Label(org_abbr, cls="badge badge-sm " + LabelT.secondary)
+                    for org_abbr in sorted(list(all_course_orgs))
+                ]
+            )
+        )
+    return tuple(course_details_items)
+
+
+def render_contact_info(item_data):
+    """
+    Renders the contact info card contents
+    This includes contact persons and their email addresses,
+    and user-friendly buttons to copy email addresses to the clipboard.
+    """
+    contact_persons = []
+    all_contact_emails = []
+    courses = item_data.get("courses") or []
+    for course in courses:
+        persons = course.get("persons") or []
+        for person in persons:
+            if person.get("role") == "contact":
+                contact_persons.append(person)
+                if person.get("email"):
+                    all_contact_emails.append(person["email"])
+
+    contact_info_items = []
+    emails_str = ";".join(all_contact_emails)
+    copy_js = f"navigator.clipboard.writeText('{emails_str}');"
+    contact_info_items.append(
+        Div(
+            fh.Button(
+                UkIcon("copy", cls="w-4 h-4 mr-1"),
+                "Copy all email addresses",
+                cls="btn btn-primary btn-sm btn-block",
+                onclick=copy_js,
+            )
+        )
+    )
+
+    if not contact_persons:
+        contact_info_items.append(
+            P("No contact persons found.", cls="text-sm text-base-content/70")
+        )
+    else:
+        added_person_ids = set()
+        for person in contact_persons:
+            person_id = person.get("id")
+            if person_id in added_person_ids:
+                continue
+            added_person_ids.add(person_id)
+
+            email = person.get("email")
+            people_page_url = person.get("people_page_url")
+            orgs = person.get("organizations") or []
+            highest_level = -1
+            top_org_abbrs = set()
+            for org in orgs:
+                level = org.get("hierarchy_level")
+                if level is not None:
+                    if level > highest_level:
+                        highest_level = level
+                        top_org_abbrs = {org.get("full_abbreviation", "?")}
+                    elif level == highest_level:
+                        top_org_abbrs.add(org.get("full_abbreviation", "?"))
+
+            contact_info_items.append(
+                Div(
+                    cls="flex items-center justify-between space-x-2 py-1 border-b border-base-200 last:border-b-0"
+                )(
+                    Span(person.get("main_name", "Unknown Name"), cls="text-sm"),
+                    Div(cls="flex items-center space-x-1 flex-shrink-0")(
+                        *[
+                            Label(abbr, cls="badge badge-sm " + LabelT.secondary)
+                            for abbr in sorted(list(top_org_abbrs))
+                        ],
+                        A(
+                            UkIcon("mail", cls="w-4 h-4"),
+                            href=f"mailto:{email}",
+                            title=f"Email {email}",
+                            cls="link text-primary",
+                        )
+                        if email
+                        else Span(
+                            UkIcon("mail-question", cls="w-4 h-4 text-base-content/50"),
+                            title="No email",
+                        ),
+                        A(
+                            UkIcon("external-link", cls="w-4 h-4"),
+                            href=people_page_url,
+                            target="_blank",
+                            title="Open people page",
+                            cls="link text-primary",
+                        )
+                        if people_page_url
+                        else Span(
+                            UkIcon("link-2-off", cls="w-4 h-4  text-base-content/50"),
+                            title="No people page URL",
+                        ),
+                    ),
+                )
+            )
+    return tuple(contact_info_items)
+
+
+def render_teacher_info(item_data):
+    teacher_persons = {}
+    courses = item_data.get("courses") or []
+    for course in courses:
+        persons = course.get("persons") or []
+        for person in persons:
+            person_id = person.get("id")
+            if person_id and person_id not in teacher_persons:
+                teacher_persons[person_id] = person
+
+    teacher_info_items = []
+    if not teacher_persons:
+        teacher_info_items.append(
+            P("No teachers/persons found.", cls="text-sm text-base-content/70")
+        )
+    else:
+        sorted_teachers = sorted(
+            teacher_persons.values(), key=lambda p: p.get("main_name", "")
+        )
+        for person in sorted_teachers:
+            people_page_url = person.get("people_page_url")
+            orgs = person.get("organizations") or []
+            highest_level = -1
+            top_org_abbrs = set()
+            for org in orgs:
+                level = org.get("hierarchy_level")
+                if level is not None:
+                    if level > highest_level:
+                        highest_level = level
+                        top_org_abbrs = {org.get("full_abbreviation", "?")}
+                    elif level == highest_level:
+                        top_org_abbrs.add(org.get("full_abbreviation", "?"))
+
+            teacher_info_items.append(
+                Div(
+                    cls="flex items-center justify-between space-x-2 py-1 border-b border-base-200 last:border-b-0"
+                )(
+                    Span(person.get("main_name", "Unknown Name"), cls="text-sm"),
+                    Div(cls="flex items-center space-x-1 flex-shrink-0")(
+                        *[
+                            Label(abbr, cls="badge badge-sm " + LabelT.secondary)
+                            for abbr in sorted(list(top_org_abbrs))
+                        ],
+                        A(
+                            UkIcon("external-link", cls="w-4 h-4"),
+                            href=people_page_url,
+                            target="_blank",
+                            title="Open people page",
+                            cls="link text-primary",
+                        )
+                        if people_page_url
+                        else Span(
+                            UkIcon("link-2-off", cls="w-4 h-4 text-base-content/50"),
+                            title="No people page URL",
+                        ),
+                    ),
+                )
+            )
+    return tuple(teacher_info_items)
+
+    return (
+        render_contact_info(item_data),
+        render_course_details(item_data),
+        render_teacher_info(item_data),
+    )
 
 
 def render_table_rows(
     df_slice: pl.DataFrame,
-    current_page_for_modal: int,
-    per_page_for_modal: int,
-    sort_by_for_modal: str | None,
-    sort_desc_for_modal: bool,
-    filters_for_modal: dict[str, str] | None,
+    app_state: AppState,
 ) -> tuple[FT, ...]:
     """Renders Tbody rows with custom formatting and HTMX attributes."""
     rows: list[FT] = []
@@ -525,7 +1441,11 @@ def render_table_rows(
                         str(val) if val else "N/A", cls=style + " badge-sm"
                     )
 
-                elif col in ("manual_classification", "ml_prediction"):
+                elif col in (
+                    "manual_classification",
+                    "ml_prediction",
+                    "classification",
+                ):
                     if not val_str_norm:
                         display_text = "-"
                         style = ""
@@ -550,21 +1470,14 @@ def render_table_rows(
                         cls=f"py-2.5 px-4 border-b border-base-200/80 {td_class}",
                     )
                 )
-
-            modal_params = {
-                "material_id": material_id,
-                "page": current_page_for_modal,
-                "per_page": per_page_for_modal,
-                "sort_by": sort_by_for_modal or "",
-                "sort_desc": str(sort_desc_for_modal),
-                **{f"filter_{k}": v for k, v in filters_for_modal.items()},
-            }
+            modal_params = {"material_id": material_id}
             row_attrs: dict[str, Any] = {
                 "id": f"row-{material_id}",
                 "class": "hover:bg-primary/10 cursor-pointer transition-colors duration-150",
-                "hx_get": show_item_details.to(**modal_params),
+                "hx_get": show_item_details.to(**modal_params),  # Pass only material_id
                 "hx_target": "#modal-placeholder",
                 "hx_swap": "innerHTML",
+                "hx_indicator": "#modal-loading-indicator",  # Add indicator for modal load
             }
 
             rows.append(Tr(*cells, **row_attrs))
@@ -582,21 +1495,28 @@ def render_table_rows(
 
 
 def page_header_component(
-    current_filters: dict[str, str],
-    per_page: int,
-    sort_by: str | None,
-    sort_desc: bool,
+    user_details: dict[str, str],
+    app_state: AppState,
 ) -> FT:
     """Renders the header area with Title and Filters."""
-    current_filters = current_filters or {}
+    current_filters = app_state.get_active_filters()
     filter_inputs = []
     for col in FILTERABLE_COLUMNS:
         actual_col_name = col
         if actual_col_name not in copyright_df_global.columns:
             continue
+        is_admin = user_details.get("role") == "admin"
+        user_faculty = user_details.get("faculty")
+        if not is_admin and col == "faculty" and user_faculty and user_faculty != "all":
+            continue
+
+        label = f"{col.replace('_', ' ').title()}"
+        if "department" in label.lower():
+            label = "Programme"
+
         filter_inputs.append(
             LabelInput(
-                f"{col.replace('_', ' ').title()}",
+                label,
                 name=f"filter_{col}",
                 value=current_filters.get(col, ""),
                 placeholder="Filter...",
@@ -611,47 +1531,76 @@ def page_header_component(
                 cls="form-control w-full",
             )
         )
-
+    hidden_state_inputs = [
+        Input(type="hidden", name=k, value=v)
+        for k, v in app_state.nav_params_dict().items()
+    ]
+    hidden_state_inputs = [
+        inp for inp in hidden_state_inputs if inp.attrs.get("name") != "page"
+    ]
+    hidden_state_inputs.append(Input(type="hidden", name="page", value="1"))
     filter_form = Form(
         Div(
             *filter_inputs,
             cls="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-3",
         ),
-        Input(type="hidden", name="page", value="1"),
-        Input(type="hidden", name="per_page", value=str(per_page)),
-        Input(type="hidden", name="sort_by", value=sort_by or ""),
-        Input(type="hidden", name="sort_desc", value=str(sort_desc)),
+        *hidden_state_inputs,
         id="filter-form",
         cls="",
     )
+    update_times = [
+        file.created
+        for file in SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
+        if file.exists
+    ]
+    if not update_times:
+        last_update_time = "Unknown"
+    else:
+        last_update_time = max(update_times).strftime("%Y-%m-%d %H:%M")
 
     return Div(
-        Div(
-            H4(
-                "Copyright Data Dashboard",
-                cls="text-4xl font-bold underline decoration-pink-500 text-primary",
+        Div(cls="flex justify-between items-center mb-4")(
+            H4("Copyright Data Dashboard", cls="text-2xl font-bold text-primary"),
+            H6(
+                f"Last update from Qlik: {last_update_time}",
+                cls="text-sm text-base-content/70",
             ),
-            cls="flex-shrink-0 mr-8 pt-1",
+            Div(cls="flex items-center space-x-4")(
+                Div(cls="flex items-center space-x-2")(
+                    Img(
+                        src=f"https://api.dicebear.com/9.x/bottts/svg?seed={user_details.get('name', 'defaultuser')}&backgroundColor=547012",
+                        alt="avatar",
+                        cls="w-8 h-8 rounded-full border border-base-300",
+                    ),
+                    Div(
+                        Span(
+                            f"Hi, {user_details.get('name', 'User')}!",
+                            cls="text-sm font-medium block",
+                        ),
+                        Span(
+                            f"Viewing: {user_details.get('faculty', 'All items')}"
+                            if user_details.get("faculty") != "all"
+                            else "Viewing: All items",
+                            cls="text-xs text-base-content/70 block",
+                        ),
+                    ),
+                ),
+                # Logout Button (Keep existing)
+                A("Logout", href="/logout", cls="btn btn-outline btn-primary btn-sm"),
+            ),
         ),
-        Div(filter_form, cls="flex-grow justify-center"),
-        cls="flex items-start mb-4 border-b border-base-300 pb-3",
+        Div(filter_form, cls=""),  # Filter form container
+        cls="mb-4 border-b border-base-300 pb-4",
     )
 
 
 def render_data_grid_component(
     df_slice: pl.DataFrame,
-    current_page: int,
-    total_pages: int,
-    per_page: int,
+    app_state: AppState,  # Accept AppState object
     total_filtered_rows: int,
-    offset: int,
-    sort_by: str | None = None,
-    sort_desc: bool = False,
-    current_filters: dict[str, str] | None = None,
+    total_pages: int,
 ) -> FT:
     """Renders the main content area: Item count, table, pagination."""
-    current_filters = current_filters or {}
-    print(f"filters in render_data_grid: {current_filters}")
 
     header_cells = []
     cols_in_header = [
@@ -660,18 +1609,22 @@ def render_data_grid_component(
     for col in cols_in_header:
         header_text = "ID" if col == "material_id" else col.replace("_", " ").title()
 
-        sort_indicator_icon, next_sort_desc = "", "False"
-        if col == sort_by:
-            sort_indicator_icon, next_sort_desc = (
-                ("arrow-down", "False") if sort_desc else ("arrow-up", "True")
-            )
-        filter_params = {f"filter_{k}": v for k, v in current_filters.items() if v}
+        sort_indicator_icon, next_sort_desc_str = "", "False"
+        is_current_sort_col = col == app_state.sort_by
+
+        if is_current_sort_col:
+            next_sort_desc_bool = not app_state.sort_desc
+            next_sort_desc_str = str(next_sort_desc_bool)
+            sort_indicator_icon = "arrow-down" if app_state.sort_desc else "arrow-up"
+        else:
+            next_sort_desc_str = "False"
+
         sort_link_params = {
-            "page": current_page,
-            "per_page": per_page,
+            "page": app_state.page,  # Keep current page for sorting
+            "per_page": app_state.per_page,
             "sort_by": col,
-            "sort_desc": next_sort_desc,
-            **filter_params,
+            "sort_desc": next_sort_desc_str,
+            **app_state.filter_params_dict(),  # Include current filters
         }
         header_content = Button(
             header_text,
@@ -683,22 +1636,17 @@ def render_data_grid_component(
             hx_get=data_grid.to(**sort_link_params),
             hx_target="#data-grid-component",
             hx_indicator="#grid-loading-indicator",
+            # Add hx_include to send filter form data if needed, though params might be enough
+            # hx_include="#filter-form", # Maybe not needed if params cover filters
             cls=f"{ButtonT.ghost} text-xs uppercase tracking-wider p-1.5 h-auto min-h-0 font-bold text-base-content/70 hover:text-primary transition-colors duration-150",
         )
         th_class = f"col-{col.replace('_', '-')}"
         header_cells.append(Th(header_content, cls=f"px-4 py-2 {th_class}"))
-    print(f"filters in render_data_grid: {current_filters}")
 
     header = Thead(Tr(*header_cells))
+
     body = Tbody(
-        *render_table_rows(
-            df_slice,
-            current_page_for_modal=current_page,
-            per_page_for_modal=per_page,
-            sort_by_for_modal=sort_by,
-            sort_desc_for_modal=sort_desc,
-            filters_for_modal=current_filters,
-        ),
+        *render_table_rows(df_slice, app_state),
         id="data-table-body",
     )
 
@@ -708,15 +1656,16 @@ def render_data_grid_component(
         cls="overflow-x-auto border border-base-300 rounded-lg shadow-sm bg-base-100",
     )
 
-    pagination_html = render_pagination(
-        current_page, total_pages, per_page, sort_by, sort_desc, current_filters
-    )
+    # --- Pagination ---
+    # Pass AppState to render_pagination
+    pagination_html = render_pagination(app_state, total_pages)
 
+    # --- Final Component ---
     return Div(
         P(
             Strong(str(total_filtered_rows)),
-            Span(" items found", cls="text-base-content/70"),
-            cls=f"{TextPresets.muted_sm} mb-2 text-sm",
+            Span(" items found", cls="text-base-content text-bold"),
+            cls=" mb-2 text-sm",
         ),
         pagination_html,
         Div(
@@ -727,39 +1676,39 @@ def render_data_grid_component(
             "Loading..."
         ),
         id="data-grid-component",
-        cls="flex flex-col text-center justify-center",
+        cls="flex flex-col text-center justify-center",  # Existing classes
     )
 
 
 def render_pagination(
-    current_page: int,
+    app_state: AppState,  # Accept AppState object
     total_pages: int,
-    per_page: int,
-    sort_by: str | None = None,
-    sort_desc: bool = False,
-    current_filters: dict[str, str] | None = None,
 ) -> FT:
-    """Renders pagination controls using flexbox. (Unchanged)"""
+    """Renders pagination controls using AppState."""
     if total_pages <= 1:
-        return Div(cls="h-12")
-    current_filters = current_filters or {}
-    filter_params = {f"filter_{k}": v for k, v in current_filters.items() if v}
+        return Div(cls="h-12")  # No pagination needed
+
+    current_page = app_state.page
+    # Base parameters for pagination links include current sort and filters
     base_params = {
-        "per_page": per_page,
-        "sort_by": sort_by or "",
-        "sort_desc": str(sort_desc),
-        **filter_params,
+        "per_page": app_state.per_page,
+        "sort_by": app_state.sort_by or "",
+        "sort_desc": str(app_state.sort_desc),
+        **app_state.filter_params_dict(),  # Include current filters
     }
-    print(f"filters in render_pagination: {current_filters}")
 
     pagination_items = []
 
+    # --- Previous Button ---
     prev_disabled, prev_page = current_page <= 1, max(1, current_page - 1)
+    prev_link_params = {"page": prev_page, **base_params}
     prev_attrs = {
-        "hx_get": data_grid.to(page=prev_page, **base_params),
+        "hx_get": data_grid.to(**prev_link_params),
         "hx_target": "#data-grid-component",
         "hx_indicator": "#grid-loading-indicator",
         "role": "button",
+        # Add hx_include if filters aren't reliably passed via params alone
+        # "hx_include": "#filter-form"
     }
     pagination_items.append(
         A(
@@ -772,23 +1721,26 @@ def render_pagination(
         )
     )
 
+    # --- Page Indicator ---
     pagination_items.append(
         Span(
-            f"Page {current_page} of {total_pages} ",
+            f"Page {current_page} of {total_pages}",
             cls="underline decoration-pink-500 bg-base-200 text-base-content font-semibold mr-5 ml-5 mb-1",
-        )
+        )  # Adjusted styling/spacing
     )
 
+    # --- Next Button ---
     next_disabled, next_page = (
         current_page >= total_pages,
         min(total_pages, current_page + 1),
     )
-    print("base_params in render_pagination:", base_params)
+    next_link_params = {"page": next_page, **base_params}
     next_attrs = {
-        "hx_get": data_grid.to(page=next_page, **base_params),
+        "hx_get": data_grid.to(**next_link_params),
         "hx_target": "#data-grid-component",
         "hx_indicator": "#grid-loading-indicator",
         "role": "button",
+        # "hx_include": "#filter-form" # If needed
     }
     pagination_items.append(
         A(
@@ -805,7 +1757,7 @@ def render_pagination(
         *pagination_items,
         aria_label="pagination",
         class_="flex justify-center items-center space-x-5 gap-4 pt-4 pb-2",
-    )
+    )  # Keep existing layout
 
 
 def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
@@ -883,717 +1835,70 @@ def render_labelled_item(
     return label_element, content_element
 
 
-# --- Routes ---
-
-
-@rt("/modal/{material_id:int}")
-async def show_item_details(
-    material_id: int,
-    page: int = 1,
-    per_page: int = DEFAULT_PER_PAGE,
-    sort_by: str | None = None,
-    sort_desc: str = "False",
-    filter_department: str = "",
-    filter_course_name: str = "",
-    filter_manual_classification: str = "",
-    filter_ml_prediction: str = "",
-    filter_status: str = "",
-    filter_faculty: str = "",
-    filter_author: str = "",
-    filter_publisher: str = "",
-    filter_workflow_status: str = "",
-):
-    """Fetches data and returns structured INNER content for the modal dialog
-    using direct Tailwind classes."""
-
-    def get_val(key, default=None):
-        return item_data.get(key, default)
-
-    def create_editable_pill_div(label_text: str, field_name: str, options_map: dict):
-        current_value = get_val(field_name)
-        content_component, html_tag = render_modal_field(field_name, current_value)
-        label_el, _ = render_labelled_item(label_text, content_component, html_tag)
-        original_value_str = str(current_value) if current_value is not None else ""
-        original_style_class = DEFAULT_PILL_STYLE + " badge-sm"
-        component_with_id = content_component
-        if (
-            hasattr(content_component, "__dict__")
-            and "attrs" in content_component.__dict__
-        ):
-            attrs_orig = content_component.__dict__["attrs"]
-            attrs_new = attrs_orig.copy() if isinstance(attrs_orig, dict) else {}
-            attrs_new["id"] = f"pill-display-{field_name}"
-            component_with_id.__setattr__("attrs", attrs_new)
-            current_classes = attrs_new.get("cls", "").split()
-            labelt_values = {str(lt) for lt in LabelT}
-            found_style = next(
-                (cls for cls in current_classes if cls in labelt_values), None
-            )
-            if found_style:
-                original_style_class = found_style
-
-        dropdown_items = []
-        for opt_val, opt_style_enum in options_map.items():
-            opt_style_class = str(opt_style_enum)
-            onclick_js = f"updatePill('{field_name}', {repr(str(opt_val))}, {repr(str(opt_val))}, '{opt_style_class}'); return false;"
-            dropdown_items.append(
-                Li(
-                    A(
-                        Label(opt_val, cls=opt_style_enum + " badge-sm"),
-                        href="#",
-                        onclick=onclick_js,
-                    )
-                )
-            )
-
-        hidden_input = Input(
-            type="hidden",
-            id=f"input-{field_name}",
-            name=field_name,
-            value=original_value_str,
-            data_original_value=original_value_str,
-            data_original_text=original_value_str,
-            data_original_style=original_style_class,
-        )
-
-        pill_container = Div(
-            component_with_id,
-            Div(
-                Ul(*dropdown_items, cls="uk-nav uk-dropdown-nav"),
-                cls="uk-dropdown w-auto bg-base-100 p-2 shadow-lg rounded-md border border-base-300",
-                uk_drop="mode: click; pos: bottom-right; boundary: !.modal-box; flip: false",
-            ),
-            hidden_input,
-            cls="inline-block uk-inline",
-        )
-
-        return Div(
-            label_el,
-            Div(pill_container, cls="text-right"),
-            cls="flex items-center justify-between space-x-2 mb-2",
-        )
-
-    def create_readonly_item_div(
-        label_text: str, field_name: str, is_inline: bool = False
-    ):
-        content_component, html_tag = render_modal_field(
-            field_name, get_val(field_name)
-        )
-        label_el, content_el = render_labelled_item(
-            label_text, content_component, html_tag
-        )
-        container_cls = (
-            "flex items-center justify-between space-x-2 mb-2" if is_inline else "mb-3"
-        )
-        content_wrapper_cls = "text-right" if is_inline else ""
-        return Div(
-            label_el, Div(content_el, cls=content_wrapper_cls), cls=container_cls
-        )
-
-    try:
-        current_modal_filters: dict[str, str] = {
-            "department": filter_department.strip(),
-            "course_name": filter_course_name.strip(),
-            "manual_classification": filter_manual_classification.strip(),
-            "ml_prediction": filter_ml_prediction.strip(),
-            "status": filter_status.strip(),
-            "faculty": filter_faculty.strip(),
-            "author": filter_author.strip(),
-            "publisher": filter_publisher.strip(),
-            "workflow_status": filter_workflow_status.strip(),
-        }
-        nav_params = {
-            "page": page,
-            "per_page": per_page,
-            "sort_by": sort_by or "",
-            "sort_desc": sort_desc,
-            **{f"filter_{k}": v for k, v in current_modal_filters.items()},
-        }
-        print(f"nav_params in show_item_details: {nav_params}")
-        print(f"current_modal_filters in show_item_details: {current_modal_filters}")
-        current_modal_filters = {k: v for k, v in current_modal_filters.items() if v}
-        modal_sort_desc_bool = sort_desc.lower() == "true"
-        ordered_df = get_filtered_sorted_df(
-            sort_by, modal_sort_desc_bool, current_modal_filters
-        )
-        ordered_ids = ordered_df.get_column("material_id").to_list()
-        try:
-            current_index = ordered_ids.index(material_id)
-        except ValueError:
-            current_index = -1
-        prev_id = ordered_ids[current_index - 1] if current_index > 0 else None
-        next_id = (
-            ordered_ids[current_index + 1]
-            if current_index != -1 and current_index < len(ordered_ids) - 1
-            else None
-        )
-
-        nested_data_list = retrieve_osiris_data([material_id])
-        item_data = nested_data_list[0]
-        if "faculty_id" in item_data:
-            item_data["faculty"] = item_data.pop("faculty_id")
-
-        manual_classification_options = {}
-        for val in PRIMARY_CLASSIFICATIONS:
-            manual_classification_options[val] = LabelT.primary
-        for val in SECONDARY_CLASSIFICATIONS:
-            manual_classification_options[val] = LabelT.secondary
-        for val in DESTRUCTIVE_CLASSIFICATIONS:
-            manual_classification_options[val] = LabelT.destructive
-        if "onbekend" not in manual_classification_options:
-            manual_classification_options["onbekend"] = LabelT.secondary
-
-        # --- 1. Header Row ---
-        filename = get_val("filename", "N/A") or "(file deleted or not found)"
-        filename_content = H4(filename, cls="font-semibold text-lg break-all")
-        file_url = get_val("url")
-        if not file_url or file_url == "":
-            file_url = None
-        if file_url:
-            filename_content = A(
-                filename_content, href=file_url, target="_blank", cls="link-hover"
-            )
-        status_pill, _ = render_modal_field("status", get_val("status"))
-        url_element, _ = render_modal_field("url", file_url)
-
-        header_content = Div(cls="flex items-center justify-between space-x-4")(
-            Div(cls="flex items-center space-x-3 flex-grow min-w-0")(
-                status_pill,
-                filename_content,
-                url_element,
-            ),
-            Form(method="dialog")(
-                Button("✕", cls="btn btn-sm btn-circle btn-ghost flex-shrink-0")
-            ),
-        )
-
-        # Card 1: Data Entry
-        data_entry_content = (
-            create_editable_pill_div(
-                "Workflow Status", "workflow_status", WORKFLOW_STYLES
-            ),
-            create_editable_pill_div(
-                "Manual Classification",
-                "manual_classification",
-                manual_classification_options,
-            ),
-            Div(
-                Strong(
-                    "Remarks", cls="block text-xs font-medium text-base-content/80 mb-1"
-                ),
-                TextArea(
-                    get_val("remarks", ""),
-                    id="modal_remarks",
-                    name="remarks",
-                    rows="5",
-                    cls="textarea textarea-bordered w-full text-sm bg-base-100",
-                    data_original_value=get_val("remarks", ""),
-                    oninput="markDirty()",
-                ),
-                cls="mb-3",
-            ),
-            Div(cls="flex justify-end space-x-2 mt-4")(
-                Button(
-                    "Reset",
-                    type="button",
-                    cls=ButtonT.secondary + " btn-sm",
-                    onclick="resetModalForm(); return false;",
-                ),
-                Button(
-                    Span(
-                        Span(cls="relative flex size-3 mr-2")(
-                            Span(
-                                cls="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"
-                            ),
-                            UkIcon(
-                                "alert-triangle",
-                                cls="relative inline-flex size-3 text-red-500",
-                            ),
-                        ),
-                        id="save-indicator",
-                        cls="hidden",
-                    ),
-                    "Save",
-                    id="modal-save-btn",
-                    type="submit",
-                    cls=ButtonT.primary + " btn-sm",
-                    disabled=True,
-                ),
-            ),
-        )
-        # Card 2: Item Info
-        item_info_content = (
-            create_readonly_item_div(
-                "Classification", "classification", is_inline=True
-            ),
-            create_readonly_item_div("ML Prediction", "ml_prediction", is_inline=True),
-            create_readonly_item_div("Period", "period"),
-            create_readonly_item_div("Faculty", "faculty"),
-            create_readonly_item_div("Owner", "owner"),
-            create_readonly_item_div("Department", "department"),
-            create_readonly_item_div("Course Name", "course_name"),
-            create_readonly_item_div("Course Code", "course_code"),
-        )
-        # Card 3: Text Details Content
-        text_details_content = (  # Tuple of elements for the card body
-            create_readonly_item_div("Title", "title"),
-            create_readonly_item_div("Author", "author"),
-            create_readonly_item_div("Publisher", "publisher"),
-            create_readonly_item_div("DOI", "doi"),
-            create_readonly_item_div("ISBN", "isbn"),
-        )
-
-        # Card 4: Numeric Details Content
-        numeric_details_content = (  # Tuple of elements for the card body
-            create_readonly_item_div("Pages", "pagecount", is_inline=True),
-            create_readonly_item_div("Words", "wordcount", is_inline=True),
-            create_readonly_item_div("Pictures", "picturecount", is_inline=True),
-        )
-
-        # Card 5: Contact Info Content
-        contact_persons = []
-        all_contact_emails = []
-        courses = item_data.get("courses") or []
-        for course in courses:
-            persons = course.get("persons") or []
-            for person in persons:
-                if person.get("role") == "contact":
-                    contact_persons.append(person)  # Keep the whole person dict
-                    if person.get("email"):
-                        all_contact_emails.append(person["email"])
-
-        contact_info_items = []
-        emails_str = ";".join(all_contact_emails)
-        copy_js = f"navigator.clipboard.writeText('{emails_str}');"
-        contact_info_items.append(
-            Div(
-                fh.Button(
-                    UkIcon("copy", cls="w-4 h-4 mr-1"),
-                    "Copy all email addresses",
-                    cls="btn btn-primary btn-sm btn-block",
-                    onclick=copy_js,
-                )
-            )
-        )
-        if not contact_persons:
-            contact_info_items.append(
-                P("No contact persons found.", cls="text-sm text-base-content/70")
-            )
-        else:
-            # Use a set to avoid duplicate person entries if they are contacts for multiple courses
-            added_person_ids = set()
-            for person in contact_persons:
-                person_id = person.get("id")
-                if person_id in added_person_ids:
-                    continue
-                added_person_ids.add(person_id)
-
-                email = person.get("email")
-                people_page_url = person.get("people_page_url")
-                orgs = person.get("organizations") or []
-                highest_level = -1
-                top_org_abbrs = set()
-                for org in orgs:
-                    level = org.get("hierarchy_level")
-                    if level is not None:
-                        if level > highest_level:
-                            highest_level = level
-                            top_org_abbrs = {org.get("full_abbreviation", "?")}
-                        elif level == highest_level:
-                            top_org_abbrs.add(org.get("full_abbreviation", "?"))
-
-                contact_info_items.append(
-                    Div(
-                        cls="flex items-center justify-between space-x-2 py-1 border-b border-base-200 last:border-b-0"
-                    )(
-                        Span(person.get("main_name", "Unknown Name"), cls="text-sm"),
-                        Div(cls="flex items-center space-x-1 flex-shrink-0")(
-                            *[
-                                Label(abbr, cls="badge badge-sm " + LabelT.secondary)
-                                for abbr in sorted(list(top_org_abbrs))
-                            ],
-                            A(
-                                UkIcon("mail", cls="w-4 h-4"),
-                                href=f"mailto:{email}",
-                                title=f"Email {email}",
-                                cls="link text-primary",
-                            )
-                            if email
-                            else Span(
-                                UkIcon(
-                                    "mail-question", cls="w-4 h-4 text-base-content/50"
-                                ),
-                                title="No email",
-                            ),
-                            A(
-                                UkIcon("external-link", cls="w-4 h-4"),
-                                href=people_page_url,
-                                target="_blank",
-                                title="Open people page",
-                                cls="link text-primary",
-                            )
-                            if people_page_url
-                            else Span(
-                                UkIcon(
-                                    "link-2-off", cls="w-4 h-4  text-base-content/50"
-                                ),
-                                title="No people page URL",
-                            ),
-                        ),
-                    )
-                )
-        contact_info_content = tuple(contact_info_items)
-
-        # Card 6: Course Details Content
-        course_details_items = []
-        all_course_orgs = set()
-        if not courses:
-            course_details_items.append(
-                P("No course data found.", cls="text-sm text-base-content/70")
-            )
-        else:
-            for course in courses:
-                course_details_items.append(
-                    Div(cls="mb-3 p-2 border rounded border-base-300")(
-                        H6(
-                            f"{course.get('name', 'Unknown Course')} ({course.get('cursuscode', '?')})",
-                            cls="font-semibold text-sm mb-1",
-                        ),
-                        P(
-                            f"Year: {course.get('year', 'N/A')}, Programme: {course.get('programme', 'N/A')}, Faculty: {course.get('faculty_id', 'N/A')}",
-                            cls="text-xs text-base-content/80",
-                        ),
-                    )
-                )
-                persons = course.get("persons") or []
-                for person in persons:
-                    orgs = person.get("organizations") or []
-                    for org in orgs:
-                        if org.get("abbreviation"):
-                            all_course_orgs.add(org.get("full_abbreviation"))
-
-        if all_course_orgs:
-            course_details_items.append(Divider(cls="my-2"))
-            course_details_items.append(
-                Strong("Related Organizations:", cls="text-xs font-medium block mb-1")
-            )
-            course_details_items.append(
-                Div(cls="flex flex-wrap gap-1")(
-                    *[
-                        Label(org_abbr, cls="badge badge-sm " + LabelT.secondary)
-                        for org_abbr in sorted(list(all_course_orgs))
-                    ]
-                )
-            )
-        course_details_content = tuple(course_details_items)
-
-        # Card 7: Teacher Info Content
-        teacher_persons = {}
-        for course in courses:
-            persons = course.get("persons") or []
-            for person in persons:
-                person_id = person.get("id")
-                if person_id and person_id not in teacher_persons:
-                    teacher_persons[person_id] = person
-
-        teacher_info_items = []
-        if not teacher_persons:
-            teacher_info_items.append(
-                P("No teachers/persons found.", cls="text-sm text-base-content/70")
-            )
-        else:
-            sorted_teachers = sorted(
-                teacher_persons.values(), key=lambda p: p.get("main_name", "")
-            )
-            for person in sorted_teachers:
-                people_page_url = person.get("people_page_url")
-                orgs = person.get("organizations") or []
-                highest_level = -1
-                top_org_abbrs = set()
-                for org in orgs:
-                    level = org.get("hierarchy_level")
-                    if level is not None:
-                        if level > highest_level:
-                            highest_level = level
-                            top_org_abbrs = {org.get("full_abbreviation", "?")}
-                        elif level == highest_level:
-                            top_org_abbrs.add(org.get("full_abbreviation", "?"))
-
-                teacher_info_items.append(
-                    Div(
-                        cls="flex items-center justify-between space-x-2 py-1 border-b border-base-200 last:border-b-0"
-                    )(
-                        Span(person.get("main_name", "Unknown Name"), cls="text-sm"),
-                        Div(cls="flex items-center space-x-1 flex-shrink-0")(
-                            *[
-                                Label(abbr, cls="badge badge-sm " + LabelT.secondary)
-                                for abbr in sorted(list(top_org_abbrs))
-                            ],
-                            A(
-                                UkIcon("external-link", cls="w-4 h-4"),
-                                href=people_page_url,
-                                target="_blank",
-                                title="Open people page",
-                                cls="link text-primary",
-                            )
-                            if people_page_url
-                            else Span(
-                                UkIcon(
-                                    "link-2-off", cls="w-4 h-4 text-base-content/50"
-                                ),
-                                title="No people page URL",
-                            ),
-                        ),
-                    )
-                )
-        teachers_content = tuple(teacher_info_items)
-
-        modal_cards_grid = Div(
-            # --- Column 1 ---
-            Div(cls="flex flex-col space-y-4")(
-                ItemDetailCard(
-                    "Data Entry",
-                    *data_entry_content,
-                    card_id="data-entry-card",
-                    col_span=1,
-                ),
-                ItemDetailCard(
-                    "Entities",
-                    Span("Click to load...", cls="italic text-sm"),
-                    card_id="entities-card",
-                    col_span=1,
-                    start_collapsed=True,
-                    lazy_load_url=get_entities_element.to(material_id=material_id),
-                ),
-            ),
-            # --- Column 2 ---
-            Div(cls="flex flex-col space-y-4")(
-                ItemDetailCard(
-                    "Item Info",
-                    *item_info_content,
-                    card_id="item-info-card",
-                    col_span=1,
-                ),
-                ItemDetailCard(
-                    "Text Details",
-                    *text_details_content,
-                    card_id="text-details-card",
-                    col_span=1,
-                ),
-                ItemDetailCard(
-                    "Counts",
-                    *numeric_details_content,
-                    card_id="counts-card",
-                    col_span=1,
-                ),
-            ),
-            # --- Column 3 ---
-            Div(cls="flex flex-col space-y-4")(
-                ItemDetailCard(
-                    "Contact Info",
-                    *contact_info_content,
-                    card_id="contact-info-card",
-                    col_span=1,
-                ),
-                ItemDetailCard(
-                    "Course Details",
-                    *course_details_content,
-                    card_id="course-details-card",
-                    col_span=1,
-                ),
-                ItemDetailCard(
-                    "Teachers",
-                    *teachers_content,
-                    card_id="teachers-card",
-                    col_span=1,
-                ),
-            ),
-            # --- Full Width Cards (Lazy Loaded) ---
-            ItemDetailCard(
-                "PDF Viewer",
-                Span("Click to load...", cls="italic text-sm"),
-                card_id="pdf-card",
-                col_span=3,
-                start_collapsed=True,
-                lazy_load_url=get_pdf_element.to(material_id=material_id),
-            ),
-            ItemDetailCard(
-                "Extracted Text",
-                Span("Click to load...", cls="italic text-sm"),
-                card_id="text-card",
-                col_span=3,
-                start_collapsed=True,
-                lazy_load_url=get_extracted_text_element.to(material_id=material_id),
-            ),
-            # Grid layout definition
-            cls="grid grid-cols-1 md:grid-cols-3 gap-4",
-        )
-        # --- 4. Footer Row (with HTMX for Next/Prev) ---
-
-        indicator_attrs = {"hx_indicator": "#modal-loading-indicator"}
-
-        prev_button_attrs = {
-            "id": "modal-prev-btn",
-            "cls": ButtonT.secondary + " btn-sm",
-            "disabled": prev_id is None,
-        }
-        if prev_id is not None:
-            prev_button_attrs.update(
-                {
-                    "hx_get": show_item_details.to(material_id=prev_id, **nav_params),
-                    "hx_target": "#modal-placeholder",
-                    "hx_swap": "innerHTML",
-                    **indicator_attrs,
-                }
-            )
-        prev_button = Button("< Prev", **prev_button_attrs)
-
-        next_button_attrs = {
-            "id": "modal-next-btn",
-            "cls": ButtonT.secondary + " btn-sm",
-            "disabled": next_id is None,
-        }
-        if next_id is not None:
-            next_button_attrs.update(
-                {
-                    "hx_get": show_item_details.to(material_id=next_id, **nav_params),
-                    "hx_target": "#modal-placeholder",
-                    "hx_swap": "innerHTML",
-                    **indicator_attrs,
-                }
-            )
-        next_button = Button("Next >", **next_button_attrs)
-
-        footer_content = Div(cls="modal-action mt-4 pt-4 border-t")(
-            Div(cls="flex justify-between w-full")(
-                prev_button,
-                Form(method="dialog")(Button("Close", cls=ButtonT.primary + " btn-sm")),
-                next_button,
-            )
-        )
-        modal_box_content = Div(
-            cls="modal-box w-[85vw] max-w-none h-[calc(100vh-5rem)] max-h-none flex flex-col"
-        )(
-            # Fixed Header
-            Div(header_content, cls="border-b pb-2 flex-shrink-0"),
-            # Scrollable Body Content - Contains the Form wrapping the grid
-            Div(cls="relative py-4 flex-grow overflow-y-auto")(  # Scrollable wrapper
-                Div(
-                    id="modal-loading-indicator",
-                    cls="htmx-indicator absolute inset-0 bg-base-100/50 flex items-center justify-center z-50",
-                )(Span("Loading...", cls="loading loading-lg")),
-                # Form still wraps the main grid structure
-                Form(
-                    # Hidden Inputs
-                    Input(type="hidden", name="material_id", value=material_id),
-                    *[
-                        Input(type="hidden", name=f"filter_{k}", value=v)
-                        for k, v in current_modal_filters.items()
-                    ],  # Filter inputs etc.
-                    # ... other hidden state inputs (page, sort...) ...
-                    # The Grid containing all the cards
-                    modal_cards_grid,  # This now includes the new lazy-loaded cards
-                    # Form attributes
-                    id="modal-details-form",
-                    hx_post=save_item_details.to(),
-                    hx_indicator="#modal-loading-indicator",
-                ),
-            ),  # End Scrollable wrapper
-            # Fixed Footer
-            footer_content(cls="flex-shrink-0"),
-        )
-
-        # --- Backdrop ---
-        modal_backdrop = Form(method="dialog", cls="modal-backdrop")(
-            NotStr(
-                '<button class="absolute inset-0 w-full h-full cursor-default outline-none" aria-label="close modal"></button>'
-            )
-        )
-
-        response_content = (modal_box_content, modal_backdrop)
-        return response_content, HtmxResponseHeaders(
-            trigger="openModalEvent"
-        )  # Trigger open on initial load/next/prev
-
-    except Exception as e:
-        print(f"Error generating modal content for ID {material_id}: {e}")
-        print(traceback.format_exc())
-        modal_box_content = Div(cls="modal-box")(
-            H3("Error"),
-            P(f"An error occurred: {e}"),
-        )
-        modal_backdrop = Form(method="dialog", cls="modal-backdrop")(
-            NotStr(
-                '<button class="absolute inset-0 w-full h-full cursor-default outline-none" aria-label="close"></button>'
-            )
-        )
-        return (modal_box_content, modal_backdrop), HtmxResponseHeaders(
-            trigger="openModalEvent"
-        )
+# --- main page routes ---
 
 
 @rt("/data")
-async def data_grid(
-    request: Request,
-    page: int = 1,
-    per_page: int = DEFAULT_PER_PAGE,
-    sort_by: str | None = None,
-    sort_desc: str = "False",
-    filter_department: str = "",
-    filter_course_name: str = "",
-    filter_manual_classification: str = "",
-    filter_ml_classification: str = "",
-    filter_status: str = "",
-    filter_faculty: str = "",
-    filter_author: str = "",
-    filter_publisher: str = "",
-    filter_workflow_status: str = "",
-):
+async def data_grid(session: dict, request: Request):  # Simplified signature
     """Endpoint renders the main page structure OR just the data grid component."""
-    current_filters: dict[str, str] = {
-        "department": filter_department.strip(),
-        "course_name": filter_course_name.strip(),
-        "manual_classification": filter_manual_classification.strip(),
-        "ml_classification": filter_ml_classification.strip(),
-        "status": filter_status.strip(),
-        "faculty": filter_faculty.strip(),
-        "author": filter_author.strip(),
-        "publisher": filter_publisher.strip(),
-        "workflow_status": filter_workflow_status.strip(),
-    }
-    current_filters = {k: v for k, v in current_filters.items() if v}
-    print(f"filters in data_grid route: {current_filters}")
 
-    sort_desc_bool = sort_desc.lower() == "true"
+    # --- Get or Initialize AppState ---
+    # Retrieve as dict, default to empty dict if not found
+    app_state_dict = session.get("app_state", {})
+    # Instantiate AppState from the dict. If dict is empty, AppState() uses defaults.
+    app_state = AppState(**app_state_dict)
 
-    filtered_sorted_df = get_filtered_sorted_df(
-        sort_by, sort_desc_bool, current_filters
-    )
+    # --- Update AppState from Request Parameters ---
+    # Combine query params and form data if necessary (e.g., POST from filter form)
+    query_params = dict(request.query_params)
+    form_data = {}
+    if request.method == "POST":  # Check if it could be a POST from filter form
+        try:
+            form_data = await request.form()
+            form_data = dict(form_data)
+        except (
+            Exception
+        ):  # Handle cases where form parsing might fail (e.g., GET request)
+            pass
+    # Prioritize form data over query params if keys overlap
+    request_params = {**query_params, **form_data}
+
+    auth_details = session.get("auth", {})
+    app_state.update_from_req(request_params, auth_details)  # Update state in place
+
+    # --- Re-calculate Total Pages and Validate Current Page ---
+    filtered_sorted_df = get_filtered_sorted_df(app_state)
     total_filtered_rows = filtered_sorted_df.height
-    total_pages = math.ceil(total_filtered_rows / per_page) if per_page > 0 else 1
-    page = max(1, min(page, total_pages if total_pages > 0 else 1))
-    offset = (page - 1) * per_page
-    df_slice = filtered_sorted_df.slice(offset, per_page)
-    print(f"filters in data_grid route: {current_filters}")
+    total_pages = (
+        math.ceil(total_filtered_rows / app_state.per_page)
+        if app_state.per_page > 0
+        else 1
+    )
+    app_state.page = max(
+        1, min(app_state.page, total_pages if total_pages > 0 else 1)
+    )  # Validate page
+
+    # --- Store Updated AppState in Session ---
+    session["app_state"] = asdict(app_state)  # Convert to dict here!
+
+    # --- Prepare Data Slice ---
+    offset = (app_state.page - 1) * app_state.per_page
+    df_slice = filtered_sorted_df.slice(offset, app_state.per_page)
+
+    # --- Render Components using AppState ---
     grid_component = render_data_grid_component(
         df_slice=df_slice,
-        current_page=page,
-        total_pages=total_pages,
-        per_page=per_page,
+        app_state=app_state,
         total_filtered_rows=total_filtered_rows,
-        offset=offset,
-        sort_by=sort_by,
-        sort_desc=sort_desc_bool,
-        current_filters=current_filters,
+        total_pages=total_pages,
     )
 
     header_component = page_header_component(
-        current_filters=current_filters,
-        per_page=per_page,
-        sort_by=sort_by,
-        sort_desc=sort_desc_bool,
+        user_details=auth_details,
+        app_state=app_state,
     )
 
+    # --- Handle HTMX vs Full Page Request ---
     is_htmx = request.headers.get("hx-request", "false").lower() == "true"
 
     if not is_htmx:
@@ -1691,335 +1996,597 @@ async def data_grid(
             }}
         """)
 
-        htmx_toast_template = Template(
-            Div(
-                Span(slot="message"),
-                Button(
-                    "✕",
-                    type="button",
-                    cls="btn btn-sm btn-outline",
-                    aria_label="Close",
-                    slot="close",
-                ),
-                cls="alert",
-                slot="alert",
-            ),
-            id="htmx-toasts-template",
-        )
-
-        htmx_toast_settings = Htmx_toasts(
-            timeout="30000",
-            cls="toast",
-            role="status",
-            aria_live="polite",
-            error_class="alert-error",
-            info_class="alert-info",
-            warn_class="alert-warning",
-            success_class="alert-success",
-        )
-
-        htmx_toast_script = Script("""
-        document.addEventListener("save_success", function(evt) {
-                window.dispatchEvent(new CustomEvent('htmx-toasts:notify', {
-                    detail: {
-                        message: 'Successfully saved data for material ID: ' + evt.detail.material_id,
-                        level: 'success'
-                    }
-                }));
-
-                // 2. Reset modal dirty state
-                // Hide save indicator
-                const indicator = document.getElementById('save-indicator');
-                if (indicator) indicator.classList.add('hidden');
-
-                const saveButton = document.getElementById('modal-save-btn');
-                if (saveButton) saveButton.disabled = true;
-
-                const form = document.getElementById('modal-details-form');
-                if (form) {
-                    const fieldsToUpdate = ['input-workflow_status', 'input-manual_classification', 'modal_remarks'];
-                    fieldsToUpdate.forEach(id => {
-                        const element = form.querySelector('#' + id);
-                        if (element) {
-                            element.dataset.originalValue = element.value;
-                            if(id.startsWith('input-')) {
-                                const fieldName = id.replace('input-', '');
-                                const pillElement = document.getElementById(`pill-display-${fieldName}`);
-                                if(pillElement) {
-                                    element.dataset.originalText = pillElement.textContent;
-                                    const styleClass = Array.from(pillElement.classList).find(cls => cls.startsWith('uk-label-')) || '';
-                                    element.dataset.originalStyle = styleClass;
-                                }
-                            }
-                        }
-                    });
-                }
-            });
-
-
-        document.addEventListener("save_error", function(evt) {
-                window.dispatchEvent(new CustomEvent('htmx-toasts:notify', {
-                    detail: {
-                        message: 'Error saving data for material ID: ' + evt.detail.material_id,
-                        level: 'error'
-                    }
-                }));
-            });
-        """)
-
-        # Update the return tuple
         return (
             Title("Copyright Data Dashboard"),
-            Div(  # page-container
+            Div(
                 Div(header_component, grid_component, id="content-area"),
                 id="page-container",
             ),
             modal_placeholder,
             modal_trigger_script,
             modal_interaction_script,
-            htmx_toast_template,
-            htmx_toast_settings,
-            htmx_toast_script,
         )
-
     else:
+        # --- HTMX Partial Update ---
+        # Return only the grid component
         return grid_component
 
 
-@rt("/save_details", methods=["POST"])
-async def save_item_details(
-    request: Request,
-    # Editable fields
-    material_id: int,
-    workflow_status: str = "",
-    manual_classification: str = "",
-    remarks: str = "",
-    # State fields from hidden inputs
-    page: int = 1,
-    per_page: int = DEFAULT_PER_PAGE,
-    sort_by: Optional[str] = None,
-    sort_desc: str = "False",
-    filter_department: str = "",
-    filter_course_name: str = "",
-    filter_manual_classification: str = "",  # Note: might conflict with editable field?
-    filter_ml_prediction: str = "",
-    filter_status: str = "",
-    filter_faculty: str = "",
-    filter_author: str = "",
-    filter_publisher: str = "",
-    filter_workflow_status: str = "",  # Note: might conflict with editable field?
-):
-    """Handles saving changes, updates global df, returns OOB grid refresh + JS trigger."""
-    global copyright_df_global
+@rt("/modal/{material_id:int}")
+async def show_item_details(session: dict, material_id: int):  # Simplified signature
+    """Fetches data and returns structured INNER content for the modal dialog."""
 
-    print(f"Saving changes for material_id: {material_id}")
-    update_data = {
-        "material_id": material_id,
-        "workflow_status": workflow_status,
-        "manual_classification": manual_classification,
-        "remarks": remarks,
-    }
+    app_state_dict = session.get("app_state", {})
+    app_state = AppState(**app_state_dict)  # Convert dict back to instance
 
-    oob_grid_swap = Div()  # Default empty div
-    trigger_name = ""
+    def get_val(key, default=None):
+        return item_data.get(key, default)
+
+    def create_editable_pill_div(label_text: str, field_name: str, options_map: dict):
+        # ... (Keep existing implementation)
+        current_value = get_val(field_name)
+        content_component, html_tag = render_modal_field(field_name, current_value)
+        label_el, _ = render_labelled_item(label_text, content_component, html_tag)
+        original_value_str = str(current_value) if current_value is not None else ""
+        original_style_class = str(DEFAULT_PILL_STYLE)  # Default style
+
+        # Logic to find the *actual* style class applied by render_modal_field
+        if hasattr(content_component, "attrs") and "cls" in content_component.attrs:
+            current_classes = content_component.attrs["cls"].split()
+            labelt_values = (
+                {str(lt) for lt in LabelT}
+                | {str(st) for st in STATUS_STYLES.values()}
+                | {str(wt) for wt in WORKFLOW_STYLES.values()}
+            )
+            found_style = next(
+                (cls for cls in current_classes if cls in labelt_values), None
+            )
+            if found_style:
+                original_style_class = found_style
+            elif (
+                "badge-sm" not in current_classes
+            ):  # If no style applied, ensure badge-sm is used for consistency if it's a Label
+                if isinstance(content_component, fh.fastcore.xml.Gen):
+                    if (
+                        content_component.tag == "span"
+                        and "uk-label" in content_component.attrs.get("cls", "")
+                    ):
+                        content_component.attrs["cls"] += " badge-sm"
+
+        # Add ID to the display component for JS targeting
+        component_with_id = content_component
+        # Safely add/update the ID
+        if hasattr(component_with_id, "attrs"):
+            component_with_id.attrs = (
+                component_with_id.attrs.copy()
+                if isinstance(component_with_id.attrs, dict)
+                else {}
+            )
+            component_with_id.attrs["id"] = f"pill-display-{field_name}"
+        # else: # Handle cases where it might be a simple string or needs wrapping
+        # component_with_id = Span(content_component, id=f"pill-display-{field_name}") # Example wrap
+
+        dropdown_items = []
+        for opt_val, opt_style_enum in options_map.items():
+            opt_style_class = (
+                str(opt_style_enum) if opt_style_enum else str(DEFAULT_PILL_STYLE)
+            )
+            # Ensure opt_val is treated as a string for JS
+            js_opt_val = json.dumps(
+                str(opt_val)
+            )  # Use json.dumps for safe JS string representation
+            js_opt_text = json.dumps(str(opt_val))  # Text is usually same as value here
+            onclick_js = f"updatePill('{field_name}', {js_opt_val}, {js_opt_text}, '{opt_style_class}'); return false;"
+            # Ensure the label inside the dropdown also has badge-sm
+            dropdown_items.append(
+                Li(
+                    A(
+                        Label(opt_val, cls=f"{opt_style_class} badge-sm"),
+                        href="#",
+                        onclick=onclick_js,
+                    )
+                )
+            )
+
+        hidden_input = Input(
+            type="hidden",
+            id=f"input-{field_name}",
+            name=field_name,
+            value=original_value_str,
+            data_original_value=original_value_str,
+            data_original_text=original_value_str,  # Use same as value for simplicity here
+            data_original_style=original_style_class,
+        )
+
+        pill_container = Div(
+            component_with_id,  # The component with the ID set
+            Div(
+                Ul(*dropdown_items, cls="uk-nav uk-dropdown-nav"),
+                cls="uk-dropdown w-auto bg-base-100 p-2 shadow-lg rounded-md border border-base-300",
+                uk_drop="mode: click; pos: bottom-right; boundary: !.modal-box; flip: false",
+            ),
+            hidden_input,
+            cls="inline-block uk-inline",
+        )
+
+        return Div(
+            label_el,
+            Div(pill_container, cls="text-right"),
+            cls="flex items-center justify-between space-x-2 mb-2",
+        )
+
+    def create_readonly_item_div(
+        label_text: str, field_name: str, is_inline: bool = False
+    ):
+        content_component, html_tag = render_modal_field(
+            field_name, get_val(field_name)
+        )
+        label_el, content_el = render_labelled_item(
+            label_text, content_component, html_tag
+        )
+        container_cls = (
+            "flex items-center justify-between space-x-2 mb-2" if is_inline else "mb-3"
+        )
+        content_wrapper_cls = "text-right" if is_inline else ""
+        return Div(
+            label_el, Div(content_el, cls=content_wrapper_cls), cls=container_cls
+        )
 
     try:
-        await store_item_changes(update_data)
+        filtered_sorted_df = get_filtered_sorted_df(app_state)
+        ordered_ids = filtered_sorted_df.get_column("material_id").to_list()
 
-        print("Reloading global DataFrame after save...")
-        copyright_df_global = retrieve_copyright_items()
-        print("Global DataFrame reloaded.")
+        try:
+            current_index = ordered_ids.index(material_id)
+        except ValueError:
+            current_index = -1  # Item not found in current filtered/sorted list
 
-        current_grid_filters: dict[str, str] = {
-            "department": filter_department.strip(),
-            "course_name": filter_course_name.strip(),
-            "manual_classification": filter_manual_classification.strip(),
-            "ml_prediction": filter_ml_prediction.strip(),
-            "status": filter_status.strip(),
-            "faculty": filter_faculty.strip(),
-            "author": filter_author.strip(),
-            "publisher": filter_publisher.strip(),
-            "workflow_status": filter_workflow_status.strip(),
+        prev_id = ordered_ids[current_index - 1] if current_index > 0 else None
+        next_id = (
+            ordered_ids[current_index + 1]
+            if current_index != -1 and current_index < len(ordered_ids) - 1
+            else None
+        )
+
+        # --- Fetch Item Data  ---
+        nested_data_list = retrieve_osiris_data([material_id])
+        if not nested_data_list:  # Handle case where item data isn't found
+            raise ValueError(f"Material ID {material_id} not found in Osiris data.")
+        item_data = nested_data_list[0]
+        if "faculty_id" in item_data:
+            item_data["faculty"] = item_data.pop("faculty_id")  # Alias faculty_id
+
+        manual_classification_options = {}
+        for val in PRIMARY_CLASSIFICATIONS:
+            manual_classification_options[val] = LabelT.primary
+        for val in SECONDARY_CLASSIFICATIONS:
+            manual_classification_options[val] = LabelT.secondary
+        for val in DESTRUCTIVE_CLASSIFICATIONS:
+            manual_classification_options[val] = LabelT.destructive
+        if "onbekend" not in manual_classification_options:
+            manual_classification_options["onbekend"] = LabelT.secondary
+
+        # --- Header Row  ---
+        filename = get_val("filename", "N/A") or "(file deleted or not found)"
+        filename_content = H4(filename, cls="font-semibold text-lg break-all")
+        file_url = get_val("url")
+        if not file_url or file_url == "":
+            file_url = None
+        if file_url:
+            filename_content = A(
+                filename_content, href=file_url, target="_blank", cls="link-hover"
+            )
+        status_pill, _ = render_modal_field("status", get_val("status"))
+        # add material_id pill right below the status pill
+        status_pill = Div(
+            status_pill,
+            cls="flex items-center space-x-2",
+        )(
+            Label(
+                UkIcon("file-key-2", cls="mr-1"),
+                str(material_id),
+                cls="text-sm",
+            ),
+        )
+
+        url_element, _ = render_modal_field("url", file_url)
+
+        header_content = Div(cls="flex items-center justify-between space-x-4")(
+            Div(cls="flex items-center space-x-3 flex-grow min-w-0")(
+                status_pill, filename_content, url_element
+            ),
+            Form(method="dialog")(
+                Button("✕", cls="btn btn-sm btn-circle btn-ghost flex-shrink-0")
+            ),
+        )
+
+        # --- Cards ---
+        # --- Data Entry Card ---
+        data_entry_content = (
+            create_editable_pill_div(
+                "Workflow Status", "workflow_status", WORKFLOW_STYLES
+            ),
+            create_editable_pill_div(
+                "Manual Classification",
+                "manual_classification",
+                manual_classification_options,
+            ),
+            Div(
+                Strong(
+                    "Remarks", cls="block text-xs font-medium text-base-content/80 mb-1"
+                ),
+                TextArea(
+                    get_val("remarks", ""),
+                    id="modal_remarks",
+                    name="remarks",
+                    rows="5",
+                    cls="textarea textarea-bordered w-full text-sm bg-base-100",
+                    data_original_value=get_val("remarks", ""),
+                    oninput="markDirty()",
+                ),
+                cls="mb-3",
+            ),
+            Div(cls="flex justify-end space-x-2 mt-4")(
+                Button(
+                    "Reset",
+                    type="button",
+                    cls=ButtonT.secondary + " btn-sm",
+                    onclick="resetModalForm(); return false;",
+                ),
+                Button(
+                    Span(
+                        Span(cls="relative flex size-3 mr-2")(
+                            Span(
+                                cls="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"
+                            ),
+                            UkIcon(
+                                "alert-triangle",
+                                cls="relative inline-flex size-3 text-red-500",
+                            ),
+                        ),
+                        id="save-indicator",
+                        cls="hidden",
+                    ),
+                    "Save",
+                    id="modal-save-btn",
+                    type="submit",
+                    cls=ButtonT.primary + " btn-sm",
+                    disabled=True,
+                ),
+            ),
+        )
+        # --- Item Info Card ---
+        item_info_content = (
+            create_readonly_item_div(
+                "Classification", "classification", is_inline=True
+            ),
+            create_readonly_item_div("ML Prediction", "ml_prediction", is_inline=True),
+            create_readonly_item_div("Period", "period"),
+            create_readonly_item_div("Faculty", "faculty"),
+            create_readonly_item_div("Owner", "owner"),
+            create_readonly_item_div("Department", "department"),
+            create_readonly_item_div("Course Name", "course_name"),
+            create_readonly_item_div("Course Code", "course_code"),
+        )
+        # --- Text Details Card ---
+        text_details_content = (
+            create_readonly_item_div("Title", "title"),
+            create_readonly_item_div("Author", "author"),
+            create_readonly_item_div("Publisher", "publisher"),
+            create_readonly_item_div("DOI", "doi"),
+            create_readonly_item_div("ISBN", "isbn"),
+        )
+        # --- Numeric Details Card ---
+        numeric_details_content = (
+            create_readonly_item_div("Pages", "pagecount", is_inline=True),
+            create_readonly_item_div("Words", "wordcount", is_inline=True),
+            create_readonly_item_div("Pictures", "picturecount", is_inline=True),
+        )
+        # --- Osiris Data Cards ---
+        contact_info_content = render_contact_info(item_data)
+        course_details_content = render_course_details(item_data)
+        teachers_content = render_teacher_info(item_data)
+
+        # --- Assemble Cards into Grid ---
+        modal_cards_grid = Div(cls="grid grid-cols-1 md:grid-cols-3 gap-4")(
+            # Column 1
+            Div(
+                ItemDetailCard(
+                    "Data Entry",
+                    *data_entry_content,
+                    card_id="data-entry-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Entities",
+                    Span("Click to load...", cls="italic text-sm"),
+                    card_id="entities-card",
+                    col_span=1,
+                    start_collapsed=True,
+                    lazy_load_url=get_entities_element.to(material_id=material_id),
+                ),
+                cls="flex flex-col space-y-4",
+            ),
+            # Column 2
+            Div(
+                ItemDetailCard(
+                    "Item Info",
+                    *item_info_content,
+                    card_id="item-info-card",
+                    start_collapsed=True,
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Text Details",
+                    *text_details_content,
+                    card_id="text-details-card",
+                    start_collapsed=True,
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Counts",
+                    *numeric_details_content,
+                    card_id="counts-card",
+                    start_collapsed=True,
+                    col_span=1,
+                ),
+                cls="flex flex-col space-y-4",
+            ),
+            # Column 3
+            Div(
+                ItemDetailCard(
+                    "Contact Info",
+                    *contact_info_content,
+                    card_id="contact-info-card",
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Course Details",
+                    *course_details_content,
+                    card_id="course-details-card",
+                    start_collapsed=True,
+                    col_span=1,
+                ),
+                ItemDetailCard(
+                    "Teachers",
+                    *teachers_content,
+                    card_id="teachers-card",
+                    start_collapsed=True,
+                    col_span=1,
+                ),
+                cls="flex flex-col space-y-4",
+            ),
+            # Full Width Lazy Loaded Cards
+            ItemDetailCard(
+                "PDF Viewer",
+                Span("Click to load...", cls="italic text-sm"),
+                card_id="pdf-card",
+                col_span=3,
+                start_collapsed=True,
+                lazy_load_url=get_pdf_element.to(material_id=material_id),
+            ),
+            ItemDetailCard(
+                "Extracted Text",
+                Span("Click to load...", cls="italic text-sm"),
+                card_id="text-card",
+                col_span=3,
+                start_collapsed=True,
+                lazy_load_url=get_extracted_text_element.to(material_id=material_id),
+            ),
+        )
+
+        # --- Footer Row  ---
+        indicator_attrs = {"hx_indicator": "#modal-loading-indicator"}
+
+        # Prev Button
+        prev_button_attrs = {
+            "id": "modal-prev-btn",
+            "cls": ButtonT.secondary + " btn-sm",
+            "disabled": prev_id is None,
         }
-        current_grid_filters = {k: v for k, v in current_grid_filters.items() if v}
-        grid_sort_desc_bool = sort_desc.lower() == "true"
+        if prev_id is not None:
+            prev_button_attrs.update(
+                {
+                    "hx_get": show_item_details.to(material_id=prev_id),  # Only need ID
+                    "hx_target": "#modal-placeholder",
+                    "hx_swap": "innerHTML",
+                    **indicator_attrs,
+                }
+            )
+        prev_button = Button("< Prev", **prev_button_attrs)
 
-        # Re-filter and slice for the current page view
-        filtered_sorted_df = get_filtered_sorted_df(
-            sort_by, grid_sort_desc_bool, current_grid_filters
+        # Next Button
+        next_button_attrs = {
+            "id": "modal-next-btn",
+            "cls": ButtonT.secondary + " btn-sm",
+            "disabled": next_id is None,
+        }
+        if next_id is not None:
+            next_button_attrs.update(
+                {
+                    "hx_get": show_item_details.to(material_id=next_id),  # Only need ID
+                    "hx_target": "#modal-placeholder",
+                    "hx_swap": "innerHTML",
+                    **indicator_attrs,
+                }
+            )
+        next_button = Button("Next >", **next_button_attrs)
+
+        footer_content = Div(cls="modal-action mt-4 pt-4 border-t")(
+            Div(cls="flex justify-between w-full")(
+                prev_button,
+                Form(method="dialog")(Button("Close", cls=ButtonT.primary + " btn-sm")),
+                next_button,
+            )
         )
-        total_filtered_rows = filtered_sorted_df.height
-        total_pages = math.ceil(total_filtered_rows / per_page) if per_page > 0 else 1
-        page = max(1, min(page, total_pages if total_pages > 0 else 1))
-        offset = (page - 1) * per_page
-        df_slice = filtered_sorted_df.slice(offset, per_page)
 
-        # Render the grid component HTML
-        updated_grid_component = render_data_grid_component(
-            df_slice=df_slice,
-            current_page=page,
-            total_pages=total_pages,
-            per_page=per_page,
-            total_filtered_rows=total_filtered_rows,
-            offset=offset,
-            sort_by=sort_by,
-            sort_desc=grid_sort_desc_bool,
-            current_filters=current_grid_filters,
+        # --- Assemble Modal Box ---
+        modal_box_content = Div(
+            Div(
+                Div(header_content, cls="border-b pb-2 flex-shrink-0"),  # Header
+                Div(  # Scrollable Body
+                    # Loading indicator for modal transitions (prev/next/save)
+                    Div(
+                        Span("Loading...", cls="loading loading-lg"),
+                        id="modal-loading-indicator",
+                        cls="htmx-indicator absolute inset-0 bg-base-100/50 flex items-center justify-center z-50",
+                    ),
+                    # Form for saving details
+                    Form(
+                        # Essential hidden field for the save endpoint
+                        Input(type="hidden", name="material_id", value=material_id),
+                        # --- REMOVE HIDDEN STATE INPUTS ---
+                        # *[Input(type="hidden", name=k, value=v) for k, v in app_state.filter_params_dict().items()],
+                        # *[Input(type="hidden", name=k, value=v) for k, v in app_state.nav_params_dict().items()],
+                        modal_cards_grid,  # The main content grid
+                        id="modal-details-form",
+                        hx_post=save_item_details.to(),  # Save endpoint doesn't need state params in URL
+                        hx_indicator="#modal-loading-indicator",
+                        # Consider hx_target="body" and hx_swap="none" if only relying on OOB swaps from save_item_details
+                        # Or target a specific small element inside the modal for status messages if needed
+                        # hx_target="#save-status-message", hx_swap="innerHTML"
+                    ),
+                    cls="relative py-4 flex-grow overflow-y-auto",
+                ),
+                footer_content,  # Footer with prev/next/close
+                cls="flex-shrink-0",  # Ensure footer doesn't scroll
+            ),
+            cls="modal-box w-[85vw] max-w-none h-[calc(100vh-5rem)] max-h-none flex flex-col",
         )
 
-        # --- Create OOB Swap Div for the Grid ---
-        oob_grid_swap = Div(
-            to_xml(updated_grid_component),
-            hx_swap_oob="outerHTML:#data-grid-component",
+        modal_backdrop = Form(method="dialog", cls="modal-backdrop")(
+            NotStr(
+                '<button class="absolute inset-0 w-full h-full cursor-default outline-none" aria-label="close modal"></button>'
+            )
         )
 
-        trigger_name = {"save_success": {"material_id": material_id}}
+        response_content = (modal_box_content, modal_backdrop)
+        return response_content, HtmxResponseHeaders(trigger="openModalEvent")
 
     except Exception as e:
-        print(f"Error saving changes for {material_id}: {e}")
-        trigger_name: dict[str, dict[str, int]] = {
-            "save_error": {"material_id": material_id}
-        }
+        print(f"Error generating modal content for ID {material_id}: {e}")
 
-    return oob_grid_swap, HtmxResponseHeaders(
-        reswap="none",
-        trigger=json.dumps(trigger_name),  # Directly trigger the JS function name
-    )
-
-
-@rt("/pdf/{material_id:int}")
-async def get_pdf_element(material_id: int):
-    """
-    Returns element displaying the PDF file for the given material_id as an embedded PDF viewer.
-    If the PDF file is not found, a message will be displayed.
-    """
-    root_folder = Path("pdf_downloads")
-
-    pdf_file_path = root_folder / f"{material_id}.pdf"
-    print(f"PDF file path: {pdf_file_path}")
-    pdf_element = None
-    if not pdf_file_path.exists():
-        pdf_element = Div("PDF file not found", cls="text-red-500")
-    else:
-        pdf_element = Embed(
-            src=ROOT_URL + f"/file/{material_id}",
-            type="application/pdf",
-            width="100%",
-            height="800px",
+        modal_box_content = Div(cls="modal-box")(
+            H3("Error"),
+            P(f"Could not load details for item {material_id}."),
+            P(f"Details: {e}", cls="text-xs text-error"),
+            Form(method="dialog")(Button("Close", cls="btn btn-sm mt-4")),
         )
-
-    return pdf_element
-
-
-@rt("/text/{material_id:int}")
-async def get_extracted_text_element(material_id: int):
-    """
-    Returns element displaying extracted text from the PDF file for the given material_id.
-    If annotated text is available, it will be used; otherwise, the plain text will be returned.
-    If neither are available, a message will be displayed.
-    """
-    root_folder = Path("pdf_downloads")
-    extracted_text_path = root_folder / f"{material_id}_annotated.md"
-    if not extracted_text_path.exists():
-        extracted_text_path = root_folder / f"{material_id}_annotated.txt"
-        if not extracted_text_path.exists():
-            extracted_text_path = root_folder / f"{material_id}.md"
-        if not extracted_text_path.exists():
-            extracted_text_path = root_folder / f"{material_id}.txt"
-        if not extracted_text_path.exists():
-            return Div("No extracted text found.", cls="text-red-500 p-4")
-
-    text_element = Div("Error loading text.", cls="text-red-500 p-4")
-    if extracted_text_path.exists():
-        try:
-            with open(extracted_text_path, encoding="utf-8") as f:
-                text_content = f.read()
-            text_content_safe = text_content.replace("`", "\\`").replace("${", "\\${")
-            content_div_id = f"text-content-{material_id}"
-            text_element = Div(  #
-                Div(id=content_div_id, cls="prose prose-sm max-w-none"),
-                Script(
-                    f"let targetDiv = document.getElementById('{content_div_id}'); if(targetDiv && typeof marked !== 'undefined') {{ targetDiv.innerHTML = marked.parse(`{text_content_safe}`); }} else {{ console.error('Marked library or target div {content_div_id} not found.'); }}"
-                ),
+        modal_backdrop = Form(method="dialog", cls="modal-backdrop")(
+            NotStr(
+                '<button class="absolute inset-0 w-full h-full cursor-default outline-none" aria-label="close"></button>'
             )
-        except Exception as e:
-            print(f"Error processing text file {extracted_text_path}: {e}")
-            text_element = Div(f"Error loading text file: {e}", cls="text-red-500 p-4")
-
-    return text_element
-
-
-@rt("/osiris/{material_id:int}")
-async def get_osiris_data(material_id: int):
-    """
-    Returns enriched data for the given material_id.
-    should always return the base item data, even if no enriched data is found.
-    """
-    data = retrieve_osiris_data([material_id])
-    if not data or len(data) == 0 or not isinstance(data, list):
-        return []
-    return data[0]
-
-
-@rt("/entities/{material_id:int}")
-async def get_entities_element(material_id: int):
-    """
-    Returns element displaying entities extracted from the annotated text for the given material_id.
-    If no entities are found, a message will be displayed.
-    """
-    root_folder = Path("pdf_downloads")
-    entities_path = root_folder / f"{material_id}_annotated.json"
-    entities_element = Div(
-        H4("No entities found (yet?) in the text"),
-        cls="mt-4",
-    )
-
-    if entities_path.exists():
-        with open(entities_path, encoding="utf-8") as f:
-            entities = json.load(f)
-
-        # sort entities by their start position
-        entities.sort(key=lambda x: x["start"])
-
-        # group by label
-        entities_by_label: dict[str, list[str]] = {}
-
-        for ent in entities:
-            label = ent["label"]
-            if label not in entities_by_label:
-                entities_by_label[label] = []
-            entities_by_label[label].append(Li(Mark(ent["text"])))
-
-        entities_element = Div(
-            *[
-                Div(
-                    H5(label),
-                    Ul(*entities_by_label[label], cls="list-disc"),
-                )
-                for label in entities_by_label
-            ]
+        )
+        return (modal_box_content, modal_backdrop), HtmxResponseHeaders(
+            trigger="openModalEvent"
         )
 
-    return entities_element
+
+@rt("/login")
+def get():
+    frm = Form(
+        Div(
+            NotStr(
+                r'<label class="block text-gray-700 text-sm font-bold mb-2" for="email">Email</label>'
+            ),
+            Input(
+                id="email",
+                type="text",
+                placeholder="Email",
+                name="email",
+                cls="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline",
+            ),
+            cls="mb-4",
+        ),
+        Div(
+            NotStr(
+                r'<label class="block text-gray-700 text-sm font-bold mb-2" for="password">Password</label>'
+            ),
+            Input(
+                id="password",
+                name="pwd",
+                type="password",
+                placeholder="******************",
+                cls="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline",
+            ),
+            cls="mb-6",
+        ),
+        fh.Button(
+            "login",
+            cls="btn btn-secondary bg-indigo-500 font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline",
+            type="submit",
+        ),
+        action="/login",
+        method="post",
+        cls="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4",
+    )
+    return Title("Login to CDD//UT "), Div(
+        Card(
+            CardTitle(
+                NotStr(
+                    "<p>Login to the <strong class='underline decoration-pink-500'>C</strong>opyright <strong class='underline decoration-pink-500'>D</strong>ata <strong class='underline decoration-pink-500'>D</strong>ashboard</p>"
+                ),
+                Img(src="imgs/ut_logo.png"),
+                cls="text-center text-xl",
+            ),
+            CardBody(frm),
+            cls="uk-card-secondary bg-indigo-400",
+        ),
+        cls="flex items-center justify-center h-screen",
+    )
 
 
-@rt(r"/file/{material_id:int}")
-async def get_file(material_id: int):
-    pdf_root_dir = Path("pdf_downloads")
-    ext = "pdf"
-    file_path = pdf_root_dir / f"{material_id}.{ext}"
-    print(f"requested file: {file_path}")
-    if not file_path.exists():
-        return HTMLResponse("File not found", status_code=404)
-    return FileResponse(file_path)
+@rt("/login")
+def post(login: Login, sess):  # login uses dataclass binding
+    if not login.email or not login.pwd:
+        return login_redir
+    try:
+        u = users[login.email]  # Query user by email (primary key)
+        if not u:
+            raise NotFoundError  # If user dict is empty/None
+    except NotFoundError:
+        print(f"Login attempt failed: User '{login.email}' not found.")
+        # Optional: Add toast message for user feedback
+        add_toast(sess, "Invalid email or password", "error")  # Requires setup_toasts
+        return login_redir  # Redirect back to login on failure
+
+    # Verify password
+    if not compare_digest(u.get("pwd", "").encode("utf-8"), login.pwd.encode("utf-8")):
+        print(f"Login attempt failed: Incorrect password for '{login.email}'.")
+        add_toast(sess, "Invalid email or password", "error")
+        return login_redir  # Redirect back to login on failure
+
+    # --- Store structured auth info in session ---
+    sess["auth"] = {
+        "email": login.email,
+        "name": u.get("name"),
+        "faculty": u.get("faculty"),
+        "role": u.get("role"),
+    }
+    if "app_state" in sess:
+        del sess["app_state"]
+    print(f"Login successful for '{login.email}'. Redirecting to data grid.")
+    add_toast(sess, f"Login successful! Welcome, {u.get('name')}!", "success")
+    return RedirectResponse(data_grid.to(), status_code=303)
 
 
+@rt("/logout")
+def logout(sess):
+    if "auth" in sess:
+        del sess["auth"]
+    if "app_state" in sess:
+        del sess["app_state"]
+    return login_redir
+
+
+# --- root route ---
 @rt("/")
 async def root_redirect():
     """Redirect root to data grid."""
     return RedirectResponse(url=data_grid.to(), status_code=302)
 
 
+# --- main entry point ---
 if __name__ == "__main__":
     print("Starting FastHTML server...")
     serve(port=PORT, reload=True)

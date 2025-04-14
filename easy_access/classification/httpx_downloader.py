@@ -10,7 +10,7 @@ from rich import print
 from easy_access.db.base import CopyrightItem, init
 from easy_access.db.models import Status
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import cool, info, warn
+from easy_access.utils import cool, info
 
 SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
 SETTINGS.dirs[DirSetting.SCRIPT_DATA]
@@ -171,52 +171,53 @@ async def main_download_all(max_concurrent: int = 10):
     """
     Downloads files from a list of URLs concurrently using HttpxDownloader.
     """
-    downloader = HttpxDownloader()
+    try:
+        downloader = HttpxDownloader()
+        await replace_canvas_id_with_material_id()
 
-    semaphore = asyncio.Semaphore(max_concurrent)
-    tasks = []
-    await init()
+        semaphore = asyncio.Semaphore(max_concurrent)
+        tasks = []
+        await init()
 
-    async def download_with_semaphore(url):
-        async with semaphore:
-            return await downloader.download_file(url)
+        async def download_with_semaphore(url):
+            async with semaphore:
+                return await downloader.download_file(url)
 
-    full_df: pl.DataFrame = await get_urls_from_full_data()
-    urls_to_download = full_df["url"].to_list()
+        full_df: pl.DataFrame = await get_urls_from_full_data()
+        urls_to_download = full_df["url"].to_list()
 
-    cool(
-        f"Starting bulk download of {len(urls_to_download)} files (max concurrent: {max_concurrent})..."
-    )
-    for url in urls_to_download:
-        tasks.append(download_with_semaphore(url))
+        cool(
+            f"Starting bulk download of {len(urls_to_download)} files (max concurrent: {max_concurrent})..."
+        )
+        for url in urls_to_download:
+            tasks.append(download_with_semaphore(url))
 
-    results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
 
-    # --- Process results ---
-    success_count = 0
-    failed_count = 0
-    downloaded_files = []
-    failed_urls = []
+        # --- Process results ---
+        success_count = 0
+        failed_count = 0
+        downloaded_files = []
+        failed_urls = []
 
-    for i, result in enumerate(results):
-        success, filepath, error_msg = result
-        if success and filepath:
-            success_count += 1
-            downloaded_files.append(filepath)
-        else:
-            failed_count += 1
-            failed_urls.append((urls_to_download[i], error_msg))
+        for i, result in enumerate(results):
+            success, filepath, error_msg = result
+            if success and filepath:
+                success_count += 1
+                downloaded_files.append(filepath)
+            else:
+                failed_count += 1
+                failed_urls.append((urls_to_download[i], error_msg))
 
-    cool(f"Download complete. Success: {success_count}, Failed: {failed_count}")
-    if failed_urls:
-        info("Failed URLs:")
-        for url, err in failed_urls:
-            info(f"  - {url} (Error: {err})")
+        cool(f"Download complete. Success: {success_count}, Failed: {failed_count}")
+        if failed_urls:
+            info("Failed URLs:")
+            for url, err in failed_urls:
+                info(f"  - {url} (Error: {err})")
 
-    # Ensure client is closed
-    await downloader.close_client()
-
-    # You could return results for further processing
+    finally:
+        # Ensure client is closed
+        await downloader.close_client()
     return downloaded_files, failed_urls
 
 
@@ -234,8 +235,9 @@ def get_already_downloaded_material_ids() -> list[str]:
         if "_" in pdf:
             material_ids_downloaded.append(pdf.split("_")[0])
         else:
-            warn(f"Could not extract material_id from {pdf}?")
+            material_ids_downloaded.append(pdf.split(".pdf")[0])
     info(f"Found {len(material_ids_downloaded)} material_ids in download dir.")
+
     return material_ids_downloaded
 
 
@@ -283,6 +285,7 @@ async def get_urls_from_full_data() -> pl.DataFrame:
     info(
         f"{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) ."
     )
+    input("Press any key to continue...")
     return urls
 
 

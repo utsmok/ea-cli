@@ -9,7 +9,12 @@ compare/*.*
 *.db
 *.parquet
 *.md
-
+*.pdf
+*.txt
+*.woff
+*.woff2
+*.secret
+imgs/
 *.html
 *.sqlite3*
 *.duckdb
