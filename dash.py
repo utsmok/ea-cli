@@ -166,25 +166,40 @@ class AppState:
     sort_desc: bool = False
     filters: dict[str, str] = field(default_factory=dict)
 
-    def update_from_req(self, params: dict[str, Any], auth_details: dict = None):
-        self.page = int(params.get("page", self.page))
-        self.per_page = int(params.get("per_page", self.per_page))
-        self.sort_by = params.get("sort_by") if params.get("sort_by") else self.sort_by
-        self.sort_desc = params.get("sort_desc", str(self.sort_desc)).lower() == "true"
+    def update_from_req(
+        self,
+        request_params: dict[str, Any],
+        form_data: FormData,
+        auth_details: dict = None,
+    ):
+        self.page = int(request_params.get("page", self.page))
+        self.per_page = int(request_params.get("per_page", self.per_page))
+        new_sort_by = request_params.get("sort_by")
+        if new_sort_by:
+            self.sort_by = new_sort_by
+        self.sort_desc = (
+            str(request_params.get("sort_desc", str(self.sort_desc))).lower() == "true"
+        )
 
         new_filters = {}
-        for k, v in params.items():
-            if k.startswith("filter_"):
-                filter_key = k.removeprefix("filter_")
-                if v:
-                    new_filters[filter_key] = str(v)
+        all_filter_keys = [  # Define all possible filter keys
+            "workflow_status",
+            "status",
+            "classification",
+            "manual_classification",
+            "faculty",
+            "department",
+            "course_name",  # Add any other text filter keys
+        ]
 
-        self.filters = {**self.filters, **new_filters}
-        for k, v in params.items():
-            if k.startswith("filter_") and not v:
-                filter_key = k.removeprefix("filter_")
-                if filter_key in self.filters:
-                    del self.filters[filter_key]
+        for key in all_filter_keys:
+            filter_param_key = f"filter_{key}"
+            if filter_param_key in request_params and request_params[filter_param_key]:
+                # Add if the key exists and has a non-empty value
+                new_filters[key] = request_params[filter_param_key]
+
+        # Replace the old filters entirely
+        self.filters = new_filters
 
         if auth_details:
             auth_faculty = auth_details.get("faculty")
@@ -559,6 +574,97 @@ ALPINE_TOOLTIP_JS = r"""
 
 
 """
+FILTER_JS_HELPER = Script("""
+function getFilterValues() {
+    const form = document.getElementById('filter-form');
+    if (!form) return '{}'; // Return empty JSON object string if form not found
+
+    const formData = new FormData(form);
+    const filters = {};
+
+    // Group checkbox values by name
+    const checkboxGroups = {};
+    form.querySelectorAll('input[type="checkbox"][name^="filter_"]').forEach(cb => {
+        if (!checkboxGroups[cb.name]) {
+            checkboxGroups[cb.name] = [];
+        }
+        if (cb.checked) {
+            checkboxGroups[cb.name].push(cb.value);
+        }
+    });
+
+    // Add grouped checkbox values (joined by '|')
+    for (const name in checkboxGroups) {
+        if (checkboxGroups[name].length > 0) {
+            // Extract filter key like 'workflow_status' from 'filter_workflow_status'
+            const filterKey = name.substring('filter_'.length);
+            filters[filterKey] = checkboxGroups[name].sort().join('|');
+        }
+    }
+
+    // Add text input values
+    form.querySelectorAll('input[type="text"][name^="filter_"], input[type="search"][name^="filter_"]').forEach(input => {
+        if (input.value) {
+            const filterKey = input.name.substring('filter_'.length);
+             // Only add if not already handled by checkboxes (shouldn't happen with current setup, but safe)
+            if (!(filterKey in filters)) {
+                 filters[filterKey] = input.value;
+            }
+        }
+    });
+
+    // Add hidden nav state (page will be reset, others kept)
+    const navState = {};
+    form.querySelectorAll('input[type="hidden"]').forEach(input => {
+        if (input.name !== 'page') { // Exclude page, reset below
+            navState[input.name] = input.value;
+        }
+    });
+
+    // Prepare final hx-vals object structure expected by AppState/backend
+    const hxVals = {
+        ...navState, // Include per_page, sort_by, sort_desc
+        page: '1',   // Always reset page to 1 on apply
+    };
+    // Add the filter_* prefixed keys
+    for (const key in filters) {
+        hxVals[`filter_${key}`] = filters[key];
+    }
+
+    console.log("getFilterValues returning:", JSON.stringify(hxVals)); // Debugging
+    return JSON.stringify(hxVals);
+}
+""")
+
+FILTER_JS_LISTENER = Script(
+    """
+document.body.addEventListener('htmx:configRequest', function(event) {
+    // Check if the event was triggered by our Apply Filters button
+    if (event.detail.elt.id === 'apply-filters-btn') {
+        console.log("htmx:configRequest triggered for Apply button");
+        try {
+            // Call getFilterValues, which returns a JSON string
+            const filterValsJson = getFilterValues();
+            // Parse the JSON string into an object
+            const filterParams = JSON.parse(filterValsJson);
+
+            // event.detail.parameters is the object HTMX will use for the request
+            // Merge our dynamic filter parameters into it
+            Object.assign(event.detail.parameters, filterParams);
+
+            console.log("Parameters after config:", event.detail.parameters);
+        } catch (e) {
+            console.error("Error processing filter values in htmx:configRequest:", e);
+            // Optionally prevent the request if parameters are bad
+            // event.preventDefault();
+        }
+    }
+    // You could add similar logic for the reset button if needed,
+    // but its parameters are simpler and set directly in hx-get.
+});
+""",
+    defer=True,
+)
 
 
 JS = (
@@ -571,6 +677,7 @@ JS = (
         ALPINE_TOOLTIP_JS,
     ),
     Script(src="https://cdn.tailwindcss.com"),
+    FILTER_JS_HELPER,
 )
 
 
@@ -609,12 +716,12 @@ setup_toasts(app)
 
 # --- constants / mappings ---
 
-WORKFLOW_STYLES = {
+WORKFLOW_STYLES: dict[str, LabelT] = {
     "ToDo": LabelT.destructive,
     "InProgress": LabelT.secondary,
     "Done": LabelT.primary,
 }
-STATUS_STYLES = {
+STATUS_STYLES: dict[str, LabelT] = {
     "Published": LabelT.primary,
     "Unpublished": LabelT.secondary,
     "Deleted": LabelT.destructive,
@@ -661,6 +768,34 @@ DISPLAY_COLUMNS: list[str] = [
     "title",
     "faculty",
 ]
+# --- Filter Toggle Definitions ---
+WORKFLOW_FILTER_STATES = [
+    None,
+    "InProgress|ToDo",
+    "InProgress",
+    "ToDo",
+]
+WORKFLOW_FILTER_LABELS = {
+    None: "Workflow: All",
+    "InProgress|ToDo": "Workflow: Not Done",
+    "InProgress": "Workflow: In Progress",
+    "ToDo": "Workflow: ToDo",
+}
+
+STATUS_FILTER_STATES = [None, "Published|Unpublished", "Published"]
+STATUS_FILTER_LABELS = {
+    None: "Status: All",
+    "Published|Unpublished": "Status: Not Deleted",
+    "Published": "Status: Published",
+}
+
+# Using specific values from the DESTRUCTIVE/SECONDARY sets
+CLASSIFICATION_FILTER_STATES = [None, "lange overname", "onbekend"]
+CLASSIFICATION_FILTER_LABELS = {
+    None: "Class: All",
+    "lange overname": "Class: Lange Overname",
+    "onbekend": "Class: Onbekend",
+}
 
 
 # --- component templates ---
@@ -728,15 +863,85 @@ def ItemDetailCard(
     )
 
 
+# Add this new component function
+def create_checkbox_filter_group(
+    filter_key: str,
+    label_text: str,
+    options: dict[str, str | LabelT],
+    current_values: Optional[str],
+    # NEW: Pass the calculated counts
+    counts: Optional[dict[str, int]] = None,
+    default_option_style: str = LabelT.secondary,
+) -> FT:
+    """Creates a group of styled checkboxes with counts and HTMX trigger."""
+    selected_values = set(current_values.split("|")) if current_values else set()
+    checkbox_items = []
+    form_field_name = f"filter_{filter_key}"
+    counts = counts or {}  # Ensure counts is a dict
+    print(counts)
+    sorted_options = sorted(options.items(), key=lambda item: item[0].lower())
+
+    for value, style_info in sorted_options:
+        is_checked = value in selected_values
+        safe_value = "".join(c if c.isalnum() else "-" for c in value)
+        checkbox_id = f"filter-cb-{filter_key}-{safe_value}"
+        count_span_id = f"count-cb-{filter_key}-{safe_value}"  # ID for the count span
+        style_class = (
+            str(style_info)
+            if isinstance(style_info, LabelT)
+            else str(default_option_style)
+        )
+
+        badge_label = Label(value, cls=f"{style_class} badge-sm cursor-pointer")
+
+        # Get the count for this specific option
+        count = counts.get(value, "?")  # Default to '?' if count not found
+
+        # Create the span to display the count
+        count_span = Span(
+            f"({count})",
+            id=count_span_id,  # Assign the ID
+            cls="text-xs text-base-content/70 ml-1",  # Styling
+        )
+
+        checkbox_input = fh.CheckboxX(
+            name=form_field_name,
+            value=value,
+            id=checkbox_id,
+            checked=is_checked,
+            cls="checkbox checkbox-primary checkbox-xs align-middle mr-1",
+        )
+
+        # Wrap checkbox, badge, and count span in the label
+        wrapper_label = fh.Label(
+            checkbox_input,
+            badge_label,
+            count_span,  # Add the count span here
+            fr=checkbox_id,
+            cls="inline-flex items-center mr-2 mb-1",
+        )
+        checkbox_items.append(wrapper_label)
+
+    return Div(cls="form-control w-full mb-3")(
+        fh.Label(
+            label_text,
+            cls="label-text pb-1 text-xs font-medium text-base-content/90 block mb-1",
+        ),
+        Div(*checkbox_items, cls="flex flex-wrap gap-1"),
+        # Optional: Add a hidden loading indicator for count updates
+        # Span(cls="loading loading-xs loading-dots htmx-indicator-counts")
+    )
+
+
 # --- filter dataframe ---
 
 
 def get_filtered_sorted_df(
-    app_state: AppState,
+    app_state: AppState,  # Use AppState object
 ) -> pl.DataFrame:
-    """Applies filtering and sorting to the global df."""
+    """Applies filtering and sorting based on AppState."""
     df = copyright_df_global
-    filters = app_state.get_active_filters()
+    filters = app_state.get_active_filters()  # Get filters from AppState
     sort_by = app_state.sort_by
     sort_desc = app_state.sort_desc
 
@@ -746,14 +951,109 @@ def get_filtered_sorted_df(
             actual_col = col
             if value and actual_col in df.columns:
                 try:
+                    # --- START OR Logic ---
+                    or_values = (
+                        value.split("|")
+                        if isinstance(value, str) and "|" in value
+                        else [value]
+                    )
+                    or_expressions = []
+                    # --- END OR Logic ---
+
+                    for or_value in or_values:  # Iterate through potential OR values
+                        or_value = or_value.strip()  # Clean up whitespace
+                        if not or_value:
+                            continue  # Skip empty strings resulting from split
+
+                        if df[actual_col].dtype == pl.Utf8:
+                            # Handle specific 'status' capitalization if needed
+                            if col in ["status", "workflow_status", "classification"]:
+                                or_expressions.append(
+                                    pl.col(actual_col).str.to_lowercase()
+                                    == or_value.lower()
+                                )
+                            else:
+                                # General case-insensitive contains match for other text fields
+                                or_expressions.append(
+                                    pl.col(actual_col).str.contains(f"(?i){or_value}")
+                                )
+
+                        elif df[actual_col].dtype in (
+                            pl.Int64,
+                            pl.Int32,
+                            pl.Float64,
+                            pl.Float32,
+                        ):
+                            with contextlib.suppress(ValueError):
+                                or_expressions.append(
+                                    pl.col(actual_col) == float(or_value)
+                                )
+                        # Add more type handling if needed
+
+                    # --- Combine OR expressions ---
+                    if len(or_expressions) > 1:
+                        filter_expressions.append(pl.any_horizontal(or_expressions))
+                    elif len(or_expressions) == 1:
+                        filter_expressions.append(or_expressions[0])
+                    # --- End Combine OR ---
+
+                except Exception as e:
+                    print(f"Filter warning on '{actual_col}' for value '{value}': {e}")
+
+        if filter_expressions:
+            try:
+                # Combine all column filters with AND
+                df = df.filter(pl.all_horizontal(filter_expressions))
+            except Exception as e:
+                print(f"Filter error applying filters {filters}: {e}")
+                df = copyright_df_global  # Fallback
+    if sort_by and sort_by in df.columns:
+        try:
+            df = df.sort(by=sort_by, descending=sort_desc, nulls_last=True)
+        except Exception as e:
+            print(f"Sort warning on '{sort_by}': {e}")
+    return df
+
+
+def _apply_filters_for_count(filters: dict[str, str]) -> int:
+    """Helper to apply filters and return only the count. Optimized."""
+    df = copyright_df_global  # Start with the full dataset
+
+    if not filters:
+        return df.height  # Return total count if no filters
+
+    filter_expressions = []
+    for col, value in filters.items():
+        actual_col = col
+        if value and actual_col in df.columns:
+            try:
+                # --- Re-use the same OR logic as get_filtered_sorted_df ---
+                or_values = (
+                    value.split("|")
+                    if isinstance(value, str) and "|" in value
+                    else [value]
+                )
+                or_expressions = []
+                for or_value in or_values:
+                    or_value = or_value.strip()
+                    if not or_value:
+                        continue
+
                     if df[actual_col].dtype == pl.Utf8:
-                        if col == "status":
-                            filter_expressions.append(
-                                pl.col(actual_col).str.starts_with(value.capitalize())
+                        if col in [
+                            "status",
+                            "workflow_status",
+                            "classification",
+                            "manual_classification",
+                            "faculty",
+                        ]:  # Assuming exact match for these
+                            or_expressions.append(
+                                pl.col(actual_col).str.to_lowercase()
+                                == or_value.lower()
                             )
-                        else:
-                            filter_expressions.append(
-                                pl.col(actual_col).str.contains(f"(?i){value}")
+                        else:  # Contains match for others
+                            or_expressions.append(
+                                pl.col(actual_col).str.contains(f"(?i){or_value}")
                             )
                     elif df[actual_col].dtype in (
                         pl.Int64,
@@ -762,23 +1062,144 @@ def get_filtered_sorted_df(
                         pl.Float32,
                     ):
                         with contextlib.suppress(ValueError):
-                            filter_expressions.append(
-                                pl.col(actual_col) == float(value)
-                            )
-                except Exception as e:
-                    print(f"Filter warning on '{actual_col}': {e}")
-        if filter_expressions:
-            try:
-                df = df.filter(pl.all_horizontal(filter_expressions))
+                            or_expressions.append(pl.col(actual_col) == float(or_value))
+                    # Add more types if needed
+
+                if len(or_expressions) > 1:
+                    filter_expressions.append(pl.any_horizontal(or_expressions))
+                elif len(or_expressions) == 1:
+                    filter_expressions.append(or_expressions[0])
             except Exception as e:
-                print(f"Filter error: {e}")
-                df = copyright_df_global
-    if sort_by and sort_by in df.columns:
+                print(
+                    f"Count Filter warning on '{actual_col}' for value '{value}': {e}"
+                )  # Less critical here
+
+    if filter_expressions:
         try:
-            df = df.sort(by=sort_by, descending=sort_desc, nulls_last=True)
+            # Apply filters and get count directly
+            # Use lazy frame for potentially better optimization
+            count = (
+                df.lazy()
+                .filter(pl.all_horizontal(filter_expressions))
+                .select(pl.count())
+                .collect()
+                .item()
+            )
+            return count
         except Exception as e:
-            print(f"Sort warning on '{sort_by}': {e}")
-    return df
+            print(f"Count Filter error applying filters {filters}: {e}")
+            return 0  # Return 0 on error
+    else:
+        # No valid filters were generated, return total count
+        return df.height
+
+
+@rt(
+    "/update_filter_counts", methods=["POST"]
+)  # Use POST as it's triggered by a form change
+async def update_filter_counts_endpoint(session: dict, request: Request):
+    """Calculates filter counts based on submitted form state and returns OOB updates."""
+    form_data = await request.form()
+    request_params = dict(form_data)  # Use form data directly for state update
+
+    # Create a temporary AppState based on the submitted form to calculate counts
+    temp_app_state = session.get(
+        "app_state", AppState()
+    )  # Get base state (page/sort etc.)
+    if isinstance(temp_app_state, dict):  # Ensure it's an instance if retrieved as dict
+        temp_app_state = AppState(**temp_app_state)
+
+    # Update the temporary state's filters based *only* on the incoming form data
+    # (Don't pass auth_details here, just reflect the form's current state)
+    temp_app_state.update_from_req(
+        request_params, form_data
+    )  # Pass form_data again for getlist
+
+    # Calculate counts based on this potentially intermediate state
+    counts = get_filter_counts(temp_app_state)
+
+    # Generate OOB swap fragments for each count
+    oob_fragments = []
+    for filter_key, option_counts in counts.items():
+        for option_value, count in option_counts.items():
+            safe_value = "".join(c if c.isalnum() else "-" for c in option_value)
+            count_span_id = f"count-cb-{filter_key}-{safe_value}"
+            # Create the span with the count, targeting the correct ID
+            count_span = Span(
+                f"({count})",  # Display format
+                id=count_span_id,  # The ID that will be targeted
+                hx_swap_oob="innerHTML",  # Swap innerHTML of the target span
+                cls="text-xs text-base-content/70 ml-1",  # Styling for the count
+            )
+            oob_fragments.append(count_span)
+
+    # Return all OOB fragments
+    return Div(*oob_fragments), HtmxResponseHeaders(
+        reswap="none"
+    )  # Prevent default swap
+
+
+# Function to get counts for all options based on current selections
+def get_filter_counts(app_state: AppState) -> dict[str, dict[str, int]]:
+    """Calculates the counts for each filter option based on current state."""
+    all_counts = {}
+    current_filters = app_state.get_active_filters()
+
+    # Define the options we need counts for (reuse from page_header_component)
+    # Combine all options into one structure for iteration
+    filter_options_map = {
+        "workflow_status": {
+            k: v.value for k, v in WORKFLOW_STYLES.items()
+        },  # Value: Style map needed? No, just keys.
+        "status": {k: v.value for k, v in STATUS_STYLES.items()},
+        "classification": {
+            **{v: LabelT.primary.value for v in PRIMARY_CLASSIFICATIONS},
+            **{v: LabelT.secondary.value for v in SECONDARY_CLASSIFICATIONS},
+            **{v: LabelT.destructive.value for v in DESTRUCTIVE_CLASSIFICATIONS},
+        },
+        "manual_classification": {
+            **{v: LabelT.primary.value for v in PRIMARY_CLASSIFICATIONS},
+            **{v: LabelT.secondary.value for v in SECONDARY_CLASSIFICATIONS},
+            **{v: LabelT.destructive.value for v in DESTRUCTIVE_CLASSIFICATIONS},
+        },
+        "faculty": {
+            f: LabelT.secondary.value for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
+        },
+        # Add other filterable columns if they were checkbox groups (e.g., department?)
+    }
+
+    for filter_key, options in filter_options_map.items():
+        all_counts[filter_key] = {}
+        current_selections_for_key = (
+            set(current_filters.get(filter_key, "").split("|"))
+            if current_filters.get(filter_key)
+            else set()
+        )
+
+        for option_value in options:
+            # --- Calculate count IF this option were toggled ---
+            temp_filters = current_filters.copy()
+            temp_selections = current_selections_for_key.copy()
+
+            # Simulate toggling this option
+            if option_value in temp_selections:
+                temp_selections.remove(option_value)  # Toggle OFF
+            else:
+                temp_selections.add(option_value)  # Toggle ON
+
+            # Update the temporary filter value for this key
+            if temp_selections:
+                temp_filters[filter_key] = "|".join(sorted(list(temp_selections)))
+            else:
+                temp_filters.pop(filter_key, None)  # Remove key if no selections left
+
+            # Calculate count with these temporary filters
+            count = _apply_filters_for_count(temp_filters)
+            all_counts[filter_key][option_value] = count
+
+    # Calculate counts for text filters maybe? (Less common UX) - Skipping for now.
+
+    return all_counts
 
 
 # --- save changes ---
@@ -1497,75 +1918,265 @@ def render_table_rows(
 def page_header_component(
     user_details: dict[str, str],
     app_state: AppState,
+    filter_counts: dict[str, dict[str, int]],
 ) -> FT:
-    """Renders the header area with Title and Filters."""
+    """Renders the header area with Title, User Info, and a Sidebar for Filters."""
     current_filters = app_state.get_active_filters()
-    filter_inputs = []
-    for col in FILTERABLE_COLUMNS:
+
+    # --- Define Options for Checkbox Groups (Keep these as they are) ---
+    workflow_options = {
+        "ToDo": WORKFLOW_STYLES.get("ToDo"),
+        "InProgress": WORKFLOW_STYLES.get("InProgress"),
+        "Done": WORKFLOW_STYLES.get("Done"),
+    }
+    status_options = {
+        "Published": STATUS_STYLES.get("Published"),
+        "Unpublished": STATUS_STYLES.get("Unpublished"),
+        "Deleted": STATUS_STYLES.get("Deleted"),
+    }
+    classification_options = {
+        **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
+        **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
+        **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
+    }
+    manual_classification_options = classification_options
+    faculty_options = {
+        f: LabelT.secondary for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
+    }
+
+    # --- Filter Checkbox Groups ---
+    filter_checkbox_groups = [
+        create_checkbox_filter_group(
+            filter_key="workflow_status",
+            label_text="Workflow Status",
+            options=workflow_options,
+            current_values=current_filters.get("workflow_status"),
+            counts=filter_counts.get("workflow_status"),  # Pass counts for this key
+        ),
+        create_checkbox_filter_group(
+            filter_key="status",
+            label_text="Status",
+            options=status_options,
+            current_values=current_filters.get("status"),
+            counts=filter_counts.get("status"),  # Pass counts
+        ),
+        create_checkbox_filter_group(
+            filter_key="classification",
+            label_text="ML Classification",
+            options=classification_options,
+            current_values=current_filters.get("classification"),
+            counts=filter_counts.get("classification"),  # Pass counts
+        ),
+        create_checkbox_filter_group(
+            filter_key="manual_classification",
+            label_text="Manual Classification",
+            options=manual_classification_options,
+            current_values=current_filters.get("manual_classification"),
+            counts=filter_counts.get("manual_classification"),  # Pass counts
+        ),
+    ]
+    # Conditionally add Faculty filter group
+    is_admin = user_details.get("role") == "admin"
+    user_faculty = user_details.get("faculty")
+    # Show faculty filter if admin OR user has no specific faculty assigned
+    if is_admin or not user_faculty or user_faculty == "all":
+        filter_checkbox_groups.append(
+            create_checkbox_filter_group(
+                filter_key="faculty",
+                label_text="Faculty",
+                options=faculty_options,
+                current_values=current_filters.get("faculty"),
+            )
+        )
+
+    # --- Filter Inputs (Text - Remaining) ---
+    text_filter_inputs = []
+    remaining_filterable_cols = [
+        col
+        for col in FILTERABLE_COLUMNS
+        if col
+        not in [
+            "workflow_status",
+            "status",
+            "classification",
+            "manual_classification",
+            "faculty",
+        ]
+    ]
+    for col in remaining_filterable_cols:
         actual_col_name = col
         if actual_col_name not in copyright_df_global.columns:
             continue
-        is_admin = user_details.get("role") == "admin"
-        user_faculty = user_details.get("faculty")
-        if not is_admin and col == "faculty" and user_faculty and user_faculty != "all":
-            continue
-
         label = f"{col.replace('_', ' ').title()}"
         if "department" in label.lower():
             label = "Programme"
 
-        filter_inputs.append(
+        text_filter_inputs.append(
             LabelInput(
                 label,
                 name=f"filter_{col}",
                 value=current_filters.get(col, ""),
                 placeholder="Filter...",
                 id=f"filter-input-{col}",
-                hx_get=data_grid.to(),
-                hx_trigger="keyup changed delay:500ms, search",
-                hx_target="#data-grid-component",
-                hx_include="closest form",
-                hx_indicator="#grid-loading-indicator",
                 input_cls="input input-bordered input-xs w-full focus:input-primary",
                 label_cls="label-text pb-1 text-xs font-medium text-base-content/90",
                 cls="form-control w-full",
             )
         )
+
+    # --- Hidden State Inputs ---
     hidden_state_inputs = [
-        Input(type="hidden", name=k, value=v)
+        Input(type="hidden", name=k, value=str(v))
         for k, v in app_state.nav_params_dict().items()
     ]
-    hidden_state_inputs = [
-        inp for inp in hidden_state_inputs if inp.attrs.get("name") != "page"
-    ]
-    hidden_state_inputs.append(Input(type="hidden", name="page", value="1"))
+    reset_dict = app_state.nav_params_dict()
+    reset_dict["page"] = 1  # Reset page on filter reset
+    # --- Filter Form (Content of the Sidebar) ---
     filter_form = Form(
-        Div(
-            *filter_inputs,
-            cls="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-3",
-        ),
+        H4("Standard Filters", cls="text-md font-semibold mb-3"),
+        # Use checkbox groups instead of dropdowns/toggles
+        *filter_checkbox_groups,
+        H4("Specific Filters", cls="text-md font-semibold mb-3 mt-4"),
+        Div(*text_filter_inputs, cls="grid grid-cols-1 gap-y-3"),
         *hidden_state_inputs,
+        # --- Action Buttons (Keep as is) ---
+        Div(cls="mt-6 space-y-2")(
+            Button(
+                "Apply Filters",
+                type="button",
+                # REMOVE hx-vals attribute
+                # Add an ID
+                id="apply-filters-btn",
+                hx_get=data_grid.to(),  # Base URL remains
+                hx_target="#data-grid-component",
+                # REMOVE hx-include="closest form" (not needed)
+                hx_indicator="#grid-loading-indicator",
+                **{"@click": "slideOverOpen=false"},
+                cls="btn btn-sm btn-primary w-full",
+            ),
+            Button(
+                "Reset Filters",
+                type="button",
+                hx_get=data_grid.to(action="reset", **reset_dict),
+                hx_target="#content-area",
+                hx_indicator="#grid-loading-indicator",
+                **{"@click": "slideOverOpen=false"},
+                cls="btn btn-sm btn-ghost w-full",
+            ),
+        ),
         id="filter-form",
-        cls="",
+        cls="p-4",
+        hx_post=update_filter_counts_endpoint.to(),
+        # Trigger specifically on checkbox changes within this form
+        hx_trigger="change from:input[type=checkbox] delay:300ms",
+        # Include data from the form that changed
+        hx_include="this",  # Include data from the form itself
+        # Target doesn't really matter for OOB swaps, but needs to be valid
+        hx_target="this",
+        hx_swap="none",  # Rely on OOB swaps returned from the endpoint
     )
+    # --- Sidebar Structure (Alpine.js) ---
+    sidebar_component = Div(
+        x_data="{ slideOverOpen: false }", cls="relative z-50 w-auto h-auto"
+    )(
+        # Sidebar Trigger Button (keep as is)
+        Button(
+            UkIcon("filter", cls="mr-1"),
+            "Filters",
+            **{"@click": "slideOverOpen=true"},
+            cls="btn btn-sm btn-outline btn-primary ml-4",
+        ),
+        # Teleport the sidebar content to the body
+        Template(x_teleport="body")(
+            # Outermost container for the sidebar, managed by x-show
+            Div(
+                x_show="slideOverOpen",
+                **{"@keydown.window.escape": "slideOverOpen=false"},
+                cls="relative z-[99]",
+                x_cloak=True,
+            )(  # Add x-cloak
+                # Overlay
+                Div(
+                    x_show="slideOverOpen",
+                    x_transition_opacity_duration_600ms=True,
+                    **{"@click": "slideOverOpen = false"},
+                    cls="fixed inset-0 bg-black bg-opacity-10",
+                ),  # Overlay needs transition too
+                # Sidebar Container
+                Div(cls="fixed inset-0 overflow-hidden")(
+                    Div(cls="absolute inset-0 overflow-hidden")(
+                        # Positioning from the Left
+                        Div(cls="fixed inset-y-0 left-0 flex max-w-full pr-10")(
+                            # The actual sliding panel
+                            Div(
+                                x_show="slideOverOpen",  # Let x-show control visibility
+                                **{"@click.away": "slideOverOpen = false"},
+                                x_transition_enter="transform transition ease-in-out duration-500 sm:duration-700",
+                                x_transition_enter_start="-translate-x-full",
+                                x_transition_enter_end="translate-x-0",
+                                x_transition_leave="transform transition ease-in-out duration-500 sm:duration-700",
+                                x_transition_leave_start="translate-x-0",
+                                x_transition_leave_end="-translate-x-full",
+                                cls="w-screen max-w-md",
+                                # Remove inline style: style="display: none;"
+                            )(
+                                # Sidebar Content Area
+                                # Use overflow-y-auto (addressed in point 4)
+                                Div(
+                                    cls="flex flex-col h-full py-5 overflow-y-auto bg-base-100 border-r border-base-300 shadow-lg"
+                                )(
+                                    # Sidebar Header (keep as is)
+                                    Div(cls="px-4 sm:px-5")(
+                                        Div(
+                                            cls="flex items-start justify-between pb-1"
+                                        )(
+                                            H2(
+                                                "Filters",
+                                                cls="text-lg font-semibold leading-6 text-base-content",
+                                            ),
+                                            Div(cls="flex items-center h-auto ml-3")(
+                                                Button(
+                                                    **{"@click": "slideOverOpen=false"},
+                                                    cls="btn btn-sm btn-circle btn-ghost",
+                                                )("✕")
+                                            ),
+                                        )
+                                    ),
+                                    # Main Filter Form Area (keep as is)
+                                    Div(cls="relative flex-1 mt-5")(filter_form),
+                                )
+                            )
+                        )
+                    )
+                ),
+            )
+        ),
+    )
+
+    # --- Header Structure ---
     update_times = [
         file.created
         for file in SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
         if file.exists
     ]
-    if not update_times:
-        last_update_time = "Unknown"
-    else:
-        last_update_time = max(update_times).strftime("%Y-%m-%d %H:%M")
+    last_update_time = (
+        max(update_times).strftime("%Y-%m-%d %H:%M") if update_times else "Unknown"
+    )
 
     return Div(
         Div(cls="flex justify-between items-center mb-4")(
-            H4("Copyright Data Dashboard", cls="text-2xl font-bold text-primary"),
-            H6(
-                f"Last update from Qlik: {last_update_time}",
-                cls="text-sm text-base-content/70",
+            # Dashboard Title and Last Update
+            Div(
+                H4("Copyright Data Dashboard", cls="text-2xl font-bold text-primary"),
+                H6(
+                    f"Last update from Qlik: {last_update_time}",
+                    cls="text-xs text-base-content/70 mt-1",
+                ),
             ),
+            # Sidebar Trigger and User Info/Logout
             Div(cls="flex items-center space-x-4")(
+                sidebar_component,  # Add the sidebar trigger button here
+                # User Avatar/Greeting (Keep existing)
                 Div(cls="flex items-center space-x-2")(
                     Img(
                         src=f"https://api.dicebear.com/9.x/bottts/svg?seed={user_details.get('name', 'defaultuser')}&backgroundColor=547012",
@@ -1585,11 +2196,9 @@ def page_header_component(
                         ),
                     ),
                 ),
-                # Logout Button (Keep existing)
                 A("Logout", href="/logout", cls="btn btn-outline btn-primary btn-sm"),
             ),
         ),
-        Div(filter_form, cls=""),  # Filter form container
         cls="mb-4 border-b border-base-300 pb-4",
     )
 
@@ -1657,7 +2266,7 @@ def render_data_grid_component(
     )
 
     # --- Pagination ---
-    # Pass AppState to render_pagination
+    # Pass AppState to render_paginatlabel_text=ion
     pagination_html = render_pagination(app_state, total_pages)
 
     # --- Final Component ---
@@ -1839,34 +2448,38 @@ def render_labelled_item(
 
 
 @rt("/data")
-async def data_grid(session: dict, request: Request):  # Simplified signature
-    """Endpoint renders the main page structure OR just the data grid component."""
-
-    # --- Get or Initialize AppState ---
-    # Retrieve as dict, default to empty dict if not found
+async def data_grid(session: dict, request: Request):
     app_state_dict = session.get("app_state", {})
-    # Instantiate AppState from the dict. If dict is empty, AppState() uses defaults.
     app_state = AppState(**app_state_dict)
 
-    # --- Update AppState from Request Parameters ---
-    # Combine query params and form data if necessary (e.g., POST from filter form)
     query_params = dict(request.query_params)
-    form_data = {}
-    if request.method == "POST":  # Check if it could be a POST from filter form
-        try:
+    form_data = FormData()
+    is_post = request.method == "POST"
+    content_type = request.headers.get("content-type", "")
+    if (
+        is_post
+        or "multipart/form-data" in content_type
+        or "application/x-www-form-urlencoded" in content_type
+    ):
+        with contextlib.suppress(Exception):
             form_data = await request.form()
-            form_data = dict(form_data)
-        except (
-            Exception
-        ):  # Handle cases where form parsing might fail (e.g., GET request)
-            pass
-    # Prioritize form data over query params if keys overlap
-    request_params = {**query_params, **form_data}
-
+    request_params = {**query_params, **dict(form_data)}
     auth_details = session.get("auth", {})
-    app_state.update_from_req(request_params, auth_details)  # Update state in place
 
-    # --- Re-calculate Total Pages and Validate Current Page ---
+    is_reset_action = request_params.get("action") == "reset"
+    if is_reset_action:
+        print("Reset action detected, clearing filters.")
+        app_state.filters = {}  # Clear state filters FIRST
+        request_params.pop("action", None)
+        keys_to_remove = [k for k in request_params if k.startswith("filter_")]
+        for k in keys_to_remove:
+            request_params.pop(k, None)
+        form_data = FormData()  # Clear form data as well for update_from_req
+
+    # Pass both combined params AND original form_data for getlist()
+    app_state.update_from_req(request_params, form_data, auth_details)
+
+    # --- Recalculate, Validate, Store state ---
     filtered_sorted_df = get_filtered_sorted_df(app_state)
     total_filtered_rows = filtered_sorted_df.height
     total_pages = (
@@ -1874,34 +2487,27 @@ async def data_grid(session: dict, request: Request):  # Simplified signature
         if app_state.per_page > 0
         else 1
     )
-    app_state.page = max(
-        1, min(app_state.page, total_pages if total_pages > 0 else 1)
-    )  # Validate page
+    app_state.page = max(1, min(app_state.page, total_pages if total_pages > 0 else 1))
+    session["app_state"] = asdict(app_state)
+    filter_counts = get_filter_counts(app_state)
 
-    # --- Store Updated AppState in Session ---
-    session["app_state"] = asdict(app_state)  # Convert to dict here!
-
-    # --- Prepare Data Slice ---
+    # --- Prepare Slice and Render Components ---
     offset = (app_state.page - 1) * app_state.per_page
     df_slice = filtered_sorted_df.slice(offset, app_state.per_page)
-
-    # --- Render Components using AppState ---
     grid_component = render_data_grid_component(
         df_slice=df_slice,
         app_state=app_state,
         total_filtered_rows=total_filtered_rows,
         total_pages=total_pages,
     )
+    header_component = page_header_component(auth_details, app_state, filter_counts)
 
-    header_component = page_header_component(
-        user_details=auth_details,
-        app_state=app_state,
-    )
-
-    # --- Handle HTMX vs Full Page Request ---
+    # --- Determine Return Value ---
     is_htmx = request.headers.get("hx-request", "false").lower() == "true"
 
     if not is_htmx:
+        header_component = page_header_component(auth_details, app_state, filter_counts)
+
         modal_placeholder = Dialog(
             id="modal-placeholder", cls="modal modal-bottom sm:modal-middle"
         )
@@ -1997,7 +2603,7 @@ async def data_grid(session: dict, request: Request):  # Simplified signature
         """)
 
         return (
-            Title("Copyright Data Dashboard"),
+            Title("CDD//UT"),
             Div(
                 Div(header_component, grid_component, id="content-area"),
                 id="page-container",
@@ -2005,11 +2611,22 @@ async def data_grid(session: dict, request: Request):  # Simplified signature
             modal_placeholder,
             modal_trigger_script,
             modal_interaction_script,
+            FILTER_JS_LISTENER,
         )
+
     else:
         # --- HTMX Partial Update ---
-        # Return only the grid component
-        return grid_component
+        if is_reset_action:
+            # Reset needs to update the sidebar form, so return header+grid
+            print("HTMX Reset: Returning Header + Grid")
+            header_component = page_header_component(
+                auth_details, app_state, filter_counts
+            )
+            return (header_component, grid_component)
+        else:
+            # Apply Filters (or sort/paginate) only needs to update the grid
+            print("HTMX Apply/Sort/Page: Returning Grid Only")
+            return grid_component
 
 
 @rt("/modal/{material_id:int}")
