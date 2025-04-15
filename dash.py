@@ -165,15 +165,16 @@ class AppState:
     sort_by: str | None = None
     sort_desc: bool = False
     filters: dict[str, str] = field(default_factory=dict)
-    current_total:int = 0
+    current_total: int = 0
+
     def update_from_req(
         self,
         request_params: dict[str, Any],
-        new_filters: dict[str, str|int] | None = None,
+        new_filters: dict[str, str | int] | None = None,
         auth_details: dict = None,
-        disable_filter_reset:bool = False
+        disable_filter_reset: bool = False,
     ):
-        print(f'update from req')
+        print("update from req")
         print(f"request_params: {request_params}")
         print(f"new_filters: {new_filters}")
         print(f"auth_details: {auth_details}")
@@ -206,27 +207,30 @@ class AppState:
                 new_filters[key] = request_params[filter_param_key]
                 if new_filters[key] and all_empty:
                     all_empty = False
-        
 
         if disable_filter_reset and all_empty:
-            print(f"No new filters and disable_filter_reset is active. Keeping filters: {self.filters}")
+            print(
+                f"No new filters and disable_filter_reset is active. Keeping filters: {self.filters}"
+            )
             self.current_total = _calc_total_for_filters(self.filters)
 
             return
-        
-        if self.filters or not all(v == "" for v in new_filters.values()):
-            print(f'Overwriting filters: {self.filters} with new filters: {new_filters}')
-        else:
-            print(f'Setting new filters (no previous filters): {new_filters}')
-        self.filters = new_filters
-        
+
+        if not self.filters:
+            print(f"Setting new filters (no previous filters): {new_filters}")
+            self.filters = new_filters
+        elif new_filters:
+            for k, v in new_filters.items():
+                if v:
+                    self.filters[k] = v
+
         if auth_details:
             auth_faculty = auth_details.get("faculty")
             auth_role = auth_details.get("role")
             # Apply faculty filter ONLY if user is not admin and has a specific faculty
             if auth_faculty and auth_faculty != "all" and auth_role != "admin":
                 self.filters["faculty"] = auth_faculty
-            
+
         self.current_total = _calc_total_for_filters(self.filters)
 
     # Helper to generate params for HTMX links (excluding filters)
@@ -237,21 +241,34 @@ class AppState:
             "sort_by": self.sort_by or "",
             "sort_desc": str(self.sort_desc),
         }
+
     def reset_filters(self):
         new_filters = {}
         self.filters = new_filters
 
     def update_filters_from_form(self, form_data: FormData):
-        new_filters = {k: v for k, v in form_data.items() if k.startswith("filter_")}
+        new_filters = {}
+
+        for k, v in form_data.multi_items():
+            if k.startswith("filter_"):
+                if k in new_filters and new_filters.get(k) and v:
+                    new_filters[k] = new_filters[k] + "|" + v
+                elif v:
+                    new_filters[k] = v
+
+        print(f"update_filters_from_form: new filters: {new_filters}")
         # check if all values are empty strings
         if all(v == "" for v in new_filters.values()):
-            print(f'update_filters_from_form: all filters are empty. Keeping current filters: {self.filters}')
+            print(
+                f"update_filters_from_form: all filters are empty. Keeping current filters: {self.filters}"
+            )
             return
-        print(f'update_filters_from_form: new filters: {new_filters}')
+        print(f"update_filters_from_form: new filters: {new_filters}")
         self.filters = new_filters
         self.current_total = _calc_total_for_filters(self.filters)
 
         return self.filters
+
     # Helper to generate filter params for HTMX links/forms
     def filter_params_dict(self) -> dict[str, str]:
         if not self.filters:
@@ -839,28 +856,30 @@ CLASSIFICATION_FILTER_LABELS = {
 # a global dict that stores values that are missing from the global df for each filterable column that has a list of expected values
 
 
-EMPTY_FILTERS: dict[str, list[str]]= {
+EMPTY_FILTERS: dict[str, list[str]] = {
     "classification": [],
     "status": [],
     "workflow_status": [],
     "manual_classification": [],
     "faculty": [],
     "department": [],
-    "course_name": []
+    "course_name": [],
 }
+
+
 def _update_empty_filters(filter_counts: dict[str, dict[str, int]]):
     """
     input filter_counts is the result of get_filter_counts() run on a non-filtered global df -- so on init and on refresh.
     Stores the values that are missing from the global df for each filterable column in EMPTY_FILTERS.
     """
     global EMPTY_FILTERS
-    
+
     # Update EMPTY_FILTERS based on filter_counts
     for col, counts in filter_counts.items():
         if col in EMPTY_FILTERS:
             EMPTY_FILTERS[col] = [key for key, count in counts.items() if count == 0]
-        
-    
+
+
 # --- component templates ---
 def ItemDetailCard(
     title: str,
@@ -933,7 +952,7 @@ def create_checkbox_filter_group(
     options: dict[str, str | LabelT],
     current_values: Optional[str],
     current_total: int,
-    counts: Optional[dict[str, int|str]] = None,
+    counts: Optional[dict[str, int | str]] = None,
     default_option_style: str = LabelT.secondary,
 ) -> FT:
     """Creates a compact group of styled checkboxes with counts and HTMX trigger. Disabled options are minimized."""
@@ -942,24 +961,31 @@ def create_checkbox_filter_group(
 
     form_field_name = f"filter_{filter_key}"
     sorted_options = {}
-    enabled_options = {k:v for k,v in options.items() if k in selected_values}
+    enabled_options = {k: v for k, v in options.items() if k in selected_values}
     sorted_options.update(
         sorted(enabled_options.items(), key=lambda item: item[0].lower())
     )
-    int_options = {k:v for k,v in options.items() if k not in selected_values and isinstance(counts.get(k, 0), int)}
-    enabled_options.update(sorted({k:v for k,v in int_options.items() if counts.get(k, 0) > 0 and counts.get(k,0) != current_total}.items(), key=lambda item: item[0].lower()))
-    disabled_options = {
+    int_options = {
         k: v
         for k, v in options.items()
-        if k not in enabled_options
+        if k not in selected_values and isinstance(counts.get(k, 0), int)
     }
-
-    sorted_options.update(
-        enabled_options
+    enabled_options.update(
+        sorted(
+            {
+                k: v
+                for k, v in int_options.items()
+                if counts.get(k, 0) > 0 and counts.get(k, 0) != current_total
+            }.items(),
+            key=lambda item: item[0].lower(),
+        )
     )
+    disabled_options = {k: v for k, v in options.items() if k not in enabled_options}
+
+    sorted_options.update(enabled_options)
     sorted_options.update(
         sorted(disabled_options.items(), key=lambda item: item[0].lower())
-    )        
+    )
     full_items = []
     disabled_list = []
     for value, style_info in sorted_options.items():
@@ -972,9 +998,7 @@ def create_checkbox_filter_group(
         style_class = "badge badge-secondary"
 
         if filter_key != "faculty":
-            style_class = (
-                str(style_info) if isinstance(style_info, LabelT) else ""
-            )
+            style_class = str(style_info) if isinstance(style_info, LabelT) else ""
             match style_class:
                 case "uk-label-primary":
                     checkboxcolor = "checkbox-accent"
@@ -984,7 +1008,7 @@ def create_checkbox_filter_group(
                     style_class = "badge badge-primary"
                 case "uk-label-destructive":
                     checkboxcolor = "checkbox-error"
-                    style_class="badge badge-error"
+                    style_class = "badge badge-error"
 
         count_span_id = f"count-{filter_key}-{safe_value}"
 
@@ -994,10 +1018,15 @@ def create_checkbox_filter_group(
         # --- Enabled option rendering ---
 
         if not is_disabled:
-            badge_cls = f"{style_class} badge-outline ml-1 align-middle text-xs cursor-help"
-            count_badge = Span(f"{'▲' if all([isinstance(count, int), selected_values, count != current_total]) else '▼' if isinstance(count, int) and count != current_total else 'Σ'} {count}",
-                               title=f"{'Will increase the current total itemcount by this amount when selected.' if all([isinstance(count, int), selected_values, count != current_total]) else 'Will decrease the current total itemcount to this amount when selected.' if isinstance(count, int) and count != current_total else 'The current total itemcount'} ",
-                               id=count_span_id, cls=badge_cls)
+            badge_cls = (
+                f"{style_class} badge-outline ml-1 align-middle text-xs cursor-help"
+            )
+            count_badge = Span(
+                f"{'▲' if all([isinstance(count, int), selected_values, count != current_total]) else '▼' if isinstance(count, int) and count != current_total else 'Σ'} {count}",
+                title=f"{'Will increase the current total itemcount by this amount when selected.' if all([isinstance(count, int), selected_values, count != current_total]) else 'Will decrease the current total itemcount to this amount when selected.' if isinstance(count, int) and count != current_total else 'The current total itemcount'} ",
+                id=count_span_id,
+                cls=badge_cls,
+            )
             badge_label = Span(value, cls=f"{style_class} mr-1 cursor-pointer text-xs")
             checkbox_input = fh.CheckboxX(
                 name=form_field_name,
@@ -1018,7 +1047,7 @@ def create_checkbox_filter_group(
                 badge_label,
                 count_badge,
                 cls="flex items-center gap-x-1 gap-y-0 py-0 px-1 mb-0.5 rounded min-h-0",
-                id=f"label-cb-{filter_key}-{safe_value}"
+                id=f"label-cb-{filter_key}-{safe_value}",
             )
             full_items.append(wrapper_label)
         else:
@@ -1027,7 +1056,7 @@ def create_checkbox_filter_group(
                 Span(
                     value if len(value) < 18 else value[:16] + "…",
                     cls="text-xs opacity-40 mr-2 cursor-help",
-                    title=f"{value} "
+                    title=f"{value} ",
                 )
             )
     # --- Card-like block for the filter group ---
@@ -1038,9 +1067,21 @@ def create_checkbox_filter_group(
         ),
         Div(*full_items, cls="grid grid-cols-1 gap-x-1 gap-y-0.5 mb-0.5"),
         # Collapsed disabled row
-        (Div(UkIcon("minus-circle", cls="text-xs opacity-40 cursor-help", title="no items match"),*disabled_list, cls="flex flex-wrap gap-x-1 gap-y-0.5 mt-1 mb-0.5") if disabled_list else None),
+        (
+            Div(
+                UkIcon(
+                    "minus-circle",
+                    cls="text-xs opacity-40 cursor-help",
+                    title="no items match",
+                ),
+                *disabled_list,
+                cls="flex flex-wrap gap-x-1 gap-y-0.5 mt-1 mb-0.5",
+            )
+            if disabled_list
+            else None
+        ),
         cls="bg-base-100 border border-base-300 rounded-lg p-2 mb-2 shadow-xs",
-        id=outer_group_id
+        id=outer_group_id,
     )
     return group_card
 
@@ -1069,6 +1110,8 @@ def get_filtered_sorted_df(
         filter_expressions = []
         for col, value in filters.items():
             actual_col = col
+            if actual_col not in df.columns:
+                actual_col = actual_col.replace("filter_", "")
             if value and actual_col in df.columns:
                 try:
                     # --- Re-use the same OR logic as get_filtered_sorted_df ---
@@ -1085,7 +1128,9 @@ def get_filtered_sorted_df(
                         # --- Special handling for manual_classification empty filter ---
                         if col == "manual_classification" and or_value == "None":
                             or_expressions.append(
-                                (pl.col(actual_col).is_null()) | (pl.col(actual_col) == "") | (pl.col(actual_col) == "-")
+                                (pl.col(actual_col).is_null())
+                                | (pl.col(actual_col) == "")
+                                | (pl.col(actual_col) == "-")
                             )
                             continue
                         if df[actual_col].dtype == pl.Utf8:
@@ -1111,7 +1156,9 @@ def get_filtered_sorted_df(
                             pl.Float32,
                         ):
                             with contextlib.suppress(ValueError):
-                                or_expressions.append(pl.col(actual_col) == float(or_value))
+                                or_expressions.append(
+                                    pl.col(actual_col) == float(or_value)
+                                )
                     if len(or_expressions) > 1:
                         filter_expressions.append(pl.any_horizontal(or_expressions))
                     elif len(or_expressions) == 1:
@@ -1138,10 +1185,8 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
     df = copyright_df_global  # Start with the full dataset
     if not filters:
         return df.height  # Return total count if no filters
-    print(f" ----- [] -----\n{filters}")
 
     filter_expressions = []
-    print(f"Applying filters: {filters}")
     for col, value in filters.items():
         actual_col = col
         empty_values = []
@@ -1149,7 +1194,7 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
         if value and actual_col in df.columns:
             if col in EMPTY_FILTERS:
                 empty_values = EMPTY_FILTERS[col]
-            
+
             try:
                 # --- Re-use the same OR logic as get_filtered_sorted_df ---
                 or_values = (
@@ -1160,16 +1205,17 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
                 or_expressions = []
                 for or_value in or_values:
                     if or_value in empty_values:
-                        continue 
+                        continue
                     or_value = or_value.strip()
                     if not or_value:
                         continue
                     # --- Special handling for manual_classification empty filter ---
                     if col == "manual_classification" and or_value == "None":
                         or_expressions.append(
-                            (pl.col(actual_col).is_null()) | (pl.col(actual_col) == "") | (pl.col(actual_col) == "-")
+                            (pl.col(actual_col).is_null())
+                            | (pl.col(actual_col) == "")
+                            | (pl.col(actual_col) == "-")
                         )
-                        print(f'Appended null check for {actual_col}')
                         continue
                     if df[actual_col].dtype == pl.Utf8:
                         if col in [
@@ -1215,7 +1261,7 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
                 .collect()
                 .item()
             )
-            
+
             return count
         except Exception as e:
             print(f"Count Filter error applying filters {filters}: {e}")
@@ -1223,6 +1269,7 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
     else:
         # No valid filters were generated, return total count
         return df.height
+
 
 def _calc_total_for_filters(filters: dict[str, str | int]) -> int:
     """
@@ -1251,7 +1298,9 @@ def _calc_total_for_filters(filters: dict[str, str | int]) -> int:
                     # --- Special handling for manual_classification empty filter ---
                     if col == "manual_classification" and or_value == "None":
                         or_expressions.append(
-                            (pl.col(actual_col).is_null()) | (pl.col(actual_col) == "") | (pl.col(actual_col) == "-")
+                            (pl.col(actual_col).is_null())
+                            | (pl.col(actual_col) == "")
+                            | (pl.col(actual_col) == "-")
                         )
                         continue
                     if df[actual_col].dtype == pl.Utf8:
@@ -1292,10 +1341,7 @@ def _calc_total_for_filters(filters: dict[str, str | int]) -> int:
             # Apply filters, collect, and return height
             # Use lazy frame for potentially better optimization
             total = (
-                df.lazy()
-                .filter(pl.all_horizontal(filter_expressions))
-                .collect()
-                .height
+                df.lazy().filter(pl.all_horizontal(filter_expressions)).collect().height
             )
             return total
         except Exception as e:
@@ -1305,8 +1351,7 @@ def _calc_total_for_filters(filters: dict[str, str | int]) -> int:
         # No valid filters were generated, return total count
         return df.height
 
-    
-    
+
 @rt("/update_filter_counts", methods=["POST"])
 async def update_filter_counts_endpoint(session: dict, request: Request):
     """
@@ -1348,7 +1393,11 @@ async def update_filter_counts_endpoint(session: dict, request: Request):
                 new_filters[key] = str(value)
 
     # Update the state's filters object
-    app_state.update_from_req(request_params=request_params, new_filters=new_filters, auth_details=session.get('auth', {}))
+    app_state.update_from_req(
+        request_params=request_params,
+        new_filters=new_filters,
+        auth_details=session.get("auth", {}),
+    )
     # Note: Don't update page/sort state here, only filters change
 
     # 3. Calculate counts based on the NEW state
@@ -1378,11 +1427,12 @@ async def update_filter_counts_endpoint(session: dict, request: Request):
         **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
         **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
         **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
-        "None":LabelT.destructive
+        "None": LabelT.destructive,
     }
     manual_classification_options = classification_options
     faculty_options = {
-        f: FACULTY_BADGE_STYLES.get(f, "badge-secondary") for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
+        f: FACULTY_BADGE_STYLES.get(f, "badge-secondary")
+        for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
     }
     checkbox_groups_to_render = [
         ("workflow_status", "Workflow Status", workflow_options),
@@ -1393,7 +1443,6 @@ async def update_filter_counts_endpoint(session: dict, request: Request):
             manual_classification_options,
         ),
         ("classification", "Classification", classification_options),
-
     ]
     # Conditionally add faculty
     if is_admin or not user_faculty or user_faculty == "all":
@@ -1406,8 +1455,8 @@ async def update_filter_counts_endpoint(session: dict, request: Request):
             filter_key=key,
             label_text=label,
             options=options_map,
-            current_values=app_state.filters.get(key), 
-            counts=counts.get(key), 
+            current_values=app_state.filters.get(key),
+            counts=counts.get(key),
             current_total=app_state.current_total,
         )
         # Add the OOB swap attribute to the outer Div
@@ -1430,23 +1479,24 @@ def get_filter_counts(app_state: AppState) -> dict[str, dict[str, int]]:
     # Define the options we need counts for (reuse from page_header_component)
     # Combine all options into one structure for iteration
     filter_options_map = {
-        "workflow_status": {
-            k: v for k, v in WORKFLOW_STYLES.items()
-        },  
+        "workflow_status": {k: v for k, v in WORKFLOW_STYLES.items()},
         "status": {k: v for k, v in STATUS_STYLES.items()},
         "classification": {
             **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
             **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
             **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
-            "None": LabelT.destructive
+            "None": LabelT.destructive,
         },
         "manual_classification": {
             **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
             **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
             **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
-            "None": LabelT.destructive
+            "None": LabelT.destructive,
         },
-        "faculty": {f: FACULTY_BADGE_STYLES.get(f, "badge-secondary") for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]},
+        "faculty": {
+            f: FACULTY_BADGE_STYLES.get(f, "badge-secondary")
+            for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
+        },
     }
 
     for filter_key, options in filter_options_map.items():
@@ -1464,7 +1514,7 @@ def get_filter_counts(app_state: AppState) -> dict[str, dict[str, int]]:
             if option_value in empty_values:
                 all_counts[filter_key][option_value] = 0
                 continue
-                
+
             # --- Calculate count IF this option were toggled ---
             temp_filters = current_filters.copy()
             temp_selections = current_selections_for_key.copy()
@@ -1484,7 +1534,6 @@ def get_filter_counts(app_state: AppState) -> dict[str, dict[str, int]]:
             # Calculate count with these temporary filters
             count = _apply_filters_for_count(temp_filters)
             all_counts[filter_key][option_value] = count
-
 
     return all_counts
 
@@ -1584,7 +1633,7 @@ async def save_item_details(
 
         offset = (app_state.page - 1) * app_state.per_page
         df_slice = filtered_sorted_df.slice(
-            offset, per_page=app_state.per_page
+            offset, app_state.per_page
         )  # Use per_page from state
 
         # Render the grid component HTML using AppState
@@ -1942,7 +1991,7 @@ def render_contact_info(item_data):
     and user-friendly buttons to copy email addresses to the clipboard.
     """
     contact_persons = []
-    all_contact_emails = []
+    all_contact_emails = set()
     courses = item_data.get("courses") or []
     for course in courses:
         persons = course.get("persons") or []
@@ -1950,10 +1999,11 @@ def render_contact_info(item_data):
             if person.get("role") == "contact":
                 contact_persons.append(person)
                 if person.get("email"):
-                    all_contact_emails.append(person["email"])
+                    all_contact_emails.add(person["email"])
 
     contact_info_items = []
     emails_str = ";".join(all_contact_emails)
+
     copy_js = f"navigator.clipboard.writeText('{emails_str}');"
     contact_info_items.append(
         Div(
@@ -2225,11 +2275,12 @@ def page_header_component(
         **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
         **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
         **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
-        "None": LabelT.destructive
+        "None": LabelT.destructive,
     }
     manual_classification_options = classification_options
     faculty_options = {
-        f: FACULTY_BADGE_STYLES.get(f, "badge-secondary") for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
+        f: FACULTY_BADGE_STYLES.get(f, "badge-secondary")
+        for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
     }
     # --- Filter Checkbox Groups ---
     filter_checkbox_groups = [
@@ -2239,7 +2290,7 @@ def page_header_component(
             options=workflow_options,
             current_values=current_filters.get("workflow_status"),
             counts=filter_counts.get("workflow_status"),  # Pass counts for this key
-            current_total=app_state.current_total
+            current_total=app_state.current_total,
         ),
         create_checkbox_filter_group(
             filter_key="status",
@@ -2247,7 +2298,7 @@ def page_header_component(
             options=status_options,
             current_values=current_filters.get("status"),
             counts=filter_counts.get("status"),  # Pass counts
-            current_total=app_state.current_total
+            current_total=app_state.current_total,
         ),
         create_checkbox_filter_group(
             filter_key="classification",
@@ -2255,7 +2306,7 @@ def page_header_component(
             options=classification_options,
             current_values=current_filters.get("classification"),
             counts=filter_counts.get("classification"),  # Pass counts
-            current_total=app_state.current_total
+            current_total=app_state.current_total,
         ),
         create_checkbox_filter_group(
             filter_key="manual_classification",
@@ -2263,7 +2314,7 @@ def page_header_component(
             options=manual_classification_options,
             current_values=current_filters.get("manual_classification"),
             counts=filter_counts.get("manual_classification"),  # Pass counts
-            current_total=app_state.current_total
+            current_total=app_state.current_total,
         ),
         create_checkbox_filter_group(
             filter_key="faculty",
@@ -2272,7 +2323,7 @@ def page_header_component(
             current_values=current_filters.get("faculty"),
             current_total=app_state.current_total,
             counts=filter_counts.get("faculty"),
-        )
+        ),
     ]
 
     # --- Filter Inputs (Text - Remaining) ---
@@ -2331,23 +2382,24 @@ def page_header_component(
                 cls="btn btn-xs btn-success mx-1",
                 **{"@click": "slideOverOpen=false"},
             ),
-            fh.Button(
+            fh.Button(  # reset button should send 'action:reset' to the request params
                 UkIcon("rotate-ccw", cls="mr-1"),
                 "Reset",
                 type="button",
                 hx_post="/data",
                 hx_target="#data-grid-component",
                 hx_indicator="#grid-loading-indicator",
+                hx_vals='{"action": "reset"}',  # Send action:reset parameter
                 cls="btn btn-xs btn-warning mx-1",
                 **{"@click": "slideOverOpen=false"},
             ),
-            cls="sticky top-0 z-20 flex justify-center gap-x-2 bg-base-200 py-2 border-b border-base-300 mb-1"
+            cls="sticky top-0 z-20 flex justify-center gap-x-2 bg-base-200 py-2 border-b border-base-300 mb-1",
         ),
         *filter_checkbox_groups,
         *text_filter_inputs,
         *hidden_state_inputs,
         id="filter-form",
-        cls="flex flex-col gap-y-1"
+        cls="flex flex-col gap-y-1",
     )
     # --- Sidebar Structure (Alpine.js) ---
     sidebar_component = Div(
@@ -2518,8 +2570,7 @@ def render_data_grid_component(
             hx_get=data_grid.to(**sort_link_params),
             hx_target="#data-grid-component",
             hx_indicator="#grid-loading-indicator",
-            # Add hx_include to send filter form data if needed, though params might be enough
-            # hx_include="#filter-form", # Maybe not needed if params cover filters
+            hx_include="#filter-form",  # Maybe not needed if params cover filters
             cls=f"{ButtonT.ghost} text-xs uppercase tracking-wider p-1.5 h-auto min-h-0 font-bold text-base-content/70 hover:text-primary transition-colors duration-150",
         )
         th_class = f"col-{col.replace('_', '-')}"
@@ -2678,15 +2729,15 @@ def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
             style = ""
         elif val_str_norm in PRIMARY_CLASSIFICATIONS:
             style = LabelT.primary
-            display_text = str(val)
+            display_text = str(val_str_norm)
         elif val_str_norm in SECONDARY_CLASSIFICATIONS:
             style = LabelT.secondary
-            display_text = str(val)
+            display_text = str(val_str_norm)
         elif val_str_norm in DESTRUCTIVE_CLASSIFICATIONS:
             style = LabelT.destructive
-            display_text = str(val)
+            display_text = str(val_str_norm)
         else:
-            display_text = str(val)
+            display_text = str(val_str_norm)
             style = ""
 
         return Label(display_text, cls=style + " badge-sm"), "label"
@@ -2732,7 +2783,7 @@ def render_labelled_item(
 async def data_grid(session: dict, request: Request):
     app_state_dict = session.get("app_state", {})
     app_state = AppState(**app_state_dict)
-
+    print(request.query_params)
     query_params = dict(request.query_params)
     form_data = FormData()
     is_post = request.method == "POST"
@@ -2744,10 +2795,13 @@ async def data_grid(session: dict, request: Request):
     ):
         with contextlib.suppress(Exception):
             form_data = await request.form()
+            print(f"received form_data: {form_data}")
+
     request_params = {**query_params, **dict(form_data)}
     auth_details = session.get("auth", {})
 
     is_reset_action = request_params.get("action") == "reset"
+
     if is_reset_action:
         print("Reset action detected, clearing filters.")
         app_state.filters = {}  # Clear state filters FIRST
@@ -2756,13 +2810,18 @@ async def data_grid(session: dict, request: Request):
         for k in keys_to_remove:
             request_params.pop(k, None)
         form_data = FormData()  # Clear form data as well for update_from_req
-        app_state.update_from_req(request_params=request_params, auth_details=auth_details)
+        app_state.update_from_req(
+            request_params=request_params, auth_details=auth_details
+        )
     else:
         app_state.update_filters_from_form(form_data)
-        app_state.update_from_req(request_params=request_params, auth_details=auth_details, disable_filter_reset=True)
+        app_state.update_from_req(
+            request_params=request_params,
+            auth_details=auth_details,
+            disable_filter_reset=False,
+        )
 
-    print(f'final app state: {app_state}')
-
+    print(f"final app state: {app_state}")
 
     # --- Recalculate, Validate, Store state ---
     filtered_sorted_df = get_filtered_sorted_df(app_state)
@@ -2900,18 +2959,8 @@ async def data_grid(session: dict, request: Request):
         )
 
     else:
-        # --- HTMX Partial Update ---
-        if is_reset_action:
-            # Reset needs to update the sidebar form, so return header+grid
-            print("HTMX Reset: Returning Header + Grid")
-            header_component = page_header_component(
-                auth_details, app_state, filter_counts
-            )
-            return (header_component, grid_component)
-        else:
-            # Apply Filters (or sort/paginate) only needs to update the grid
-            print("HTMX Apply/Sort/Page: Returning Grid Only")
-            return grid_component
+        print("HTMX Apply/Sort/Page/Reset: Returning Grid Only")
+        return grid_component
 
 
 @rt("/modal/{material_id:int}")
@@ -3368,7 +3417,7 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
 
     except Exception as e:
         print(f"Error generating modal content for ID {material_id}: {e}")
-
+        print(traceback.format_exc())
         modal_box_content = Div(cls="modal-box")(
             H3("Error"),
             P(f"Could not load details for item {material_id}."),

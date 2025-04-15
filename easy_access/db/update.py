@@ -331,6 +331,7 @@ async def update_copyright_items(
     # if item is not in db: add it
     # else compare values in specific fields to determine if we need to update
     info(f"Received {len(data)} raw copyright items as input for an update.")
+
     new_items = []
     if isinstance(data, pl.DataFrame):
         data = standardize_dataframe(data)
@@ -351,6 +352,10 @@ async def update_copyright_items(
             update_items = data
 
     info(f"# of new items: {len(new_items)}")
+    print("new_items:")
+    print(new_items)
+    print("update_items:")
+    print(update_items)
     new_objects = []
     if new_items:
         new_objects = [await copyright_item_from_dict(item) for item in new_items]
@@ -387,8 +392,16 @@ async def update_copyright_items(
                     "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 print(f"now in overwrite function for {new_item.get('material_id')}")
-                for k in changeable_fields:
+                for k in changeable_fields | added_fields:
+                    print(f"checking field {k}")
+                    print(f"new_item.get(k): {new_item.get(k)}")
+                    print(f"getattr(db_item, k): {getattr(db_item, k)}")
+                    if new_item.get(k) is None:
+                        continue
                     if new_item.get(k) != getattr(db_item, k):
+                        if str(new_item.get(k)) == getattr(db_item, k):
+                            # if the new value is the same as the old value, skip it
+                            continue
                         changes = change(
                             changes,
                             k,
@@ -396,8 +409,11 @@ async def update_copyright_items(
                             getattr(db_item, k),
                             "[overwrite] new value != old value",
                         )
+                        print(f"changes: {changes}")
                 # if any changes were made we'll have 3 or more keys in the changes dict
                 # if not, no need to update the db
+                print("final changes:")
+                print(changes)
                 if len(changes) >= 3:
                     changes["modified_at"] = datetime.now()
                     updates[new_item.get("material_id")] = changes
