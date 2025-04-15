@@ -1,6 +1,7 @@
 # dash.py
 
 import contextlib
+import datetime
 import json
 import math
 import traceback
@@ -22,7 +23,12 @@ from monsterui.foundations import VEnum, str2ukcls
 from rich import print
 from starlette.staticfiles import StaticFiles
 
-from easy_access.db.retrieve import retrieve_copyright_items, retrieve_osiris_data
+from easy_access.db.models import ItemUpdate
+from easy_access.db.retrieve import (
+    retrieve_copyright_items,
+    retrieve_item_history,
+    retrieve_osiris_data,
+)
 from easy_access.db.update import update_copyright_items
 from easy_access.settings import SETTINGS, DirSetting
 
@@ -1292,6 +1298,7 @@ def ItemDetailCard(
     start_collapsed: bool = False,
     color: str = "[var(--ring)]",
     lazy_load_url: str | None = None,
+    tooltip: str | None = None,
 ) -> FT:
     """
     Creates a collapsible card component for the modal using <details>.
@@ -1305,7 +1312,9 @@ def ItemDetailCard(
     )
     card_classes = f"bg-{color}-100 border {border_color_class} rounded-lg shadow-sm  {col_span_class}"
 
-    summary_classes = f"p-3 bg-{color}-100 hover:bg-{color}-200 cursor-pointer list-none flex items-center justify-between"
+    summary_classes = (
+        f"p-3 bg-{color}-100 cursor-pointer list-none flex items-center justify-between"
+    )
     content_classes = "p-4 border-t border-[var(--ring)]"
     chevron_icon = Span(
         "▼", cls="text-xs transition-transform duration-200 chevron-icon"
@@ -1330,10 +1339,19 @@ def ItemDetailCard(
         }
     else:
         actual_body_content = body_content
-
+    if not tooltip:
+        tooltip = Span("")
+    else:
+        tooltip = UkIcon(
+            "circle-help",
+            cls="ml-1 font-sm tooltip tooltip-top cursor-help",
+            height="12px",
+            width="12px",
+            title=tooltip,
+        )
     content_div = Div(*actual_body_content, id=content_target_id, cls=content_classes)
     summary_element = Summary(
-        H5(title, cls="font-semibold text-sm m-0"),
+        H5(title, tooltip, cls="font-semibold text-sm m-0"),
         chevron_icon,
         cls=summary_classes,
         **summary_htmx_attrs,  # Add HTMX attributes HERE
@@ -1357,12 +1375,12 @@ def create_checkbox_filter_group(
     counts: Optional[dict[str, int | str]] = None,
 ) -> FT:
     """Creates a compact group of styled checkboxes with counts and HTMX trigger. Disabled options are minimized."""
-    print(f"--- checkbox filter group: {filter_key} ---")
-    print(f"  current_values: {current_values}")
-    print(f"  current_total: {current_total}")
-    print(f"  counts: {counts}")
-    print(f"  options: {options}")
-    print(f"  label_text: {label_text}")
+    # print(f"--- checkbox filter group: {filter_key} ---")
+    # print(f"  current_values: {current_values}")
+    # print(f"  current_total: {current_total}")
+    # print(f"  counts: {counts}")
+    # print(f"  options: {options}")
+    # print(f"  label_text: {label_text}")
     selected_values = set(current_values.split("|") if current_values else [])
     outer_group_id = f"filter-group-{filter_key}"
 
@@ -2022,7 +2040,7 @@ def get_filter_counts(app_state: AppState) -> dict[str, dict[str, int]]:
 
 # --- save changes ---
 async def store_item_changes(
-    input_data: list[dict[str, str | int]] | dict[str, str | int],
+    input_data: list[dict[str, str | int]] | dict[str, str | int], auth_details: dict
 ) -> None:
     """
     For a list of dicts containing at least a material_id and updated fields,
@@ -2031,6 +2049,12 @@ async def store_item_changes(
 
     then send the new list of dicts to the database for update
     """
+    user_info = {
+        "email": auth_details.get("email"),
+        "name": auth_details.get("name"),
+        "faculty": auth_details.get("faculty"),
+        "role": auth_details.get("role"),
+    }
     full_data_list = []
     if not isinstance(input_data, list):
         input_data = [input_data]
@@ -2058,7 +2082,9 @@ async def store_item_changes(
                         full_item_data[key] = value
                 full_data_list.append(full_item_data)
 
-    await update_copyright_items(full_data_list, update_relations=False, overwrite=True)
+    await update_copyright_items(
+        full_data_list, update_relations=False, overwrite=True, user_info=user_info
+    )
 
 
 @rt("/save_details", methods=["POST"])
@@ -2089,9 +2115,7 @@ async def save_item_details(
 
     try:
         # 1. Save changes to DB
-        await store_item_changes(
-            update_data
-        )  # Assumes store_item_changes handles DB update
+        await store_item_changes(update_data, session.get("auth", {}))
 
         # 2. Reload global data (consider efficiency later)
         global copyright_df_global
@@ -2627,6 +2651,100 @@ def render_teacher_info(item_data):
     )
 
 
+async def get_item_history(material_id: int):
+    """
+    retrieves the items edit history and parses it
+    """
+    history = await retrieve_item_history([material_id])
+
+    return history
+
+
+def render_item_history(history: list[ItemUpdate]):
+    """
+    For a given list of ItemUpdate objects, renders a card showing the changes made to the item.
+    """
+
+    edit_icon_svg = """
+    <svg fill="#000000" height="15px" width="15px" version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="-117.76 -117.76 747.52 747.52" xml:space="preserve" stroke="#000000" stroke-width="0.00512"><g id="SVGRepo_bgCarrier" stroke-width="0" transform="translate(0,0), scale(1)"><rect x="-117.76" y="-117.76" width="747.52" height="747.52" rx="373.76" fill="#9bc5ad" strokewidth="0"></rect></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round" stroke="#CCCCCC" stroke-width="1.024"></g><g id="SVGRepo_iconCarrier"> <g> <g> <g> <path d="M414.682,218.274c0-4.465-3.618-8.084-8.084-8.084H212.727c-4.465,0-8.084,3.62-8.084,8.084 c0,4.465,3.62,8.084,8.084,8.084h193.871C411.063,226.358,414.682,222.738,414.682,218.274z"></path> <path d="M245.038,285.642c-4.465,0-8.084,3.62-8.084,8.084s3.62,8.084,8.084,8.084h1.078c4.465,0,8.084-3.62,8.084-8.084 s-3.62-8.084-8.084-8.084H245.038z"></path> <path d="M457.764,134.783V51.2c0-28.231-22.969-51.2-51.2-51.2H105.053c-28.231,0-51.2,22.969-51.2,51.2v212.948 C23.917,265.561,0,290.375,0,320.674c0,31.204,25.369,56.589,56.552,56.589h147.707v28.003c0,3.609,1.694,7.017,4.65,9.352 c0.001,0.001,0.002,0.001,0.002,0.001c5.026,3.97,12.608,3.97,17.637,0l41.887-33.081c3.958-3.126,6.228-7.631,6.228-12.359 s-2.269-9.233-6.228-12.359l-41.887-33.081c-5.029-3.972-12.61-3.971-17.637-0.001c-2.957,2.335-4.652,5.743-4.652,9.353v28.004 H70.021V51.2c0-19.316,15.716-35.032,35.032-35.032h301.512c19.317,0,35.032,15.716,35.032,35.032v83.537h-134.62v-28.003 c0-3.61-1.695-7.018-4.652-9.353c-5.027-3.971-12.608-3.969-17.635,0l-41.887,33.081c-3.959,3.126-6.229,7.631-6.229,12.359 s2.27,9.233,6.228,12.359l41.888,33.081c5.028,3.971,12.609,3.97,17.633,0.002c2.958-2.334,4.654-5.743,4.654-9.354v-28.004 H449.59c0.059,0.001,0.12,0.001,0.179,0h5.679c22.267,0,40.383,18.132,40.383,40.421c0,21.51-16.873,39.15-38.068,40.355v-52.751 c0-4.465-3.618-8.084-8.084-8.084c-4.466,0-8.084,3.62-8.084,8.084V460.8c0,19.316-15.715,35.032-35.032,35.032H105.053 c-19.316,0-35.032-15.716-35.032-35.032v-54.434c0-4.465-3.62-8.084-8.084-8.084c-4.465,0-8.084,3.62-8.084,8.084V460.8 c0,28.231,22.969,51.2,51.2,51.2h301.512c28.231,0,51.2-22.969,51.2-51.2V247.869C487.876,246.648,512,221.753,512,191.326 C512,160.9,487.876,136.004,457.764,134.783z M53.853,361.005c-21.015-1.394-37.684-18.95-37.684-40.332 c0-21.381,16.67-38.938,37.684-40.332V361.005z M220.427,339.509l37.569,29.67l-37.569,29.671V339.509z M290.807,172.491 l-37.569-29.67l37.569-29.671V172.491z"></path> <path d="M406.598,361.095h-96.936c-4.466,0-8.084,3.62-8.084,8.084c0,4.465,3.618,8.084,8.084,8.084h96.936 c4.466,0,8.084-3.62,8.084-8.084C414.682,364.714,411.063,361.095,406.598,361.095z"></path> <path d="M105.02,301.811h107.706c4.465,0,8.084-3.62,8.084-8.084s-3.62-8.084-8.084-8.084H105.02 c-4.465,0-8.084,3.62-8.084,8.084S100.556,301.811,105.02,301.811z"></path> <path d="M406.598,285.642h-96.936c-4.466,0-8.084,3.62-8.084,8.084s3.618,8.084,8.084,8.084h96.936 c4.466,0,8.084-3.62,8.084-8.084S411.063,285.642,406.598,285.642z"></path> <path d="M210.04,142.821c0-4.465-3.62-8.084-8.084-8.084H105.02c-4.465,0-8.084,3.62-8.084,8.084c0,4.465,3.62,8.084,8.084,8.084 h96.935C206.42,150.905,210.04,147.286,210.04,142.821z"></path> <path d="M276.273,301.811h1.077c4.466,0,8.084-3.62,8.084-8.084s-3.618-8.084-8.084-8.084h-1.077 c-4.466,0-8.084,3.62-8.084,8.084S271.807,301.811,276.273,301.811z"></path> <path d="M179.337,210.189c-4.465,0-8.084,3.62-8.084,8.084c0,4.465,3.62,8.084,8.084,8.084h1.077c4.465,0,8.084-3.62,8.084-8.084 c0-4.465-3.62-8.084-8.084-8.084H179.337z"></path> <path d="M105.02,226.358h43.082c4.465,0,8.084-3.62,8.084-8.084c0-4.465-3.62-8.084-8.084-8.084H105.02 c-4.465,0-8.084,3.62-8.084,8.084C96.936,222.738,100.556,226.358,105.02,226.358z"></path> </g> </g> </g> </g></svg>
+    """
+    timeline_elements = []
+    if not history:
+        return Div("No history found for this item.")
+
+    print(f"Rendering item history for {len(history)} items")
+    all_data: list[dict[str, str | dict[str, str]] | int | datetime.datetime] = [
+        item.__dict__.get("change_details", {}) for item in history
+    ]
+    all_data.sort(
+        key=lambda x: x.get("update_time", ""), reverse=True
+    )  # start with most recent
+    for data in all_data:
+        if not data:
+            continue
+        date = data.get("update_time", "?")
+        changes = {}
+        for change in data:
+            if change in [
+                "material_id",
+                "update_time",
+                "modified_at",
+                "possible_fine",
+                "infringement",
+                "retrieved_from_copyright_on",
+            ]:
+                continue
+            if not isinstance(data[change], dict):
+                new_value = data[change]
+                old_value = "N/A"
+                changes[change] = (old_value, new_value)
+                continue
+            old_value = data[change].get("old", "N/A")
+            if old_value in [None, "None", ""]:
+                old_value = "N/A"
+            new_value = data[change].get("new", "N/A")
+            if new_value in [None, "None", ""]:
+                new_value = "N/A"
+
+            changes[change] = (old_value, new_value)
+        if not changes:
+            continue
+        max_key_len = max(len(key) for key in changes)
+        max_old_new_len = max(
+            len(str(old)) + len(" → ") + len(str(new)) for old, new in changes.values()
+        )
+        edit_content = [
+            f"<span class='badge badge-xs  badge-secondary text-[10px]'>{datetime.datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S')}</span>"
+        ]
+        edit_content.extend(
+            [
+                f"<span class='flex flex-col ml-2'><span class='badge badge-xs badge-outline badge-secondary text-[10px]'>{key.replace('_', ' '):>{max_key_len}}</span><span class='ml-2'><span class='text-[10px] badge badge-xs badge-outline badge-accent'>{value[0]}</span>  →  <span class='text-[10px] badge badge-xs badge-primary'>{value[1]}</span></span></span>"
+                for key, value in changes.items()
+            ]
+        )
+        edit_content = "".join(edit_content)
+
+        timeline_elements.append(
+            NotStr(f"""
+        <li>
+            <div class="flex flex-col font-mono text-[10px]">{edit_content}</div>
+        </li>
+        """)
+        )
+
+    return ItemDetailCard(
+        "Change history",
+        Ul(
+            *timeline_elements,
+            cls="flex flex-col gap-2 list-none p-0 m-0",
+        ),
+        card_id="item-history-card",
+        col_span=1,
+        start_collapsed=True,
+        tooltip="All changes made to this item, in reverse chronological order.",
+    )
+
+
 def render_table_rows(
     df_slice: pl.DataFrame,
     app_state: AppState,
@@ -3063,15 +3181,10 @@ def render_data_grid_component(
     )
 
     # Pagination rendering uses the updated render_pagination function
-    pagination_html = render_pagination(app_state, total_pages)
+    pagination_html = render_pagination(app_state, total_pages, total_filtered_rows)
 
     # --- Final Component ---
     return Div(
-        P(  # Item Count Display
-            Strong(str(total_filtered_rows)),
-            Span(" items found", cls="text-base-content text-bold"),
-            cls=" mb-2 text-sm justify-center text-center",
-        ),
         pagination_html,  # Pagination controls
         Div(  # Table Wrapper with loading effect
             table_wrapper,
@@ -3085,72 +3198,250 @@ def render_data_grid_component(
 def render_pagination(
     app_state: AppState,  # Accept AppState object
     total_pages: int,
+    total_items: int,
 ) -> FT:
-    """Renders pagination controls using AppState and updated HTMX attributes."""
+    """
+    Renders pagination controls using AppState and updated HTMX attributes.
+    Uses tailwind classes from pines component library to display the page counts, first/prev/next/last buttons,
+    and an array of directly selectable page numbers.
+    first we show the |< button (skip to first page)
+    then the < button (previous page)
+
+    then numbered elements:
+        - current page [highlighted]
+        - max 3 elements before and after, less if close to the edges [regular]
+        - if not already represented, the first 3 and last 3 pages [regular].
+        - ellipsis elements if there is a gap between the current pages set and the first/last pages sets
+
+    then the > button (next page)
+    finally the >| button (skip to last page)
+
+    example:
+    |< < 1 2 3 ...  18 19 20 [!21!] 22 23 24 ... 88 89 90 > >|
+
+    or:
+    |< < 1 2 3 [!4!] 5 6 7 ... 88 89 90 > >|
+
+    """
+
     if total_pages <= 1:
         return Div(cls="h-12 mb-1")  # Reserve space even if no pagination
 
+    # init all the values we'll need
+
+    classes = {
+        "btn_enabled": "relative inline-flex items-center h-full px-3 rounded-l group hover:bg-blue-600 hover:text-white font-mono",
+        "btn_disabled": "relative inline-flex items-center h-full px-3 rounded-l group bg-neutral-100 font-mono",
+        "number_other": "relative inline-flex items-center h-full px-3 group hover:bg-blue-600 hover:text-white font-mono",
+        "number_selected": "relative inline-flex items-center h-full px-3 text-white bg-blue-600 group font-mono",
+        "disabled": "relative inline-flex items-center h-full px-2.5 bg-neutral-100 group font-mono",
+    }
     current_page = app_state.page
+    start_index = app_state.per_page * (current_page - 1) + 1
+    end_index = app_state.per_page * current_page
 
-    pagination_items = []
+    # Create the list of numbers to show in the pagination element.
+    # always show the current page, and 8 other pages (4 before and 4 after), and ellipses if not at the edges
+    # this means max amount of these elements is 9 numbers + 2 ellipses = 11 elements
+    # to prevent ux jumping around, we always show 11 elements
+    # if we do not need 2 ellipses, expand the numbers on the other side to compensate and get to 11 elements
+    # if we cannot get 11 elements because the total num of pages is < 9, show all pages always
+    # if a symmetric set of pages is not possible because we're at an edge, expand the other side so the total is always 11
 
-    # --- Previous Button ---
-    prev_disabled, prev_page = current_page <= 1, max(1, current_page - 1)
-    prev_link_params = {"page": prev_page}  # Only need the changed value for hx-vals
-    prev_attrs = {
-        "hx_get": data_grid.to(),  # Target the central data route
-        "hx_target": "#data-grid-component",
-        "hx_vals": json.dumps(prev_link_params),  # Send only the page change
-        "role": "button",
-    }
-    pagination_items.append(
-        A(
-            "« Previous",
-            **(
-                {"aria-disabled": "true", "cls": "btn btn-sm btn-disabled"}
-                if prev_disabled
-                else {
-                    "cls": "btn btn-sm btn-primary",
-                    **prev_attrs,
-                }
+    numbers_to_add: list[int] = []
+
+    if total_pages <= 11:
+        # if we have less than 11 pages, show them all
+        numbers_to_add = list(range(1, total_pages + 1))
+    else:
+        # if we have more than 11 pages, create the pagination elements
+        # start with the current page
+        numbers_to_add.append(current_page)
+        # add the previous pages
+        for i in range(1, 5):
+            if current_page - i > 0:
+                numbers_to_add.append(current_page - i)
+        # add the next pages
+        for i in range(1, 5):
+            if current_page + i <= total_pages:
+                numbers_to_add.append(current_page + i)
+
+        # now sort the list and remove duplicates
+        numbers_to_add = sorted(set(numbers_to_add))
+
+        # check if we need to add ellipses
+        if numbers_to_add[0] > 1:
+            numbers_to_add.insert(0, "...")
+        if numbers_to_add[-1] < total_pages:
+            numbers_to_add.append("...")
+        # now we need to check if we have 11 elements, if not, add the missing elements
+        if len(numbers_to_add) < 11:
+            missing_amount = 11 - len(numbers_to_add)
+            print(f"count is {len(numbers_to_add)}, missing {missing_amount}")
+            # we need to add elements to the left or right side
+            # if we have ellipses, add to the other side
+            print(numbers_to_add)
+            if isinstance(numbers_to_add[-1], str) or (
+                isinstance(numbers_to_add[0], int)
+                and numbers_to_add[0] <= missing_amount
+            ):
+                print("adding to right side")
+                # add to the right side
+                if numbers_to_add[-1] == "...":
+                    numbers_to_add.pop()
+                start_num = numbers_to_add[-1]
+                for i in range(1, missing_amount + 1):
+                    if start_num + i <= total_pages:
+                        print(f"adding {start_num + i} to right side")
+                        numbers_to_add.append(start_num + i)
+            elif isinstance(numbers_to_add[0], str) or (
+                isinstance(numbers_to_add[-1], int)
+                and numbers_to_add[-1] >= total_pages - missing_amount
+            ):
+                print("adding to left side")
+                # add to the left side
+                if numbers_to_add[0] == "...":
+                    numbers_to_add.pop(0)
+                start_num = numbers_to_add[0]
+                for i in range(1, missing_amount + 1):
+                    if start_num - i > 0:
+                        print(f"adding {start_num - i} to left side")
+                        numbers_to_add.insert(0, start_num - i)
+
+        if isinstance(numbers_to_add[0], int) and numbers_to_add[0] > 1:
+            numbers_to_add.insert(0, "...")
+        if isinstance(numbers_to_add[-1], int) and numbers_to_add[-1] < total_pages:
+            numbers_to_add.append("...")
+
+    print(
+        f"{len(numbers_to_add)} numbers that will be used for pagination display:{numbers_to_add}"
+    )
+
+    # now create the elements for the button block
+    btn_block = []
+    # 1. create first + prev buttons
+    attr_dict = {}
+    attr_dict["first"] = (
+        "⏮",
+        {
+            "hx_get": data_grid.to(),  # Target the central data route
+            "hx_target": "#data-grid-component",
+            "hx_vals": json.dumps({"page": 1}),  # Send only the page change
+            "role": "button",
+            "cls": classes["btn_disabled"]
+            if current_page <= 1
+            else classes["btn_enabled"],
+        },
+    )
+    attr_dict["prev"] = (
+        "⏴",
+        {
+            "hx_get": data_grid.to(),  # Target the central data route
+            "hx_target": "#data-grid-component",
+            "hx_vals": json.dumps(
+                {"page": max(1, current_page - 1)}
+            ),  # Send only the page change
+            "role": "button",
+            "cls": classes["btn_disabled"]
+            if current_page <= 1
+            else classes["btn_enabled"],
+        },
+    )
+    # add the buttons to the block
+    for key, (text, attr) in attr_dict.items():
+        btn_block.append(
+            A(
+                text,
+                **attr,
+            )
+        )
+    # 2. add the numbered elements
+    for number in numbers_to_add:
+        if number == "...":
+            cls = classes["disabled"]
+        elif number == current_page:
+            cls = classes["number_selected"]
+        else:
+            cls = classes["number_other"]
+
+        btn_block.append(
+            Li(
+                A(
+                    number,
+                    hx_get=data_grid.to(),
+                    hx_target="#data-grid-component",
+                    hx_vals=json.dumps({"page": number}),
+                    role="button",
+                    cls=cls,
+                ),
+                cls="hidden h-full md:block",
+            )
+        )
+    # 3. create next + last buttons
+    attr_dict = {}
+    attr_dict["next"] = (
+        "⏵",
+        {
+            "hx_get": data_grid.to(),  # Target the central data route
+            "hx_target": "#data-grid-component",
+            "hx_vals": json.dumps(
+                {"page": min(total_pages, current_page + 1)}
+            ),  # Send only the page change
+            "role": "button",
+            "cls": classes["btn_disabled"]
+            if current_page >= total_pages
+            else classes["btn_enabled"],
+        },
+    )
+
+    attr_dict["last"] = (
+        "⏭",
+        {
+            "hx_get": data_grid.to(),  # Target the central data route
+            "hx_target": "#data-grid-component",
+            "hx_vals": json.dumps({"page": total_pages}),  # Send only the page change
+            "role": "button",
+            "cls": classes["btn_disabled"]
+            if current_page >= total_pages
+            else classes["btn_enabled"],
+        },
+    )
+    # add the buttons to the block
+    for key, (text, attr) in attr_dict.items():
+        btn_block.append(
+            A(
+                text,
+                **attr,
+            )
+        )
+    #  create the final elements and return
+    nav_element = Nav(
+        Div(
+            Span(
+                NotStr(
+                    f"<span class='font-mono'>🗏 {start_index}-{end_index} (<span class='font-mono'>∑ {total_items}</span>)</span>"
+                ),
+                title="items shown / total items",
+                cls="pl-1 pr-1 mr-2 cursor-help border border-blue-700/20 rounded bg-blue-700/10",
             ),
-        )
-    )
-
-    # --- Page Indicator ---
-    pagination_items.append(
-        Span(
-            f"Page {current_page} of {total_pages}",
-            cls="join-item btn btn-sm",
-        )
-    )
-
-    # --- Next Button ---
-    next_disabled, next_page = (
-        current_page >= total_pages,
-        min(total_pages, current_page + 1),
-    )
-    next_link_params = {"page": next_page}  # Only need the changed value for hx-vals
-    next_attrs = {
-        "hx_get": data_grid.to(),  # Target the central data route
-        "hx_target": "#data-grid-component",
-        "hx_vals": json.dumps(next_link_params),  # Send only the page change
-        "role": "button",
-    }
-    pagination_items.append(
-        A(
-            "Next »",
-            **(
-                {"aria-disabled": "true", "cls": "btn btn-sm btn-disabled"}
-                if next_disabled
-                else {"cls": "btn btn-sm btn-primary", **next_attrs}
+            Span(
+                NotStr(f"<span class='font-mono'>🗐 {total_pages}</span>"),
+                title=" total amount of  pages",
+                cls="pl-1 pr-1 ml-2 cursor-help border border-green-700/20 rounded bg-emerald-700/10",
             ),
-        )
+        ),
+        Ul(
+            *btn_block,
+            cls="flex items-center text-sm leading-tight w-full bg-base-200 border border-neutral-200/70 rounded h-[34px] text-neutral-500 ",
+        ),
+        cls="flex flex-col items-center justify-cente",
     )
+    pagination_text_element = ()
 
     return Div(
-        *pagination_items,
-        cls="join justify-center",
+        pagination_text_element,
+        nav_element,
+        cls="flex items-center justify-end w-full h-16 px-3 border-t border-neutral-200",
     )
 
 
@@ -3686,8 +3977,7 @@ async def show_item_details(session: dict, material_id: int):
             cls="flex items-center space-x-2",
         )(
             Label(
-                UkIcon("file-key-2", cls="mr-1"),
-                str(material_id),
+                "🆔 " + str(material_id),
                 cls="text-sm",
             ),
         )
@@ -3790,6 +4080,9 @@ async def show_item_details(session: dict, material_id: int):
         course_details_content = render_course_details(item_data)
         teachers_content = render_teacher_info(item_data)
 
+        # --- Item History Card ---
+        item_history_card = render_item_history(await get_item_history(material_id))
+
         # --- Assemble Cards into Grid ---
         modal_cards_grid = Div(cls="grid grid-cols-1 md:grid-cols-3 gap-4")(
             # Column 1
@@ -3833,6 +4126,7 @@ async def show_item_details(session: dict, material_id: int):
                     start_collapsed=True,
                     col_span=1,
                 ),
+                item_history_card,
                 cls="flex flex-col space-y-4",
             ),
             # Column 3

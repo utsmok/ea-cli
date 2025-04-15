@@ -8,8 +8,11 @@ from collections.abc import Iterable
 from typing import Any, Literal, LiteralString
 
 import polars as pl
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
+from tortoise import Tortoise
 
+from easy_access.db.base import init, init_engine
+from easy_access.db.models import ItemUpdate
 from easy_access.settings import SETTINGS
 from easy_access.utils import warn
 
@@ -21,8 +24,9 @@ def retrieve_copyright_items() -> pl.DataFrame:
     Retrieve all copyright items currently in db
     returns a flat dataframe with the core fields
     """
+    global engine
     if not engine:
-        init_engine()
+        engine = init_engine()
 
     col_order: set[str] = set(SETTINGS.data_settings.raw_data_col_order)
 
@@ -49,8 +53,9 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     for copyright_items with duplicates, find the replacing material id
     returns a dataframe with 'material_id', 'is_duplicate', and 'replacement_id' columns
     """
+    global engine
     if not engine:
-        init_engine()
+        engine = init_engine()
 
     query: str = """
         SELECT material_id, is_duplicate, replacement_id
@@ -63,17 +68,11 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     return df
 
 
-def init_engine(path: str | None = None) -> None:
-    global engine
-    if not path:
-        path = "db.sqlite3"
-    engine = create_engine(f"sqlite:///{str(path)}")
-
-
 def get_valid_faculties() -> set[str]:
     """Retrieves the set of valid faculty abbreviations from the database."""
+    global engine
     if not engine:
-        init_engine()
+        engine = init_engine()
     with engine.connect() as conn:
         result = conn.execute(text("SELECT abbreviation FROM faculty"))
         return {row[0] for row in result.fetchall()}
@@ -95,8 +94,9 @@ def retrieve_full_data(
     Returns:
         A Polars DataFrame.
     """
+    global engine
     if not engine:
-        init_engine()
+        engine = init_engine()
     valid_faculties = get_valid_faculties()
     material_join_clause = ""
     faculty_where_clause = ""
@@ -306,8 +306,9 @@ def get_llm_classification_schema() -> dict[str, type]:
 def retrieve_llm_classifications(
     selected_material_ids: Iterable[int] | None = None,
 ) -> pl.DataFrame:
+    global engine
     if not engine:
-        init_engine()
+        engine = init_engine()
     material_join_clause: Literal[""] = ""
     with engine.connect() as conn:
         # print all table names
@@ -396,9 +397,9 @@ def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
         copyright item and its related data. Returns an empty list if
         material_ids is empty or no data is found.
     """
+    global engine
     if not engine:
-        init_engine()
-
+        engine = init_engine()
     if not material_ids:
         warn("No material IDs provided. Returning empty list.")
         return []
@@ -582,3 +583,29 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
         pass
 
     return results
+
+
+async def retrieve_item_history(material_ids: list[int]) -> list[ItemUpdate]:
+    """
+    Retrieves the history of changes for the given material IDs.
+
+    Args:
+        material_ids: A list of material IDs to retrieve history for.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents one history entry.
+    """
+    await init()
+
+    if not material_ids:
+        warn("No material IDs provided. Returning empty list.")
+        return []
+
+    if not isinstance(material_ids, Iterable):
+        material_ids = [material_ids]  # Convert to list if not already
+
+    # get all ItemUpdate instances with material_id in material_ids
+
+    items = await ItemUpdate().filter(material_id__in=material_ids).all()
+    await Tortoise.close_connections()
+    return items
