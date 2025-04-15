@@ -5,6 +5,7 @@ import json
 import math
 import traceback
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import auto
 from pathlib import Path
@@ -26,57 +27,6 @@ from easy_access.db.update import update_copyright_items
 from easy_access.settings import SETTINGS, DirSetting
 
 # --- monsterui fixes ---
-
-"""
-UT Logo Variants
-<!-- Logo Variant 1: Black / Green -->
-<div class="ut-logo-base logo-variant-1">
-  <p>UNIVERSITY</p>
-  <p>OF TWENTE</p>
-  <p>CDD//UT.</p>
-</div>
-
-<hr> <!-- Separator for clarity -->
-
-<!-- Logo Variant 2: Black / Red -->
-<div class="ut-logo-base logo-variant-2">
-  <p>UNIVERSITY</p>
-  <p>OF TWENTE</p>
-  <p>CDD//UT.</p>
-</div>
-
-<hr> <!-- Separator for clarity -->
-
-<!-- Logo Variant 3: Blue / Blue-Orange Split -->
-<!-- Note the <span> around //UT. for split color -->
-<div class="ut-logo-base logo-variant-3">
-  <p>UNIVERSITY</p>
-  <p>OF TWENTE</p>
-  <p>CDD<span class="split">//UT.</span></p>
-</div>
-
-<hr> <!-- Separator for clarity -->
-
-<!-- Logo Variant 4: Blue / Blue-Purple-Red Split -->
-<!-- Note the <span> around //UT. for split color -->
-<div class="ut-logo-base logo-variant-4">
-  <p>UNIVERSITY</p>
-  <p>OF TWENTE</p>
-  <p>CDD<span class="split">//UT.</span></p>
-</div>
-
-"""
-
-
-class LabelT(VEnum):
-    """FIX: replaces danger with destructive"""
-
-    def _generate_next_value_(name, start, count, last_values):
-        return str2ukcls("label", name)
-
-    primary = auto()
-    secondary = auto()
-    destructive = auto()
 
 
 # NOTE: do a manual replace of this function in the monsterui library in order to fix theme switching
@@ -132,7 +82,99 @@ def _headers_theme(
     return fh.Script(return_val)
 
 
-# --- globals ---
+class LabelT(VEnum):
+    """FIX: replaces danger with destructive"""
+
+    def _generate_next_value_(name, start, count, last_values):
+        return str2ukcls("label", name)
+
+    primary = auto()
+    secondary = auto()
+    destructive = auto()
+
+
+# --- globals / constants ---
+
+WORKFLOW_STYLES: dict[str, LabelT] = {
+    "ToDo": LabelT.destructive,
+    "InProgress": LabelT.secondary,
+    "Done": LabelT.primary,
+}
+STATUS_STYLES: dict[str, LabelT] = {
+    "Published": LabelT.primary,
+    "Unpublished": LabelT.secondary,
+    "Deleted": LabelT.destructive,
+}
+PRIMARY_CLASSIFICATIONS = {
+    "open access",
+    "eigen materiaal - powerpoint",
+    "eigen materiaal - titelindicatie",
+    "eigen materiaal - overig",
+    "eigen materiaal",
+}
+SECONDARY_CLASSIFICATIONS = {
+    "onbekend",
+    "niet geanalyseerd",
+    "in onderzoek",
+    "licentie beschikbaar",
+    "verwijderverzoek verstuurd",
+}
+DESTRUCTIVE_CLASSIFICATIONS = {
+    "korte overname",
+    "middellange overname",
+    "lange overname",
+}
+DEFAULT_PILL_STYLE = LabelT.secondary
+FILTERABLE_COLUMNS: list[str] = [
+    "workflow_status",
+    "classification",
+    "status",
+    "manual_classification",
+    "faculty",
+    "department",
+    "course_name",
+]
+DISPLAY_COLUMNS: list[str] = [
+    "material_id",
+    "url",
+    "workflow_status",
+    "status",
+    "classification",
+    "ml_prediction",
+    "manual_classification",
+    "remarks",
+    "filename",
+    "title",
+    "faculty",
+]
+# --- Filter Toggle Definitions ---
+WORKFLOW_FILTER_STATES = [
+    None,
+    "InProgress|ToDo",
+    "InProgress",
+    "ToDo",
+]
+WORKFLOW_FILTER_LABELS = {
+    None: "Workflow: All",
+    "InProgress|ToDo": "Workflow: Not Done",
+    "InProgress": "Workflow: In Progress",
+    "ToDo": "Workflow: ToDo",
+}
+
+STATUS_FILTER_STATES = [None, "Published|Unpublished", "Published"]
+STATUS_FILTER_LABELS = {
+    None: "Status: All",
+    "Published|Unpublished": "Status: Not Deleted",
+    "Published": "Status: Published",
+}
+
+# Using specific values from the DESTRUCTIVE/SECONDARY sets
+CLASSIFICATION_FILTER_STATES = [None, "lange overname", "onbekend"]
+CLASSIFICATION_FILTER_LABELS = {
+    None: "Class: All",
+    "lange overname": "Class: Lange Overname",
+    "onbekend": "Class: Onbekend",
+}
 
 
 copyright_df_global: pl.DataFrame = retrieve_copyright_items()
@@ -149,15 +191,10 @@ MAX_CELL_LENGTH = 35
 
 
 @dataclass
-class Login:
-    email: str
-    pwd: str
-
-
-@dataclass
 class AppState:
     """
-    data structure to hold the state of the app
+    Data structure to hold the UI state of the application (pagination, sorting, filters).
+    State is loaded from the session, modified based on user requests, and saved back.
     """
 
     page: int = 1
@@ -165,129 +202,505 @@ class AppState:
     sort_by: str | None = None
     sort_desc: bool = False
     filters: dict[str, str] = field(default_factory=dict)
-    current_total: int = 0
+    # current_total removed - calculate dynamically
 
-    def update_from_req(
-        self,
-        request_params: dict[str, Any],
-        new_filters: dict[str, str | int] | None = None,
-        auth_details: dict = None,
-        disable_filter_reset: bool = False,
-    ):
-        print("update from req")
-        print(f"request_params: {request_params}")
-        print(f"new_filters: {new_filters}")
-        print(f"auth_details: {auth_details}")
-        print(f"disable_filter_reset: {disable_filter_reset}")
-        self.page = int(request_params.get("page", self.page))
-        self.per_page = int(request_params.get("per_page", self.per_page))
-        new_sort_by = request_params.get("sort_by")
-        if new_sort_by:
-            self.sort_by = new_sort_by
-        self.sort_desc = (
-            str(request_params.get("sort_desc", str(self.sort_desc))).lower() == "true"
+    def set_page(self, page: int):
+        """Sets the current page number."""
+        self.page = max(1, page)  # Basic validation
+
+    def set_per_page(self, per_page: int):
+        """Sets the number of items per page."""
+        self.per_page = max(1, per_page)  # Basic validation
+
+    def set_sort(self, sort_by: str | None, sort_desc: bool):
+        """Sets the sorting column and direction."""
+        # Optional: Validate sort_by against available columns?
+        self.sort_by = sort_by
+        self.sort_desc = sort_desc
+
+    def apply_filter_change(self, key: str, value: str, is_checked: bool) -> bool:
+        """
+        Applies a change from a checkbox filter.
+
+        Updates the pipe-separated string for the given filter key.
+
+        Args:
+            key: The filter key (e.g., 'workflow_status').
+            value: The specific value being toggled (e.g., 'ToDo').
+            is_checked: The *intended* state of the checkbox (True if checked).
+
+        Returns:
+            True if the filters for this key actually changed, False otherwise.
+        """
+        current_values = (
+            set(self.filters.get(key, "").split("|"))
+            if self.filters.get(key)
+            else set()
         )
-        all_filter_keys = [  # Define all possible filter keys
-            "workflow_status",
-            "status",
-            "classification",
-            "manual_classification",
-            "faculty",
-            "department",
-            "course_name",
-        ]
-        if not new_filters and not disable_filter_reset:
-            new_filters = {}
+        original_filter_str = self.filters.get(key)
 
-        all_empty = True
-        for key in all_filter_keys:
-            filter_param_key = f"filter_{key}"
-            if filter_param_key in request_params and request_params[filter_param_key]:
-                # Add if the key exists and has a non-empty value
-                new_filters[key] = request_params[filter_param_key]
-                if new_filters[key] and all_empty:
-                    all_empty = False
+        if is_checked:
+            current_values.add(value)
+        else:
+            current_values.discard(value)  # Use discard to avoid error if not present
 
-        if disable_filter_reset and all_empty:
-            print(
-                f"No new filters and disable_filter_reset is active. Keeping filters: {self.filters}"
-            )
-            self.current_total = _calc_total_for_filters(self.filters)
+        # Filter out empty strings that might result from split('')
+        current_values.discard("")
 
-            return
+        if not current_values:
+            if key in self.filters:
+                del self.filters[key]
+                return True  # Changed from something to nothing
+            else:
+                return False  # Was already nothing
+        else:
+            new_filter_str = "|".join(sorted(list(current_values)))
+            if new_filter_str != original_filter_str:
+                self.filters[key] = new_filter_str
+                return True  # Changed
+            else:
+                return False  # No effective change
 
-        if not self.filters:
-            print(f"Setting new filters (no previous filters): {new_filters}")
-            self.filters = new_filters
-        elif new_filters:
-            for k, v in new_filters.items():
-                if v:
-                    self.filters[k] = v
+    def apply_text_filter(self, key: str, value: str) -> bool:
+        """
+        Sets or removes a text-based filter value.
 
-        if auth_details:
-            auth_faculty = auth_details.get("faculty")
-            auth_role = auth_details.get("role")
-            # Apply faculty filter ONLY if user is not admin and has a specific faculty
-            if auth_faculty and auth_faculty != "all" and auth_role != "admin":
-                self.filters["faculty"] = auth_faculty
+        Args:
+            key: The filter key (e.g., 'department').
+            value: The value from the text input. Empty string removes the filter.
 
-        self.current_total = _calc_total_for_filters(self.filters)
+        Returns:
+            True if the filter value changed, False otherwise.
+        """
+        original_value = self.filters.get(key)
+        if value:
+            if value != original_value:
+                self.filters[key] = value
+                return True
+            else:
+                return False
+        else:  # Empty value means remove the filter
+            if key in self.filters:
+                del self.filters[key]
+                return True
+            else:
+                return False
 
-    # Helper to generate params for HTMX links (excluding filters)
+    def clear_filters(self):
+        """Clears all user-defined filters."""
+        self.filters = {}
+        # Note: Does not handle auth-based filters, they are applied dynamically later.
+
+    # --- Read Methods (mostly unchanged) ---
+
     def nav_params_dict(self) -> dict[str, Any]:
+        """Returns dictionary of navigation parameters (page, sort, per_page)."""
         return {
             "page": self.page,
             "per_page": self.per_page,
-            "sort_by": self.sort_by or "",
+            "sort_by": self.sort_by or "",  # Ensure string for URL gen
             "sort_desc": str(self.sort_desc),
         }
 
-    def reset_filters(self):
-        new_filters = {}
-        self.filters = new_filters
-
-    def update_filters_from_form(self, form_data: FormData):
-        new_filters = {}
-
-        for k, v in form_data.multi_items():
-            if k.startswith("filter_"):
-                if k in new_filters and new_filters.get(k) and v:
-                    new_filters[k] = new_filters[k] + "|" + v
-                elif v:
-                    new_filters[k] = v
-
-        print(f"update_filters_from_form: new filters: {new_filters}")
-        # check if all values are empty strings
-        if all(v == "" for v in new_filters.values()):
-            print(
-                f"update_filters_from_form: all filters are empty. Keeping current filters: {self.filters}"
-            )
-            return
-        print(f"update_filters_from_form: new filters: {new_filters}")
-        self.filters = new_filters
-        self.current_total = _calc_total_for_filters(self.filters)
-
-        return self.filters
-
-    # Helper to generate filter params for HTMX links/forms
     def filter_params_dict(self) -> dict[str, str]:
+        """Returns dictionary of currently active filters, prefixed for forms/URLs."""
         if not self.filters:
             return {}
         return {f"filter_{k}": v for k, v in self.filters.items()}
 
-    # Helper to get combined params for full state links/forms if needed
     def all_params_dict(self) -> dict[str, Any]:
+        """Returns combined navigation and filter parameters."""
         return {**self.nav_params_dict(), **self.filter_params_dict()}
 
-    # Helper to get filter dict compatible with get_filtered_sorted_df
     def get_active_filters(self) -> dict[str, str]:
-        # Return a copy of the filters dict
-        if self.filters:
-            return self.filters.copy()
-        return {}
+        """Returns a copy of the currently active user filters."""
+        # Return a copy to prevent external modification
+        return self.filters.copy()
+
+
+def load_app_state(session: dict) -> AppState:
+    """
+    Loads the AppState object from the session dictionary.
+
+    If 'app_state' is not found in the session or is invalid,
+    it returns a default AppState instance.
+
+    Args:
+        session: The session dictionary.
+
+    Returns:
+        An AppState instance.
+    """
+    app_state_dict = session.get("app_state", {})
+    try:
+        # Attempt to create AppState; might fail if dict structure is wrong
+        state = AppState(**app_state_dict)
+    except (TypeError, ValueError):
+        print("Warning: Invalid or missing app_state in session. Using default.")
+        state = AppState()  # Return default state
+    return state
+
+
+@dataclass
+class ProcessedDataResult:
+    """
+    Holds the results after processing state and fetching data.
+    """
+
+    app_state: AppState  # The validated state reflecting the data fetched
+    df_slice: pl.DataFrame
+    total_filtered_rows: int
+    total_pages: int
+    filter_counts: dict[str, dict[str, int]]  # Counts for UI elements
+
+
+def process_state(session: dict, request_params: dict) -> tuple[dict, AppState]:
+    """
+    Loads state, applies the single requested change based on request_params,
+    saves the potentially modified state back to the session immediately,
+    and returns the updated session dict and the AppState object reflecting the user's request intent.
+
+    Does not perform data-dependent validation (like page number).
+
+    Args:
+        session: The current session dictionary.
+        request_params: Dictionary containing parameters from the request (query + form).
+
+    Returns:
+        A tuple containing the (potentially updated) session dictionary and the AppState instance.
+    """
+    print(f"Processing state with params: {request_params}")  # Debug incoming params
+
+    # 1. Load initial state
+    app_state = load_app_state(session)
+    initial_state_dict = asdict(app_state)  # For change detection
+
+    # 2. Determine action and modify state based on request_params
+    filters_changed = False
+    if request_params.get("action") == "reset":
+        print("Processing state: Reset action")
+        app_state.clear_filters()
+        app_state.set_page(1)
+        # Check if filters *were* present before clearing
+        filters_changed = bool(initial_state_dict.get("filters"))
+        if not filters_changed and app_state.page == initial_state_dict.get("page", 1):
+            print("No change made -- page already default")
+            pass  # No effective change from reset if already default
+        else:
+            filters_changed = True  # Consider page reset or filter clear a change
+
+    elif "page" in request_params:
+        try:
+            page = int(request_params["page"])
+            if page != app_state.page:
+                print(f"Processing state: Set page to {page}")
+                app_state.set_page(page)
+        except (ValueError, TypeError):
+            print(
+                f"Warning: Invalid page parameter '{request_params['page']}'. Ignoring."
+            )
+    elif "sort_by" in request_params:
+        sort_by = request_params.get("sort_by")
+        sort_desc = request_params.get("sort_desc", "False").lower() == "true"
+        if sort_by != app_state.sort_by or sort_desc != app_state.sort_desc:
+            print(
+                f"Processing state: Set sort to {sort_by} ({'DESC' if sort_desc else 'ASC'})"
+            )
+            app_state.set_sort(sort_by if sort_by else None, sort_desc)
+    elif "per_page" in request_params:
+        try:
+            per_page = int(request_params["per_page"])
+            if per_page != app_state.per_page:
+                print(f"Processing state: Set per_page to {per_page}")
+                app_state.set_per_page(per_page)
+                app_state.set_page(1)
+        except (ValueError, TypeError):
+            print(
+                f"Warning: Invalid per_page parameter '{request_params['per_page']}'. Ignoring."
+            )
+    else:  # Check for filter changes (expects only one per request now)
+        is_checkbox_change = "checked" in request_params
+        filter_key_from_param = None
+        filter_value_from_param = None
+
+        if is_checkbox_change:
+            # For checkbox changes, find the specific 'filter_*' key that has a NON-EMPTY value.
+            # This assumes hx-vals correctly sends {"filter_thekey": "thevalue", "checked": "True/False"}
+            # and the form submission noise might add other empty filter_* keys.
+            found_key = None
+            for key, value in request_params.items():
+                if key.startswith("filter_") and value:  # Find the key *with* a value
+                    found_key = key
+                    break
+
+            if found_key:
+                filter_key_from_param = found_key[len("filter_") :]
+                filter_value_from_param = request_params[found_key]
+
+                if filter_key_from_param in FILTERABLE_COLUMNS:
+                    print(
+                        f"Processing state: Checkbox change for '{filter_key_from_param}' = '{filter_value_from_param}'"
+                    )
+                    is_checked = request_params["checked"].lower() == "true"
+                    if app_state.apply_filter_change(
+                        filter_key_from_param, filter_value_from_param, is_checked
+                    ):
+                        filters_changed = True
+                else:
+                    print(
+                        f"Warning: Received unknown filter key '{filter_key_from_param}' from checkbox. Ignoring."
+                    )
+            else:
+                print(
+                    "Warning: Checkbox change detected but no filter key with value found in params."
+                )
+
+        else:  # Handle text input change (assume only one relevant filter_*)
+            # Find the first filter_* key (could be empty value for text clear)
+            found_key = None
+            for key in request_params:
+                if key.startswith("filter_"):
+                    found_key = key
+                    break
+
+            if found_key:
+                filter_key_from_param = found_key[len("filter_") :]
+                filter_value_from_param = request_params[found_key]  # Can be empty
+
+                if filter_key_from_param in FILTERABLE_COLUMNS:
+                    print(
+                        f"Processing state: Text filter change for '{filter_key_from_param}' = '{filter_value_from_param}'"
+                    )
+                    if app_state.apply_text_filter(
+                        filter_key_from_param, filter_value_from_param
+                    ):
+                        filters_changed = True
+                else:
+                    print(
+                        f"Warning: Received unknown text filter key '{filter_key_from_param}'. Ignoring."
+                    )
+            # else: No filter_* keys found, likely not a filter action
+
+    if filters_changed:
+        print("Processing state: Filters changed, resetting page to 1")
+        app_state.set_page(1)
+
+    # Save state back to session *only if* it actually changed from the initial load
+    final_state_dict = asdict(app_state)
+    state_has_changed = final_state_dict != initial_state_dict
+    if state_has_changed:
+        print("Processing state: State changed, updating session.")
+        session["app_state"] = final_state_dict
+    else:
+        print("Processing state: No effective state change detected.")
+
+    return session, app_state
+
+
+async def fetch_data(app_state: AppState, session: dict) -> ProcessedDataResult:
+    """
+    Takes an AppState reflecting user request, applies auth constraints,
+    fetches/filters data, validates state (page number), calculates derived values,
+    and returns results including the validated state.
+
+    Args:
+        app_state: The AppState reflecting the user's requested filters/sort/page.
+        session: The session dictionary (needed for auth details).
+
+    Returns:
+        A ProcessedDataResult object.
+    """
+    print(f"Fetching data for state: {app_state}")
+    # 1. Get Auth Details from Session
+    auth_details = session.get("auth", {})
+
+    # 2. Determine Auth Constraint
+    faculty_constraint = None
+    user_faculty = auth_details.get("faculty")
+    user_role = auth_details.get("role")
+    if user_role != "admin" and user_faculty and user_faculty != "all":
+        faculty_constraint = {"faculty": user_faculty}
+        print(f"Applying faculty constraint: {faculty_constraint}")
+
+    # 3. Filter Data (using adapted get_filtered_sorted_df)
+    filtered_df = get_filtered_sorted_df(
+        app_state, extra_constraints=faculty_constraint
+    )
+    total_filtered_rows = filtered_df.height
+    print(f"Filtered data rows: {total_filtered_rows}")
+
+    # 4. Calculate Total Pages & *Validate* Page Number in a *copy* of the state
+    validated_app_state = deepcopy(app_state)
+    total_pages = (
+        math.ceil(total_filtered_rows / validated_app_state.per_page)
+        if validated_app_state.per_page > 0
+        else 1
+    )
+    original_page_request = validated_app_state.page
+    validated_app_state.page = max(
+        1, min(validated_app_state.page, total_pages if total_pages > 0 else 1)
+    )
+    if validated_app_state.page != original_page_request:
+        print(
+            f"Page number validated: Requested {original_page_request}, Validated {validated_app_state.page} (Total Pages: {total_pages})"
+        )
+
+    # 5. Calculate Filter Counts (using adapted calculate_counts_for_ui)
+    # Pass the *requested* state (app_state) because counts show potential changes
+    # Pass global_df (copyright_df_global assumed available) and constraint
+    print("Calculating filter counts...")
+    filter_counts = calculate_counts_for_ui(
+        app_state, copyright_df_global, faculty_constraint
+    )
+    print("Filter counts calculated.")
+
+    # 6. Prepare Slice using *Validated* State
+    offset = (validated_app_state.page - 1) * validated_app_state.per_page
+    df_slice = filtered_df.slice(offset, validated_app_state.per_page)
+    print(f"Data slice prepared: Offset {offset}, Length {df_slice.height}")
+
+    # 7. Return results with the *Validated* State
+    return ProcessedDataResult(
+        app_state=validated_app_state,  # Return the state with corrected page number
+        df_slice=df_slice,
+        total_filtered_rows=total_filtered_rows,
+        total_pages=total_pages,
+        filter_counts=filter_counts,
+    )
+
+
+def calculate_counts_for_ui(
+    app_state: AppState, global_df: pl.DataFrame, faculty_constraint: dict | None
+) -> dict[str, dict[str, int]]:
+    """
+    Calculates counts for UI filter display based on current filters.
+
+    Simulates toggling each option relative to the current selection,
+    applied against the global dataset, while respecting faculty constraints.
+
+    Args:
+        app_state: The current AppState reflecting user's choices.
+        global_df: The complete, unfiltered DataFrame.
+        faculty_constraint: An optional dictionary specifying the faculty constraint (e.g., {"faculty": "EEMCS"}).
+
+    Returns:
+        A dictionary where keys are filter columns and values are dicts
+        mapping filter options to their calculated counts if toggled.
+    """
+    all_counts = {}
+    current_filters = app_state.get_active_filters()
+
+    # Define the filter options and their styles (assuming these maps are available globally)
+    filter_options_map = {
+        "workflow_status": WORKFLOW_STYLES,
+        "status": STATUS_STYLES,
+        "classification": {  # Combine classifications for options
+            **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
+            **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
+            **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
+            "None": LabelT.destructive,  # Add 'None' option
+        },
+        "manual_classification": {  # Same options as classification
+            **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
+            **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
+            **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
+            "None": LabelT.destructive,
+        },
+        "faculty": FACULTY_BADGE_STYLES,
+        # Add other filterable columns if they have predefined options
+    }
+
+    for filter_key, options in filter_options_map.items():
+        # Skip faculty count calculation entirely if user is constrained to a faculty
+        # *not* present in the available options (edge case, but possible).
+        # Or, more likely, only show the count for *their* faculty.
+        if (
+            faculty_constraint
+            and filter_key == "faculty"
+            and faculty_constraint["faculty"] not in options
+        ):
+            print(
+                f"Skipping count for faculty '{faculty_constraint['faculty']}' as it's not in options map for key '{filter_key}'"
+            )
+            continue
+
+        empty_values = EMPTY_FILTERS.get(filter_key, [])
+        all_counts[filter_key] = {}
+        # Get the currently selected values for *this specific filter key* from user's state
+        current_selections_for_key = (
+            set(current_filters.get(filter_key, "").split("|"))
+            if current_filters.get(filter_key)
+            else set()
+        )
+
+        for option_value in options:
+            # If constrained and this is the faculty filter, only calculate for the constrained faculty
+            if (
+                faculty_constraint
+                and filter_key == "faculty"
+                and option_value != faculty_constraint["faculty"]
+            ):
+                all_counts[filter_key][option_value] = (
+                    0  # Or some indicator it's unavailable
+                )
+                continue
+
+            if option_value in empty_values:
+                all_counts[filter_key][option_value] = 0
+                continue
+
+            # --- Calculate count IF this option were toggled ---
+            # Start with a fresh copy of the user's current filters for simulation
+            temp_filters = current_filters.copy()
+            # Apply faculty constraint on top for base filtering during simulation
+            if faculty_constraint:
+                temp_filters.update(
+                    faculty_constraint
+                )  # Ensures constraint is always part of base
+
+            temp_selections = current_selections_for_key.copy()
+
+            # Simulate toggling this specific option_value
+            is_currently_selected = option_value in temp_selections
+            if is_currently_selected:
+                temp_selections.remove(option_value)  # Simulate Toggle OFF
+            else:
+                temp_selections.add(option_value)  # Simulate Toggle ON
+
+            # Update the temporary filter dictionary based on the simulated selections
+            if temp_selections:
+                temp_filters[filter_key] = "|".join(sorted(list(temp_selections)))
+            elif filter_key in temp_filters and not (
+                faculty_constraint and filter_key == "faculty"
+            ):
+                del temp_filters[filter_key]
+
+            # Crucially, if faculty is constrained, ensure the constraint remains
+            # even if the user simulation temporarily removed it.
+            if (
+                faculty_constraint
+                and filter_key == "faculty"
+                and "faculty" not in temp_filters
+            ):
+                temp_filters["faculty"] = faculty_constraint["faculty"]
+
+            # Calculate count with these temporary filters using the GLOBAL df
+            # Pass the unmodified global_df to the counting helper
+            count = _apply_filters_for_count(temp_filters, global_df=global_df)
+            all_counts[filter_key][option_value] = count
+            # print(f"  Count for {filter_key}={option_value} (toggled {'OFF' if is_currently_selected else 'ON'}) -> {count} (using temp filters: {temp_filters})")
+
+    # print(f"Final Counts: {all_counts}")
+    return all_counts
 
 
 # --- auth ---
+
+
+@dataclass
+class Login:
+    email: str
+    pwd: str
 
 
 def create_users_from_secrets():
@@ -722,6 +1135,75 @@ document.body.addEventListener('htmx:configRequest', function(event) {
     defer=True,
 )
 
+MODAL_TRIGGER = Script("""
+    document.body.addEventListener('openModalEvent', function(evt) {
+        const modalDialog = document.getElementById('modal-placeholder');
+        if (modalDialog && typeof modalDialog.showModal === 'function') {
+            console.log('Opening modal via openModalEvent (Target: #modal-placeholder)');
+            modalDialog.showModal();
+        } else {
+            console.error('Modal dialog (#modal-placeholder) not found or showModal not supported.');
+        }
+    });
+""")
+MODAL_INTERACTION = Script(f"""
+    // Function to update a pill's appearance and hidden input value
+    // ... (keep existing implementation of updatePill, markDirty, resetModalForm) ...
+        function updatePill(fieldName, newValue, newText, newStyleClass) {{
+        const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
+        const inputElement = document.getElementById(`input-${{fieldName}}`);
+        if (pillElement && inputElement) {{
+            inputElement.value = newValue;
+            pillElement.textContent = newText;
+            pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive', 'badge-neutral', 'badge-primary', 'badge-error'); // Remove old styles
+            if (newStyleClass) {{
+                pillElement.classList.add(newStyleClass); // Add new style
+            }} else {{
+                    pillElement.classList.add('{str(DEFAULT_PILL_STYLE)}'); // Default fallback
+            }}
+            const drop = UIkit.drop(pillElement.closest('[uk-drop]'));
+            if (drop) {{ drop.hide(false); }}
+            markDirty();
+        }} else {{ console.error(`Cannot find pill or input elements for ${{fieldName}}`); }}
+    }}
+    function markDirty() {{
+        const indicator = document.getElementById('save-indicator');
+        const saveButton = document.getElementById('modal-save-btn');
+        if (indicator) indicator.classList.remove('hidden');
+        if (saveButton) saveButton.disabled = false;
+    }}
+    function resetModalForm() {{
+        console.log('Resetting modal form');
+        const form = document.getElementById('modal-details-form');
+        if (!form) return;
+        // Reset editable pills
+        form.querySelectorAll('input[data-original-value][id^="input-"]').forEach(input => {{
+            const originalValue = input.dataset.originalValue;
+            const originalText = input.dataset.originalText || originalValue;
+            const originalStyle = input.dataset.originalStyle || '{str(DEFAULT_PILL_STYLE)}';
+            const fieldName = input.id.replace('input-', '');
+            input.value = originalValue;
+            const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
+            if (pillElement) {{
+                pillElement.textContent = originalText;
+                pillElement.className = ''; // Clear all classes first
+                pillElement.classList.add('uk-label', 'badge-sm'); // Re-add base classes
+                if (originalStyle) {{ pillElement.classList.add(originalStyle); }}
+                else {{ pillElement.classList.add('{str(DEFAULT_PILL_STYLE)}'); }}
+            }}
+        }});
+        // Reset remarks textarea
+        const remarksTextarea = form.querySelector('#modal_remarks');
+        if (remarksTextarea && typeof remarksTextarea.dataset.originalValue !== 'undefined') {{
+            remarksTextarea.value = remarksTextarea.dataset.originalValue;
+        }}
+        // Reset save indicator/button
+        const indicator = document.getElementById('save-indicator');
+        const saveButton = document.getElementById('modal-save-btn');
+        if (indicator) indicator.classList.add('hidden');
+        if (saveButton) saveButton.disabled = true;
+    }}
+""")
 
 JS = (
     Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit.min.js"),
@@ -733,8 +1215,9 @@ JS = (
         ALPINE_TOOLTIP_JS,
     ),
     Script(src="https://cdn.tailwindcss.com"),
-    FILTER_JS_HELPER,
 )
+
+BODY_JS = (MODAL_TRIGGER, MODAL_INTERACTION)
 
 
 # for static files, use the following regex to match the file extensions
@@ -746,21 +1229,21 @@ reg_re_param(
 bware = Beforeware(
     before, skip=[r"/favicon\.ico", r"/static/.*", r"/imgs/.*", r".*\.css", "/login"]
 )
-
+init_headers = (
+    Theme.slate.headers(
+        mode="light",
+        daisy=True,
+        katex=False,
+        radii=ThemeRadii.lg,
+        shadows=ThemeShadows.lg,
+    ),
+    CSS,
+    FONT,
+    *JS,
+)
 app, rt = fast_app(
     before=bware,
-    hdrs=(
-        Theme.slate.headers(
-            mode="light",
-            daisy=True,
-            katex=False,
-            radii=ThemeRadii.lg,
-            shadows=ThemeShadows.lg,
-        ),
-        CSS,
-        FONT,
-        *JS,
-    ),
+    hdrs=init_headers,
     exts="loading-states",
     debug=True,
 )
@@ -772,86 +1255,6 @@ setup_toasts(app)
 
 # --- constants / mappings ---
 
-WORKFLOW_STYLES: dict[str, LabelT] = {
-    "ToDo": LabelT.destructive,
-    "InProgress": LabelT.secondary,
-    "Done": LabelT.primary,
-}
-STATUS_STYLES: dict[str, LabelT] = {
-    "Published": LabelT.primary,
-    "Unpublished": LabelT.secondary,
-    "Deleted": LabelT.destructive,
-}
-PRIMARY_CLASSIFICATIONS = {
-    "open access",
-    "eigen materiaal - powerpoint",
-    "eigen materiaal - titelindicatie",
-    "eigen materiaal - overig",
-    "eigen materiaal",
-}
-SECONDARY_CLASSIFICATIONS = {
-    "onbekend",
-    "niet geanalyseerd",
-    "in onderzoek",
-    "licentie beschikbaar",
-    "verwijderverzoek verstuurd",
-}
-DESTRUCTIVE_CLASSIFICATIONS = {
-    "korte overname",
-    "middellange overname",
-    "lange overname",
-}
-DEFAULT_PILL_STYLE = LabelT.secondary
-FILTERABLE_COLUMNS: list[str] = [
-    "workflow_status",
-    "classification",
-    "status",
-    "manual_classification",
-    "faculty",
-    "department",
-    "course_name",
-]
-DISPLAY_COLUMNS: list[str] = [
-    "material_id",
-    "url",
-    "workflow_status",
-    "status",
-    "classification",
-    "ml_prediction",
-    "manual_classification",
-    "remarks",
-    "filename",
-    "title",
-    "faculty",
-]
-# --- Filter Toggle Definitions ---
-WORKFLOW_FILTER_STATES = [
-    None,
-    "InProgress|ToDo",
-    "InProgress",
-    "ToDo",
-]
-WORKFLOW_FILTER_LABELS = {
-    None: "Workflow: All",
-    "InProgress|ToDo": "Workflow: Not Done",
-    "InProgress": "Workflow: In Progress",
-    "ToDo": "Workflow: ToDo",
-}
-
-STATUS_FILTER_STATES = [None, "Published|Unpublished", "Published"]
-STATUS_FILTER_LABELS = {
-    None: "Status: All",
-    "Published|Unpublished": "Status: Not Deleted",
-    "Published": "Status: Published",
-}
-
-# Using specific values from the DESTRUCTIVE/SECONDARY sets
-CLASSIFICATION_FILTER_STATES = [None, "lange overname", "onbekend"]
-CLASSIFICATION_FILTER_LABELS = {
-    None: "Class: All",
-    "lange overname": "Class: Lange Overname",
-    "onbekend": "Class: Onbekend",
-}
 
 # a global dict that stores values that are missing from the global df for each filterable column that has a list of expected values
 
@@ -924,7 +1327,6 @@ def ItemDetailCard(
             "hx_target": f"#{content_target_id}",  # Target the inner div
             "hx_swap": "innerHTML",
             "hx_trigger": "click once",  # Trigger on first click of the summary
-            "hx_indicator": f"#{card_id}-loading",
         }
     else:
         actual_body_content = body_content
@@ -953,9 +1355,14 @@ def create_checkbox_filter_group(
     current_values: Optional[str],
     current_total: int,
     counts: Optional[dict[str, int | str]] = None,
-    default_option_style: str = LabelT.secondary,
 ) -> FT:
     """Creates a compact group of styled checkboxes with counts and HTMX trigger. Disabled options are minimized."""
+    print(f"--- checkbox filter group: {filter_key} ---")
+    print(f"  current_values: {current_values}")
+    print(f"  current_total: {current_total}")
+    print(f"  counts: {counts}")
+    print(f"  options: {options}")
+    print(f"  label_text: {label_text}")
     selected_values = set(current_values.split("|") if current_values else [])
     outer_group_id = f"filter-group-{filter_key}"
 
@@ -1027,6 +1434,12 @@ def create_checkbox_filter_group(
                 id=count_span_id,
                 cls=badge_cls,
             )
+
+            hx_vals_dict = {
+                f"filter_{filter_key}": value,  # Use the correct key
+                "checked": str(not is_checked),  # Send the intended state
+            }
+
             badge_label = Span(value, cls=f"{style_class} mr-1 cursor-pointer text-xs")
             checkbox_input = fh.CheckboxX(
                 name=form_field_name,
@@ -1034,12 +1447,11 @@ def create_checkbox_filter_group(
                 id=f"cb-{filter_key}-{safe_value}",
                 checked=is_checked,
                 cls=f"checkbox checkbox-xs align-middle mr-1 {checkboxcolor}",
-                hx_post=update_filter_counts_endpoint.to(),
-                hx_trigger="change delay:300ms",
-                hx_include="closest form",
-                hx_target="#filter-form",
-                hx_swap="none",
-                hx_indicator=".checkbox-indicator",
+                hx_post=data_grid.to(),  # Target the central data route
+                hx_target="#data-grid-component",  # Update the grid
+                hx_swap="outerHTML",  # Replace the grid component
+                hx_trigger="change delay:300ms",  # Trigger on change with delay
+                hx_vals=json.dumps(hx_vals_dict),  # Send only the specific change
                 disabled=False,
             )
             wrapper_label = fh.Label(
@@ -1098,105 +1510,38 @@ FACULTY_BADGE_STYLES = {
 
 
 def get_filtered_sorted_df(
-    app_state: AppState,  # Use AppState object
+    app_state: AppState, extra_constraints: dict = None
 ) -> pl.DataFrame:
-    """Applies filtering and sorting based on AppState."""
-    df = copyright_df_global
-    filters = app_state.get_active_filters()  # Get filters from AppState
+    """
+    Applies filtering and sorting based on AppState and optional extra_constraints.
+
+    Args:
+        app_state: The AppState object containing user filters and sort settings.
+        extra_constraints: Optional dictionary of additional constraints to apply (e.g., {"faculty": "EEMCS"}).
+
+    Returns:
+        A Polars DataFrame containing the filtered and sorted data.
+    """
+    df = copyright_df_global  # Start with the global DataFrame
+    user_filters = app_state.get_active_filters()
     sort_by = app_state.sort_by
     sort_desc = app_state.sort_desc
 
-    if filters:
-        filter_expressions = []
-        for col, value in filters.items():
-            actual_col = col
-            if actual_col not in df.columns:
-                actual_col = actual_col.replace("filter_", "")
-            if value and actual_col in df.columns:
-                try:
-                    # --- Re-use the same OR logic as get_filtered_sorted_df ---
-                    or_values = (
-                        value.split("|")
-                        if isinstance(value, str) and "|" in value
-                        else [value]
-                    )
-                    or_expressions = []
-                    for or_value in or_values:
-                        or_value = or_value.strip()
-                        if not or_value:
-                            continue
-                        # --- Special handling for manual_classification empty filter ---
-                        if col == "manual_classification" and or_value == "None":
-                            or_expressions.append(
-                                (pl.col(actual_col).is_null())
-                                | (pl.col(actual_col) == "")
-                                | (pl.col(actual_col) == "-")
-                            )
-                            continue
-                        if df[actual_col].dtype == pl.Utf8:
-                            if col in [
-                                "status",
-                                "workflow_status",
-                                "classification",
-                                "manual_classification",
-                                "faculty",
-                            ]:
-                                or_expressions.append(
-                                    pl.col(actual_col).str.to_lowercase()
-                                    == or_value.lower()
-                                )
-                            else:
-                                or_expressions.append(
-                                    pl.col(actual_col).str.contains(f"(?i){or_value}")
-                                )
-                        elif df[actual_col].dtype in (
-                            pl.Int64,
-                            pl.Int32,
-                            pl.Float64,
-                            pl.Float32,
-                        ):
-                            with contextlib.suppress(ValueError):
-                                or_expressions.append(
-                                    pl.col(actual_col) == float(or_value)
-                                )
-                    if len(or_expressions) > 1:
-                        filter_expressions.append(pl.any_horizontal(or_expressions))
-                    elif len(or_expressions) == 1:
-                        filter_expressions.append(or_expressions[0])
-                except Exception as e:
-                    print(f"Filter warning on '{actual_col}' for value '{value}': {e}")
-
-        if filter_expressions:
-            try:
-                df = df.filter(pl.all_horizontal(filter_expressions))
-            except Exception as e:
-                print(f"Filter error applying filters {filters}: {e}")
-                df = copyright_df_global  # Fallback
-    if sort_by and sort_by in df.columns:
-        try:
-            df = df.sort(by=sort_by, descending=sort_desc, nulls_last=True)
-        except Exception as e:
-            print(f"Sort warning on '{sort_by}': {e}")
-    return df
-
-
-def _apply_filters_for_count(filters: dict[str, str]) -> int:
-    """Helper to apply filters and return only the count. Optimized."""
-    df = copyright_df_global  # Start with the full dataset
-    if not filters:
-        return df.height  # Return total count if no filters
-
     filter_expressions = []
-    for col, value in filters.items():
-        actual_col = col
-        empty_values = []
 
-        if value and actual_col in df.columns:
-            if col in EMPTY_FILTERS:
-                empty_values = EMPTY_FILTERS[col]
+    # --- Process user filters from app_state ---
+    if user_filters:
+        for col, value in user_filters.items():
+            actual_col = col  # Assume col name matches DataFrame column directly
+            if actual_col not in df.columns:
+                print(
+                    f"Warning: Filter column '{actual_col}' not in DataFrame. Skipping."
+                )
+                continue
+            if value is None or value == "":  # Skip empty filter values explicitly
+                continue
 
             try:
-                # --- Re-use the same OR logic as get_filtered_sorted_df ---
                 or_values = (
                     value.split("|")
                     if isinstance(value, str) and "|" in value
@@ -1204,20 +1549,27 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
                 )
                 or_expressions = []
                 for or_value in or_values:
-                    if or_value in empty_values:
-                        continue
                     or_value = or_value.strip()
                     if not or_value:
                         continue
-                    # --- Special handling for manual_classification empty filter ---
-                    if col == "manual_classification" and or_value == "None":
+
+                    # Handle 'None' string specifically for classification fields
+                    if (
+                        col in ["manual_classification", "classification"]
+                        and or_value.lower() == "none"
+                    ):
                         or_expressions.append(
                             (pl.col(actual_col).is_null())
                             | (pl.col(actual_col) == "")
-                            | (pl.col(actual_col) == "-")
+                            | (
+                                pl.col(actual_col) == "-"
+                            )  # Include hyphen check if needed
                         )
-                        continue
+                        continue  # Move to next or_value
+
+                    # Handle other string comparisons
                     if df[actual_col].dtype == pl.Utf8:
+                        # Exact match for categorical-like fields
                         if col in [
                             "status",
                             "workflow_status",
@@ -1229,10 +1581,15 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
                                 pl.col(actual_col).str.to_lowercase()
                                 == or_value.lower()
                             )
+                        # Contains match for text search fields
                         else:
+                            # Use regex for case-insensitive contains
                             or_expressions.append(
-                                pl.col(actual_col).str.contains(f"(?i){or_value}")
+                                pl.col(actual_col).str.contains(
+                                    f"(?i){re.escape(or_value)}"
+                                )
                             )
+                    # Handle numeric comparisons (example, adjust as needed)
                     elif df[actual_col].dtype in (
                         pl.Int64,
                         pl.Int32,
@@ -1241,19 +1598,142 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
                     ):
                         with contextlib.suppress(ValueError):
                             or_expressions.append(pl.col(actual_col) == float(or_value))
+                    # Add other type handling if necessary
+
+                # Combine OR expressions for a single filter key
                 if len(or_expressions) > 1:
                     filter_expressions.append(pl.any_horizontal(or_expressions))
                 elif len(or_expressions) == 1:
                     filter_expressions.append(or_expressions[0])
+
             except Exception as e:
-                print(
-                    f"Count Filter warning on '{actual_col}' for value '{value}': {e}"
-                )  # Less critical here
+                print(f"Filter warning processing '{actual_col}'='{value}': {e}")
+
+    # --- Process extra constraints (e.g., faculty auth) ---
+    if extra_constraints:
+        print(f"Applying extra constraints: {extra_constraints}")
+        for col, value in extra_constraints.items():
+            if col not in df.columns:
+                print(f"Warning: Constraint column '{col}' not in DataFrame. Skipping.")
+                continue
+            if value:  # Only apply if constraint value is non-empty
+                # Assuming simple equality constraint for now (e.g., faculty)
+                # Adapt if more complex constraints are needed
+                filter_expressions.append(
+                    pl.col(col).str.to_lowercase() == str(value).lower()
+                )  # Ensure comparison is case-insensitive
+
+    # --- Apply combined filters ---
+    if filter_expressions:
+        try:
+            # Combine all expressions with AND logic
+            combined_expression = pl.all_horizontal(filter_expressions)
+            df = df.filter(combined_expression)
+        except Exception as e:
+            print(f"Error applying combined filters: {e}")
+            # Fallback: return empty DataFrame on error? Or original?
+            return df.clear()  # Example: return empty
+
+    # --- Apply sorting ---
+    if sort_by and sort_by in df.columns:
+        try:
+            df = df.sort(by=sort_by, descending=sort_desc, nulls_last=True)
+        except Exception as e:
+            print(f"Sort warning on '{sort_by}': {e}")
+    elif sort_by:
+        print(
+            f"Warning: Sort column '{sort_by}' not found in DataFrame. Skipping sort."
+        )
+
+    return df
+
+
+def _apply_filters_for_count(filters: dict[str, str], global_df: pl.DataFrame) -> int:
+    """
+    Helper to apply filters to the provided global DataFrame and return the count.
+    Optimized for counting.
+
+    Args:
+        filters: Dictionary of filters to apply.
+        global_df: The complete, unfiltered DataFrame to filter on.
+
+    Returns:
+        The count of rows matching the filters.
+    """
+    df = global_df  # Use the passed global DataFrame
+
+    if not filters:
+        return df.height  # Return total count if no filters
+
+    filter_expressions = []
+    # Re-use the filter expression building logic from get_filtered_sorted_df
+    # This ensures consistency in how filters are interpreted for counting vs. display
+    for col, value in filters.items():
+        actual_col = col
+        if actual_col not in df.columns:
+            continue  # Skip if column doesn't exist
+        if value is None or value == "":
+            continue
+
+        # --- Start copied/adapted logic ---
+        try:
+            or_values = (
+                value.split("|") if isinstance(value, str) and "|" in value else [value]
+            )
+            or_expressions = []
+            for or_value in or_values:
+                or_value = or_value.strip()
+                if not or_value:
+                    continue
+
+                if (
+                    col in ["manual_classification", "classification"]
+                    and or_value.lower() == "none"
+                ):
+                    or_expressions.append(
+                        (pl.col(actual_col).is_null())
+                        | (pl.col(actual_col) == "")
+                        | (pl.col(actual_col) == "-")
+                    )
+                    continue
+
+                if df[actual_col].dtype == pl.Utf8:
+                    if col in [
+                        "status",
+                        "workflow_status",
+                        "classification",
+                        "manual_classification",
+                        "faculty",
+                    ]:
+                        or_expressions.append(
+                            pl.col(actual_col).str.to_lowercase() == or_value.lower()
+                        )
+                    else:
+                        or_expressions.append(
+                            pl.col(actual_col).str.contains(
+                                f"(?i){re.escape(or_value)}"
+                            )
+                        )
+                elif df[actual_col].dtype in (
+                    pl.Int64,
+                    pl.Int32,
+                    pl.Float64,
+                    pl.Float32,
+                ):
+                    with contextlib.suppress(ValueError):
+                        or_expressions.append(pl.col(actual_col) == float(or_value))
+
+            if len(or_expressions) > 1:
+                filter_expressions.append(pl.any_horizontal(or_expressions))
+            elif len(or_expressions) == 1:
+                filter_expressions.append(or_expressions[0])
+        except Exception as e:
+            print(f"Count Filter warning on '{actual_col}'='{value}': {e}")
+        # --- End copied/adapted logic ---
 
     if filter_expressions:
         try:
-            # Apply filters and get count directly
-            # Use lazy frame for potentially better optimization
+            # Apply filters and get count directly using lazy evaluation
             count = (
                 df.lazy()
                 .filter(pl.all_horizontal(filter_expressions))
@@ -1261,16 +1741,16 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
                 .collect()
                 .item()
             )
-
             return count
         except Exception as e:
             print(f"Count Filter error applying filters {filters}: {e}")
             return 0  # Return 0 on error
     else:
-        # No valid filters were generated, return total count
+        # No valid filters were generated, or filters were empty
         return df.height
 
 
+'''
 def _calc_total_for_filters(filters: dict[str, str | int]) -> int:
     """
     For a given dict with filter keys and values, calculate the total count of items that match the filters.
@@ -1350,14 +1830,15 @@ def _calc_total_for_filters(filters: dict[str, str | int]) -> int:
     else:
         # No valid filters were generated, return total count
         return df.height
+'''
 
-
+"""
 @rt("/update_filter_counts", methods=["POST"])
 async def update_filter_counts_endpoint(session: dict, request: Request):
-    """
+    '''
     Updates session state based on checkbox change, calculates all filter counts,
     and returns OOB swaps for all checkbox filter groups.
-    """
+    '''
     form_data = await request.form()
     request_params = dict(form_data)
 
@@ -1469,6 +1950,7 @@ async def update_filter_counts_endpoint(session: dict, request: Request):
         oob_fragments.append(rendered_group)
 
     return oob_fragments, HtmxResponseHeaders(reswap="none")
+"""
 
 
 # Function to get counts for all options based on current selections
@@ -1582,84 +2064,81 @@ async def store_item_changes(
 @rt("/save_details", methods=["POST"])
 async def save_item_details(
     request: Request,
-    session,
-    # Editable fields
+    session: dict,
+    # Only expect editable fields + ID from the form
     material_id: int,
     workflow_status: str = "",
     manual_classification: str = "",
     remarks: str = "",
 ):
     """
-    Route to store an edited item back to the database.
-    Update logic is in the store_item_changes function, and of course in db.update.update_copyright_items.
-    Uses the material_id as a primary key to identify the item.
-    For now, only three field can be updated: workflow_status, manual_classification and remarks.
-    This route should only be called from the item detail view at the moment.
-    Might be extended to do bulk updates from the table view in the future.
+    Route to store edited item details from the modal back to the database
+    and return an updated grid view via OOB swap.
     """
-    global copyright_df_global
-    app_state_dict = session.get("app_state", {})
-    app_state = AppState(**app_state_dict)
-
     print(f"Saving changes for material_id: {material_id}")
     update_data = {
         "material_id": material_id,
         "workflow_status": workflow_status,
-        "manual_classification": manual_classification,
+        "manual_classification": manual_classification
+        if manual_classification.lower() != "none"
+        else None,  # Handle 'None' string
         "remarks": remarks,
     }
 
-    oob_grid_swap = Div()  # Default empty div
+    oob_grid_swap = Div(hx_swap_oob="true")  # Default empty OOB swap
 
     try:
-        await store_item_changes(update_data)
+        # 1. Save changes to DB
+        await store_item_changes(
+            update_data
+        )  # Assumes store_item_changes handles DB update
 
+        # 2. Reload global data (consider efficiency later)
+        global copyright_df_global
         print("Reloading global DataFrame after save...")
-        copyright_df_global = retrieve_copyright_items()
+        copyright_df_global = retrieve_copyright_items()  # Assumes this function exists
         print("Global DataFrame reloaded.")
 
-        # Re-filter and slice for the current page view
-        filtered_sorted_df = get_filtered_sorted_df(app_state)  # Pass the state object
-        total_filtered_rows = filtered_sorted_df.height
-        total_pages = (
-            math.ceil(total_filtered_rows / app_state.per_page)
-            if app_state.per_page > 0
-            else 1
-        )
-        app_state.page = max(
-            1, min(app_state.page, total_pages if total_pages > 0 else 1)
-        )
-        session["app_state"] = asdict(app_state)  # Convert back to dict
+        # 3. Load current state (reflecting filters/sort *before* save)
+        # We need the state to know *which* page/sort order to display after save
+        app_state_before_save = load_app_state(session)
 
-        offset = (app_state.page - 1) * app_state.per_page
-        df_slice = filtered_sorted_df.slice(
-            offset, app_state.per_page
-        )  # Use per_page from state
+        # 4. Fetch updated data based on the *existing* state
+        # This will apply current filters/sort and validate the page number
+        # against the *newly reloaded* global data.
+        processed_data = await fetch_data(app_state_before_save, session)
 
-        # Render the grid component HTML using AppState
+        # 5. Update session if page validation occurred in fetch_data
+        if processed_data.app_state.page != app_state_before_save.page:
+            session["app_state"] = asdict(processed_data.app_state)
+
+        # 6. Render the updated grid component
         updated_grid_component = render_data_grid_component(
-            df_slice=df_slice,
-            app_state=app_state,  # Pass the whole state object
-            total_filtered_rows=total_filtered_rows,
-            total_pages=total_pages,
+            df_slice=processed_data.df_slice,
+            app_state=processed_data.app_state,  # Use validated state
+            total_filtered_rows=processed_data.total_filtered_rows,
+            total_pages=processed_data.total_pages,
         )
 
-        # --- Create OOB Swap Div for the Grid ---
+        # 7. Create OOB Swap Div for the Grid
         oob_grid_swap = Div(
-            to_xml(updated_grid_component),
-            hx_swap_oob="outerHTML:#data-grid-component",
+            to_xml(updated_grid_component),  # Render the component to HTML string
+            hx_swap_oob="outerHTML:#data-grid-component",  # Target the grid for replacement
         )
 
-        add_toast(session, f"Successfully updated {material_id}", "success")
+        add_toast(session, f"Successfully updated item {material_id}", "success")
 
     except Exception as e:
         print(f"Error saving changes for {material_id}: {e}")
         traceback.print_exc()
-        add_toast(session, f"Error saving changes for {material_id}: {e}", "error")
+        add_toast(
+            session, f"Error saving changes for {material_id}: {str(e)[:100]}", "error"
+        )  # Show truncated error
 
-    return oob_grid_swap, HtmxResponseHeaders(
-        reswap="none",
-    )
+    # Return only the OOB swap for the grid.
+    # The modal should be closed client-side after successful save (or on explicit close).
+    # Use HTMX headers to prevent default swap.
+    return oob_grid_swap, HtmxResponseHeaders(reswap="none")
 
 
 # --- retrieve detailed data  ---
@@ -2235,7 +2714,6 @@ def render_table_rows(
                 "hx_get": show_item_details.to(**modal_params),  # Pass only material_id
                 "hx_target": "#modal-placeholder",
                 "hx_swap": "innerHTML",
-                "hx_indicator": "#modal-loading-indicator",  # Add indicator for modal load
             }
 
             rows.append(Tr(*cells, **row_attrs))
@@ -2256,11 +2734,19 @@ def page_header_component(
     user_details: dict[str, str],
     app_state: AppState,
     filter_counts: dict[str, dict[str, int]],
+    total_filtered_rows: int,  # <-- ADDED parameter
 ) -> FT:
-    """Renders the header area with Title, User Info, and a Sidebar for Filters."""
+    """
+    Renders the header area with Title, User Info, and a Sidebar for Filters.
+    Now accepts total_filtered_rows directly.
+    """
     current_filters = app_state.get_active_filters()
-    print(filter_counts)
-    # --- Define Options for Checkbox Groups (Keep these as they are) ---
+    auth_details = user_details
+    is_admin = auth_details.get("role") == "admin"
+    user_faculty = auth_details.get("faculty")
+
+    # --- Define Options for Checkbox Groups (keep existing) ---
+    # ... (workflow_options, status_options, etc. definitions) ...
     workflow_options = {
         "ToDo": WORKFLOW_STYLES.get("ToDo"),
         "InProgress": WORKFLOW_STYLES.get("InProgress"),
@@ -2282,6 +2768,7 @@ def page_header_component(
         f: FACULTY_BADGE_STYLES.get(f, "badge-secondary")
         for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
     }
+
     # --- Filter Checkbox Groups ---
     filter_checkbox_groups = [
         create_checkbox_filter_group(
@@ -2289,44 +2776,49 @@ def page_header_component(
             label_text="Workflow Status",
             options=workflow_options,
             current_values=current_filters.get("workflow_status"),
-            counts=filter_counts.get("workflow_status"),  # Pass counts for this key
-            current_total=app_state.current_total,
+            counts=filter_counts.get("workflow_status"),
+            current_total=total_filtered_rows,  # <-- Use parameter here
         ),
         create_checkbox_filter_group(
             filter_key="status",
             label_text="Status",
             options=status_options,
             current_values=current_filters.get("status"),
-            counts=filter_counts.get("status"),  # Pass counts
-            current_total=app_state.current_total,
+            counts=filter_counts.get("status"),
+            current_total=total_filtered_rows,  # <-- Use parameter here
         ),
         create_checkbox_filter_group(
             filter_key="classification",
             label_text="Classification",
             options=classification_options,
             current_values=current_filters.get("classification"),
-            counts=filter_counts.get("classification"),  # Pass counts
-            current_total=app_state.current_total,
+            counts=filter_counts.get("classification"),
+            current_total=total_filtered_rows,  # <-- Use parameter here
         ),
         create_checkbox_filter_group(
             filter_key="manual_classification",
             label_text="Manual Classification",
             options=manual_classification_options,
             current_values=current_filters.get("manual_classification"),
-            counts=filter_counts.get("manual_classification"),  # Pass counts
-            current_total=app_state.current_total,
-        ),
-        create_checkbox_filter_group(
-            filter_key="faculty",
-            label_text="Faculty",
-            options=faculty_options,
-            current_values=current_filters.get("faculty"),
-            current_total=app_state.current_total,
-            counts=filter_counts.get("faculty"),
+            counts=filter_counts.get("manual_classification"),
+            current_total=total_filtered_rows,  # <-- Use parameter here
         ),
     ]
+    # Conditionally add faculty filter group
+    if is_admin or not user_faculty or user_faculty == "all":
+        filter_checkbox_groups.append(
+            create_checkbox_filter_group(
+                filter_key="faculty",
+                label_text="Faculty",
+                options=faculty_options,
+                current_values=current_filters.get("faculty"),
+                counts=filter_counts.get("faculty"),
+                current_total=total_filtered_rows,  # <-- Use parameter here
+            )
+        )
 
-    # --- Filter Inputs (Text - Remaining) ---
+    # --- Filter Inputs (Text - Remaining - unchanged HTMX setup) ---
+    # ... (text_filter_inputs logic remains the same) ...
     text_filter_inputs = []
     remaining_filterable_cols = [
         col
@@ -2341,55 +2833,39 @@ def page_header_component(
         ]
     ]
     for col in remaining_filterable_cols:
-        actual_col_name = col
-        if actual_col_name not in copyright_df_global.columns:
+        if col not in copyright_df_global.columns:
             continue
         label = f"{col.replace('_', ' ').title()}"
-        if "department" in label.lower():
-            label = "Programme"
-
+        input_id = f"filter-input-{col}"
+        input_name = f"filter_{col}"
+        hx_vals_js = f"{{'{input_name}': document.getElementById('{input_id}').value}}"
         text_filter_inputs.append(
             LabelInput(
                 label,
-                name=f"filter_{col}",
+                name=input_name,
                 value=current_filters.get(col, ""),
                 placeholder="Filter...",
-                id=f"filter-input-{col}",
+                id=input_id,
                 input_cls="input input-bordered input-xs w-full focus:input-primary",
                 label_cls="label-text pb-1 text-xs font-medium text-base-content/90",
                 cls="form-control w-full",
+                hx_post=data_grid.to(),
+                hx_trigger="keyup changed delay:500ms, search",
+                hx_target="#data-grid-component",
+                hx_vals=hx_vals_js,
             )
         )
 
-    # --- Hidden State Inputs ---
-    hidden_state_inputs = [
-        Input(type="hidden", name=k, value=str(v))
-        for k, v in app_state.nav_params_dict().items()
-    ]
-    reset_dict = app_state.nav_params_dict()
-    reset_dict["page"] = 1  # Reset page on filter reset
-    # --- Filter Form (Content of the Sidebar) ---
+    # --- Filter Form (unchanged structure, just uses corrected groups/inputs) ---
     filter_form = Form(
-        # --- Sticky, compact action buttons ---
-        Div(
+        Div(  # Reset button container
             fh.Button(
-                UkIcon("check-circle", cls="mr-1"),
-                "Apply",
-                type="button",
-                hx_post="/data",
-                hx_target="#data-grid-component",
-                hx_indicator="#grid-loading-indicator",
-                cls="btn btn-xs btn-success mx-1",
-                **{"@click": "slideOverOpen=false"},
-            ),
-            fh.Button(  # reset button should send 'action:reset' to the request params
                 UkIcon("rotate-ccw", cls="mr-1"),
                 "Reset",
                 type="button",
-                hx_post="/data",
+                hx_post=data_grid.to(),
                 hx_target="#data-grid-component",
-                hx_indicator="#grid-loading-indicator",
-                hx_vals='{"action": "reset"}',  # Send action:reset parameter
+                hx_vals='{"action": "reset"}',
                 cls="btn btn-xs btn-warning mx-1",
                 **{"@click": "slideOverOpen=false"},
             ),
@@ -2397,45 +2873,39 @@ def page_header_component(
         ),
         *filter_checkbox_groups,
         *text_filter_inputs,
-        *hidden_state_inputs,
         id="filter-form",
         cls="flex flex-col gap-y-1",
     )
-    # --- Sidebar Structure (Alpine.js) ---
+
+    # --- Sidebar Structure (Alpine.js - Unchanged) ---
+    # ... (sidebar_component logic remains the same, containing filter_form) ...
     sidebar_component = Div(
         x_data="{ slideOverOpen: false }", cls="relative z-50 w-auto h-auto"
     )(
-        # Sidebar Trigger Button (keep as is)
         Button(
             UkIcon("filter"),
             "Filters",
             **{"@click": "slideOverOpen=true"},
             cls="btn btn-sm btn-outline btn-primary align-center",
         ),
-        # Teleport the sidebar content to the body
         Template(x_teleport="body")(
-            # Outermost container for the sidebar, managed by x-show
             Div(
                 x_show="slideOverOpen",
                 **{"@keydown.window.escape": "slideOverOpen=false"},
                 cls="relative z-[99]",
                 x_cloak=True,
-            )(  # Add x-cloak
-                # Overlay
+            )(
                 Div(
                     x_show="slideOverOpen",
                     x_transition_opacity_duration_600ms=True,
                     **{"@click": "slideOverOpen = false"},
                     cls="fixed inset-0 bg-black bg-opacity-10",
-                ),  # Overlay needs transition too
-                # Sidebar Container
+                ),
                 Div(cls="fixed inset-0 overflow-hidden")(
                     Div(cls="absolute inset-0 overflow-hidden")(
-                        # Positioning from the Left
                         Div(cls="fixed inset-y-0 left-0 flex max-w-full pr-10")(
-                            # The actual sliding panel
                             Div(
-                                x_show="slideOverOpen",  # Let x-show control visibility
+                                x_show="slideOverOpen",
                                 **{"@click.away": "slideOverOpen = false"},
                                 x_transition_enter="transform transition ease-in-out duration-500 sm:duration-700",
                                 x_transition_enter_start="-translate-x-full",
@@ -2444,10 +2914,7 @@ def page_header_component(
                                 x_transition_leave_start="translate-x-0",
                                 x_transition_leave_end="-translate-x-full",
                                 cls="w-screen max-w-md",
-                                # Remove inline style: style="display: none;"
                             )(
-                                # Sidebar Content Area
-                                # Use overflow-y-auto (addressed in point 4)
                                 Div(
                                     cls="flex flex-col h-full py-2 overflow-y-auto bg-base-200 border-r border-base-300 shadow-lg"
                                 )(
@@ -2467,8 +2934,7 @@ def page_header_component(
                                             ),
                                         )
                                     ),
-                                    # Main Filter Form Area (keep as is)
-                                    Div(cls="relative flex-1 mt-2")(filter_form),
+                                    Div(cls="relative flex-1 px-2 mt-2")(filter_form),
                                 )
                             )
                         )
@@ -2478,7 +2944,8 @@ def page_header_component(
         ),
     )
 
-    # --- Header Structure ---
+    # --- Header Structure (Unchanged) ---
+    # ... (last_update_time, user info, logout button logic remains the same) ...
     update_times = [
         file.created
         for file in SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files
@@ -2487,10 +2954,8 @@ def page_header_component(
     last_update_time = (
         max(update_times).strftime("%Y-%m-%d %H:%M") if update_times else "Unknown"
     )
-
     return Div(
         Div(cls="flex justify-between items-center mb-4")(
-            # Dashboard Title and Last Update
             Div(
                 H4("Copyright Data Dashboard", cls="text-2xl font-bold text-primary"),
                 H6(
@@ -2498,10 +2963,8 @@ def page_header_component(
                     cls="text-xs text-base-content/70 mt-1",
                 ),
             ),
-            # Sidebar Trigger and User Info/Logout
             Div(cls="flex items-center space-x-4")(
-                sidebar_component,  # Add the sidebar trigger button here
-                # User Avatar/Greeting (Keep existing)
+                sidebar_component,
                 Div(cls="flex items-center space-x-2")(
                     Img(
                         src=f"https://api.dicebear.com/9.x/bottts/svg?seed={user_details.get('name', 'defaultuser')}&backgroundColor=547012",
@@ -2539,38 +3002,44 @@ def render_data_grid_component(
     header_cells = []
     cols_in_header = [
         col for col in DISPLAY_COLUMNS if col in copyright_df_global.columns
-    ]
+    ]  # Use global to know columns
+
     for col in cols_in_header:
         header_text = "ID" if col == "material_id" else col.replace("_", " ").title()
 
-        sort_indicator_icon, next_sort_desc_str = "", "False"
+        sort_indicator_icon = ""
+
+        next_sort_desc_bool = False  # Default sort is ASC if not current col
         is_current_sort_col = col == app_state.sort_by
 
         if is_current_sort_col:
+            # If current, toggle direction
             next_sort_desc_bool = not app_state.sort_desc
-            next_sort_desc_str = str(next_sort_desc_bool)
             sort_indicator_icon = "arrow-down" if app_state.sort_desc else "arrow-up"
-        else:
-            next_sort_desc_str = "False"
+        # else: next_sort_desc_bool remains False (sort ASC)
 
+        # Prepare hx-vals for sorting
         sort_link_params = {
-            "page": app_state.page,  # Keep current page for sorting
-            "per_page": app_state.per_page,
             "sort_by": col,
-            "sort_desc": next_sort_desc_str,
-            **app_state.filter_params_dict(),  # Include current filters
+            "sort_desc": str(next_sort_desc_bool),
+            # page will be reset server-side if needed, don't send it
         }
+
         header_content = Button(
             header_text,
-            UkIcon(
-                sort_indicator_icon, cls="inline-block ml-1.5 w-3 h-3 stroke-current"
-            )
-            if sort_indicator_icon
-            else "",
-            hx_get=data_grid.to(**sort_link_params),
+            (
+                UkIcon(
+                    sort_indicator_icon,
+                    cls="inline-block ml-1.5 w-3 h-3 stroke-current",
+                )
+                if sort_indicator_icon
+                else ""
+            ),
+            # --- Updated HTMX Attributes for Sorting ---
+            hx_get=data_grid.to(),  # Target central data route
             hx_target="#data-grid-component",
-            hx_indicator="#grid-loading-indicator",
-            hx_include="#filter-form",  # Maybe not needed if params cover filters
+            hx_vals=json.dumps(sort_link_params),  # Send only sort parameters
+            # hx_include REMOVED
             cls=f"{ButtonT.ghost} text-xs uppercase tracking-wider p-1.5 h-auto min-h-0 font-bold text-base-content/70 hover:text-primary transition-colors duration-150",
         )
         th_class = f"col-{col.replace('_', '-')}"
@@ -2578,8 +3047,12 @@ def render_data_grid_component(
 
     header = Thead(Tr(*header_cells))
 
+    # Body rendering relies on render_table_rows, which itself uses show_item_details route.
+    # Ensure show_item_details logic is updated.
     body = Tbody(
-        *render_table_rows(df_slice, app_state),
+        *render_table_rows(
+            df_slice, app_state
+        ),  # Pass app_state if needed by row rendering
         id="data-table-body",
     )
 
@@ -2589,27 +3062,23 @@ def render_data_grid_component(
         cls="overflow-x-auto border border-base-300 rounded-lg shadow-sm bg-base-100",
     )
 
-    # --- Pagination ---
-    # Pass AppState to render_paginatlabel_text=ion
+    # Pagination rendering uses the updated render_pagination function
     pagination_html = render_pagination(app_state, total_pages)
 
     # --- Final Component ---
     return Div(
-        P(
+        P(  # Item Count Display
             Strong(str(total_filtered_rows)),
             Span(" items found", cls="text-base-content text-bold"),
-            cls=" mb-2 text-sm",
+            cls=" mb-2 text-sm justify-center text-center",
         ),
-        pagination_html,
-        Div(
+        pagination_html,  # Pagination controls
+        Div(  # Table Wrapper with loading effect
             table_wrapper,
-            cls="htmx-loading:opacity-50 htmx-loading:transition-opacity htmx-loading:duration-300 ease-in-out",
+            cls="htmx-request:opacity-50 htmx-request:transition-opacity htmx-request:duration-300 ease-in-out",  # Use htmx-request class
         ),
-        Div(id="grid-loading-indicator", cls="htmx-indicator text-center p-4")(
-            "Loading..."
-        ),
-        id="data-grid-component",
-        cls="flex flex-col text-center justify-center",  # Existing classes
+        id="data-grid-component",  # Target ID for updates
+        cls="flex flex-col justify-center",  # Keep existing layout classes
     )
 
 
@@ -2617,31 +3086,22 @@ def render_pagination(
     app_state: AppState,  # Accept AppState object
     total_pages: int,
 ) -> FT:
-    """Renders pagination controls using AppState."""
+    """Renders pagination controls using AppState and updated HTMX attributes."""
     if total_pages <= 1:
-        return Div(cls="h-12")  # No pagination needed
+        return Div(cls="h-12 mb-1")  # Reserve space even if no pagination
 
     current_page = app_state.page
-    # Base parameters for pagination links include current sort and filters
-    base_params = {
-        "per_page": app_state.per_page,
-        "sort_by": app_state.sort_by or "",
-        "sort_desc": str(app_state.sort_desc),
-        **app_state.filter_params_dict(),  # Include current filters
-    }
 
     pagination_items = []
 
     # --- Previous Button ---
     prev_disabled, prev_page = current_page <= 1, max(1, current_page - 1)
-    prev_link_params = {"page": prev_page, **base_params}
+    prev_link_params = {"page": prev_page}  # Only need the changed value for hx-vals
     prev_attrs = {
-        "hx_get": data_grid.to(**prev_link_params),
+        "hx_get": data_grid.to(),  # Target the central data route
         "hx_target": "#data-grid-component",
-        "hx_indicator": "#grid-loading-indicator",
+        "hx_vals": json.dumps(prev_link_params),  # Send only the page change
         "role": "button",
-        # Add hx_include if filters aren't reliably passed via params alone
-        # "hx_include": "#filter-form"
     }
     pagination_items.append(
         A(
@@ -2649,7 +3109,10 @@ def render_pagination(
             **(
                 {"aria-disabled": "true", "cls": "btn btn-sm btn-disabled"}
                 if prev_disabled
-                else {"cls": f"btn btn-sm {ButtonT.primary}", **prev_attrs}
+                else {
+                    "cls": "btn btn-sm btn-primary",
+                    **prev_attrs,
+                }
             ),
         )
     )
@@ -2658,8 +3121,8 @@ def render_pagination(
     pagination_items.append(
         Span(
             f"Page {current_page} of {total_pages}",
-            cls="underline decoration-pink-500 bg-base-200 text-base-content font-semibold mr-5 ml-5 mb-1",
-        )  # Adjusted styling/spacing
+            cls="join-item btn btn-sm",
+        )
     )
 
     # --- Next Button ---
@@ -2667,30 +3130,28 @@ def render_pagination(
         current_page >= total_pages,
         min(total_pages, current_page + 1),
     )
-    next_link_params = {"page": next_page, **base_params}
+    next_link_params = {"page": next_page}  # Only need the changed value for hx-vals
     next_attrs = {
-        "hx_get": data_grid.to(**next_link_params),
+        "hx_get": data_grid.to(),  # Target the central data route
         "hx_target": "#data-grid-component",
-        "hx_indicator": "#grid-loading-indicator",
+        "hx_vals": json.dumps(next_link_params),  # Send only the page change
         "role": "button",
-        # "hx_include": "#filter-form" # If needed
     }
     pagination_items.append(
         A(
             "Next »",
             **(
-                {"aria-disabled": "true", "cls": "btn btn-sm btn-disabled mb-1"}
+                {"aria-disabled": "true", "cls": "btn btn-sm btn-disabled"}
                 if next_disabled
-                else {"cls": f"btn btn-sm {ButtonT.primary} mb-1", **next_attrs}
+                else {"cls": "btn btn-sm btn-primary", **next_attrs}
             ),
         )
     )
 
     return Div(
         *pagination_items,
-        aria_label="pagination",
-        class_="flex justify-center items-center space-x-5 gap-4 pt-4 pb-2",
-    )  # Keep existing layout
+        cls="join justify-center",
+    )
 
 
 def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
@@ -2777,198 +3238,301 @@ def render_labelled_item(
 
 
 # --- main page routes ---
+def _apply_filters_for_count(filters: dict[str, str], global_df: pl.DataFrame) -> int:
+    """
+    Helper to apply filters to the provided global DataFrame and return the count.
+    Optimized for counting.
+
+    Args:
+        filters: Dictionary of filters to apply.
+        global_df: The complete, unfiltered DataFrame to filter on.
+
+    Returns:
+        The count of rows matching the filters.
+    """
+    df = global_df  # Use the passed global DataFrame
+
+    if not filters:
+        return df.height  # Return total count if no filters
+
+    filter_expressions = []
+    # Re-use the filter expression building logic from get_filtered_sorted_df
+    # This ensures consistency in how filters are interpreted for counting vs. display
+    for col, value in filters.items():
+        actual_col = col
+        if actual_col not in df.columns:
+            continue  # Skip if column doesn't exist
+        if value is None or value == "":
+            continue
+
+        # --- Start copied/adapted logic ---
+        try:
+            or_values = (
+                value.split("|") if isinstance(value, str) and "|" in value else [value]
+            )
+            or_expressions = []
+            for or_value in or_values:
+                or_value = or_value.strip()
+                if not or_value:
+                    continue
+
+                if (
+                    col in ["manual_classification", "classification"]
+                    and or_value.lower() == "none"
+                ):
+                    or_expressions.append(
+                        (pl.col(actual_col).is_null())
+                        | (pl.col(actual_col) == "")
+                        | (pl.col(actual_col) == "-")
+                    )
+                    continue
+
+                if df[actual_col].dtype == pl.Utf8:
+                    if col in [
+                        "status",
+                        "workflow_status",
+                        "classification",
+                        "manual_classification",
+                        "faculty",
+                    ]:
+                        or_expressions.append(
+                            pl.col(actual_col).str.to_lowercase() == or_value.lower()
+                        )
+                    else:
+                        or_expressions.append(
+                            pl.col(actual_col).str.contains(
+                                f"(?i){re.escape(or_value)}"
+                            )
+                        )
+                elif df[actual_col].dtype in (
+                    pl.Int64,
+                    pl.Int32,
+                    pl.Float64,
+                    pl.Float32,
+                ):
+                    with contextlib.suppress(ValueError):
+                        or_expressions.append(pl.col(actual_col) == float(or_value))
+
+            if len(or_expressions) > 1:
+                filter_expressions.append(pl.any_horizontal(or_expressions))
+            elif len(or_expressions) == 1:
+                filter_expressions.append(or_expressions[0])
+        except Exception as e:
+            print(f"Count Filter warning on '{actual_col}'='{value}': {e}")
+        # --- End copied/adapted logic ---
+
+    if filter_expressions:
+        try:
+            # Apply filters and get count directly using lazy evaluation
+            count = (
+                df.lazy()
+                .filter(pl.all_horizontal(filter_expressions))
+                .select(pl.count())
+                .collect()
+                .item()
+            )
+            return count
+        except Exception as e:
+            print(f"Count Filter error applying filters {filters}: {e}")
+            return 0  # Return 0 on error
+    else:
+        # No valid filters were generated, or filters were empty
+        return df.height
 
 
 @rt("/data")
 async def data_grid(session: dict, request: Request):
-    app_state_dict = session.get("app_state", {})
-    app_state = AppState(**app_state_dict)
-    print(request.query_params)
-    query_params = dict(request.query_params)
-    form_data = FormData()
-    is_post = request.method == "POST"
-    content_type = request.headers.get("content-type", "")
+    """
+    Main route for displaying/updating the data grid.
+    Handles pagination, sorting, filtering requests via HTMX or initial page load.
+    Orchestrates state processing and data fetching.
+    """
+    # 1. Parse request parameters (combining query and form)
+    form_data_dict = {}
+    content_type = request.headers.get("content-type", "").lower()
+    # Check method or content type to decide if form parsing is needed/possible
     if (
-        is_post
-        or "multipart/form-data" in content_type
+        request.method == "POST"
         or "application/x-www-form-urlencoded" in content_type
+        or "multipart/form-data" in content_type
     ):
-        with contextlib.suppress(Exception):
-            form_data = await request.form()
-            print(f"received form_data: {form_data}")
+        try:
+            form = await request.form()
+            form_data_dict = dict(form)
+        except Exception as e:
+            # Gracefully handle cases like GET requests with unexpected content-type,
+            # or malformed form data. Log the error.
+            print(f"Warning: Could not parse form data (maybe GET request?): {e}")
+            form_data_dict = {}  # Ensure it's an empty dict
 
-    request_params = {**query_params, **dict(form_data)}
-    auth_details = session.get("auth", {})
+    request_params = {**dict(request.query_params), **form_data_dict}
+    print("--- Request to /data ---")
+    print(f"Method: {request.method}, Params: {request_params}")
 
-    is_reset_action = request_params.get("action") == "reset"
+    # 2. Process state based on request (updates session['app_state'])
+    # process_state handles loading, applying changes, and saving back to session
+    session, requested_app_state = process_state(session, request_params)
 
-    if is_reset_action:
-        print("Reset action detected, clearing filters.")
-        app_state.filters = {}  # Clear state filters FIRST
-        request_params.pop("action", None)
-        keys_to_remove = [k for k in request_params if k.startswith("filter_")]
-        for k in keys_to_remove:
-            request_params.pop(k, None)
-        form_data = FormData()  # Clear form data as well for update_from_req
-        app_state.update_from_req(
-            request_params=request_params, auth_details=auth_details
-        )
-    else:
-        app_state.update_filters_from_form(form_data)
-        app_state.update_from_req(
-            request_params=request_params,
-            auth_details=auth_details,
-            disable_filter_reset=False,
-        )
+    # 3. Fetch data and get validated state
+    # fetch_data handles auth constraints, filtering, validation (page#), counts
+    processed_data = await fetch_data(requested_app_state, session)
 
-    print(f"final app state: {app_state}")
+    # 4. Update session *again* only if page validation changed the state
+    # This ensures the session reflects the *actual* page being displayed
+    if processed_data.app_state.page != requested_app_state.page:
+        print("Updating session state again due to page validation.")
+        session["app_state"] = asdict(processed_data.app_state)
 
-    # --- Recalculate, Validate, Store state ---
-    filtered_sorted_df = get_filtered_sorted_df(app_state)
-    total_filtered_rows = filtered_sorted_df.height
-    total_pages = (
-        math.ceil(total_filtered_rows / app_state.per_page)
-        if app_state.per_page > 0
-        else 1
-    )
-    app_state.page = max(1, min(app_state.page, total_pages if total_pages > 0 else 1))
-    session["app_state"] = asdict(app_state)
-    filter_counts = get_filter_counts(app_state)
-
-    # --- Prepare Slice and Render Components ---
-    offset = (app_state.page - 1) * app_state.per_page
-    df_slice = filtered_sorted_df.slice(offset, app_state.per_page)
+    # 5. Render the main grid component using processed data
     grid_component = render_data_grid_component(
-        df_slice=df_slice,
-        app_state=app_state,
-        total_filtered_rows=total_filtered_rows,
-        total_pages=total_pages,
+        df_slice=processed_data.df_slice,
+        app_state=processed_data.app_state,  # Use the final, validated state
+        total_filtered_rows=processed_data.total_filtered_rows,
+        total_pages=processed_data.total_pages,
     )
 
-    # --- Determine Return Value ---
+    # 6. Render OOB filter fragments
+    oob_filter_fragments = []
+    auth_details = session.get("auth", {})  # Get auth details for rendering logic
+    is_admin = auth_details.get("role") == "admin"
+    user_faculty = auth_details.get("faculty")
+
+    # Define the structure for rendering checkbox groups
+    # Assumes options maps like workflow_options are defined globally
+    workflow_options = {
+        "ToDo": WORKFLOW_STYLES.get("ToDo"),
+        "InProgress": WORKFLOW_STYLES.get("InProgress"),
+        "Done": WORKFLOW_STYLES.get("Done"),
+    }
+    status_options = {
+        "Published": STATUS_STYLES.get("Published"),
+        "Unpublished": STATUS_STYLES.get("Unpublished"),
+        "Deleted": STATUS_STYLES.get("Deleted"),
+    }
+    classification_options = {
+        **{v: LabelT.primary for v in PRIMARY_CLASSIFICATIONS},
+        **{v: LabelT.secondary for v in SECONDARY_CLASSIFICATIONS},
+        **{v: LabelT.destructive for v in DESTRUCTIVE_CLASSIFICATIONS},
+        "None": LabelT.destructive,
+    }
+    manual_classification_options = classification_options  # Reuse same options
+    faculty_options = {
+        f: FACULTY_BADGE_STYLES.get(f, "badge-secondary")
+        for f in ["BMS", "EEMCS", "ET", "ITC", "TNW"]
+    }
+
+    checkbox_groups_to_render = [
+        ("workflow_status", "Workflow Status", workflow_options),
+        ("status", "Status", status_options),
+        ("classification", "Classification", classification_options),
+        (
+            "manual_classification",
+            "Manual Classification",
+            manual_classification_options,
+        ),
+    ]
+    # Conditionally add faculty group if user is admin or has no specific faculty assigned
+    if is_admin or not user_faculty or user_faculty == "all":
+        checkbox_groups_to_render.append(("faculty", "Faculty", faculty_options))
+
+    current_total = processed_data.total_filtered_rows
+    print(
+        f"Current total in data_grid when starting to render checkbox groups: {current_total}"
+    )
+    for key, label, options_map in checkbox_groups_to_render:
+        group_id = f"filter-group-{key}"
+        counts_for_group = processed_data.filter_counts.get(key, {})
+
+        rendered_group = create_checkbox_filter_group(
+            filter_key=key,
+            label_text=label,
+            options=options_map,
+            current_values=processed_data.app_state.filters.get(key),
+            counts=counts_for_group,
+            current_total=current_total,
+        )
+        if hasattr(rendered_group, "attrs"):
+            rendered_group.attrs["hx-swap-oob"] = f"outerHTML:#{group_id}"
+        else:
+            print(f"Warning: Cannot add OOB swap to non-FT object for key {key}")
+        oob_filter_fragments.append(rendered_group)
+
+    # 7. Determine Return Value (HTMX vs Full Page)
     is_htmx = request.headers.get("hx-request", "false").lower() == "true"
 
-    if not is_htmx:
-        header_component = page_header_component(auth_details, app_state, filter_counts)
-        _update_empty_filters(filter_counts)
+    if is_htmx:
+        print("--- HTMX Request: Returning Grid + OOB Filters ---")
+        return (grid_component, *oob_filter_fragments)
+    else:
+        print("--- Full Page Request: Rendering Header + Grid + Modals + Scripts ---")
+
+        initial_counts_for_empty = calculate_counts_for_ui(
+            processed_data.app_state, copyright_df_global, None
+        )
+        _update_empty_filters(initial_counts_for_empty)
+
+        header_component = page_header_component(
+            auth_details,
+            processed_data.app_state,
+            processed_data.filter_counts,
+            processed_data.total_filtered_rows,
+        )
 
         modal_placeholder = Dialog(
             id="modal-placeholder", cls="modal modal-bottom sm:modal-middle"
         )
-        modal_trigger_script = Script("""
-            document.body.addEventListener('openModalEvent', function(evt) {
-                const modalDialog = document.getElementById('modal-placeholder');
-                if (modalDialog && typeof modalDialog.showModal === 'function') {
-                    console.log('Opening modal via openModalEvent (Target: #modal-placeholder)');
-                    modalDialog.showModal();
-                } else {
-                    console.error('Modal dialog (#modal-placeholder) not found or showModal not supported.');
-                }
-            });
-        """)
-
-        modal_interaction_script = Script(f"""
-            // Function to update a pill's appearance and hidden input value
-            function updatePill(fieldName, newValue, newText, newStyleClass) {{
-                const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
-                const inputElement = document.getElementById(`input-${{fieldName}}`);
-                if (pillElement && inputElement) {{
-                    // Update hidden input
-                    inputElement.value = newValue;
-                    // Update visible pill text
-                    pillElement.textContent = newText;
-                    // Update visible pill style (remove old, add new)
-                    // Assumes style classes are like 'uk-label-primary', 'uk-label-secondary', etc.
-                    pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive');
-                    if (newStyleClass) {{ // Add new style if provided
-                    pillElement.classList.add(newStyleClass);
-                    }} else {{ // Fallback if no specific style maps (e.g., for 'N/A')
-                        pillElement.classList.add('uk-label-secondary'); // Or your default
-                    }}
-                    // Close the dropdown (assuming uk-drop is used)
-                    const drop = UIkit.drop(pillElement.closest('[uk-drop]'));
-                    if (drop) {{ drop.hide(false); }}
-                    markDirty(); // Mark form as dirty
-                }} else {{
-                    console.error(`Cannot find pill or input elements for ${{fieldName}}`);
-                }}
-            }}
-            function markDirty() {{
-                const indicator = document.getElementById('save-indicator');
-                const saveButton = document.getElementById('modal-save-btn');
-                if (indicator) indicator.classList.remove('hidden');
-                if (saveButton) saveButton.disabled = false; // Make sure it's enabled
-            }}
-
-            // Function to reset the modal form fields to original values
-            function resetModalForm() {{
-                console.log('Resetting modal form'); // Debug log
-                const form = document.getElementById('modal-details-form');
-                if (!form) return;
-
-                const pillInputs = form.querySelectorAll('input[data-original-value][id^="input-"]'); // Target only pill inputs
-                pillInputs.forEach(input => {{
-                    const originalValue = input.dataset.originalValue;
-                    const originalText = input.dataset.originalText || originalValue; // Fallback text
-                    const originalStyle = input.dataset.originalStyle || '{str(DEFAULT_PILL_STYLE)}'; // Fallback style
-                    const fieldName = input.id.replace('input-', '');
-
-                    // Reset hidden input
-                    input.value = originalValue;
-
-                    // Reset visible pill
-                    const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
-                    if (pillElement) {{
-                        pillElement.textContent = originalText;
-                        pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive');
-                        if (originalStyle && originalStyle.startsWith('uk-label-')) {{ // Ensure it's a valid style class
-                            pillElement.classList.add(originalStyle);
-                        }} else {{
-                             pillElement.classList.add('{str(DEFAULT_PILL_STYLE)}'); // Default
-                        }}
-                    }}
-                }});
-
-                const remarksTextarea = form.querySelector('#modal_remarks');
-                if (remarksTextarea && typeof remarksTextarea.dataset.originalValue !== 'undefined') {{ // Check if attribute exists
-                    remarksTextarea.value = remarksTextarea.dataset.originalValue;
-                }}
-
-                // Hide save indicator and disable save button
-                const indicator = document.getElementById('save-indicator');
-                const saveButton = document.getElementById('modal-save-btn');
-                if (indicator) {{
-                    indicator.classList.add('hidden');
-                }}
-                if (saveButton) {{
-                    saveButton.disabled = true;
-                }}
-            }}
-        """)
-
         return (
-            Title("CDD//UT"),
+            Title("CDD//UT Dashboard"),
+            MODAL_TRIGGER,
+            MODAL_INTERACTION,
             Div(
                 Div(header_component, grid_component, id="content-area"),
                 id="page-container",
             ),
             modal_placeholder,
-            modal_trigger_script,
-            modal_interaction_script,
-            FILTER_JS_LISTENER,
         )
-
-    else:
-        print("HTMX Apply/Sort/Page/Reset: Returning Grid Only")
-        return grid_component
 
 
 @rt("/modal/{material_id:int}")
-async def show_item_details(session: dict, material_id: int):  # Simplified signature
+async def show_item_details(session: dict, material_id: int):
     """Fetches data and returns structured INNER content for the modal dialog."""
 
-    app_state_dict = session.get("app_state", {})
-    app_state = AppState(**app_state_dict)  # Convert dict back to instance
+    # Load state primarily to determine prev/next IDs based on current view
+    app_state = load_app_state(session)
+    auth_details = session.get("auth", {})
+
+    # Determine faculty constraint for filtering to get correct prev/next
+    faculty_constraint = None
+    user_faculty = auth_details.get("faculty")
+    user_role = auth_details.get("role")
+    if user_role != "admin" and user_faculty and user_faculty != "all":
+        faculty_constraint = {"faculty": user_faculty}
+
+    # Get the ordered list of IDs based on current view state + auth
+    try:
+        filtered_sorted_df = get_filtered_sorted_df(
+            app_state, extra_constraints=faculty_constraint
+        )
+        ordered_ids = filtered_sorted_df.get_column("material_id").to_list()
+        current_index = ordered_ids.index(material_id)
+    except (ValueError, pl.exceptions.ColumnNotFoundError):
+        # Handle case where item not found in current view or ID column missing
+        print(
+            f"Warning: Material ID {material_id} not found in current filtered/sorted view."
+        )
+        current_index = -1
+        ordered_ids = []  # Ensure list is empty
+    except Exception as e:
+        print(f"Error getting ordered IDs for modal prev/next: {e}")
+        current_index = -1
+        ordered_ids = []
+
+    prev_id = ordered_ids[current_index - 1] if current_index > 0 else None
+    next_id = (
+        ordered_ids[current_index + 1]
+        if current_index != -1 and current_index < len(ordered_ids) - 1
+        else None
+    )
 
     def get_val(key, default=None):
         return item_data.get(key, default)
@@ -2996,13 +3560,13 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
                 original_style_class = found_style
             elif (
                 "badge-sm" not in current_classes
-            ):  # If no style applied, ensure badge-sm is used for consistency if it's a Label
-                if isinstance(content_component, fh.fastcore.xml.Gen):
-                    if (
-                        content_component.tag == "span"
-                        and "uk-label" in content_component.attrs.get("cls", "")
-                    ):
-                        content_component.attrs["cls"] += " badge-sm"
+                and isinstance(content_component, FT)
+                and (
+                    content_component.tag == "span"
+                    and "uk-label" in content_component.attrs.get("cls", "")
+                )
+            ):
+                content_component.attrs["cls"] += " badge-sm"
 
         # Add ID to the display component for JS targeting
         component_with_id = content_component
@@ -3084,28 +3648,15 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
         )
 
     try:
-        filtered_sorted_df = get_filtered_sorted_df(app_state)
-        ordered_ids = filtered_sorted_df.get_column("material_id").to_list()
-
-        try:
-            current_index = ordered_ids.index(material_id)
-        except ValueError:
-            current_index = -1  # Item not found in current filtered/sorted list
-
-        prev_id = ordered_ids[current_index - 1] if current_index > 0 else None
-        next_id = (
-            ordered_ids[current_index + 1]
-            if current_index != -1 and current_index < len(ordered_ids) - 1
-            else None
-        )
-
-        # --- Fetch Item Data  ---
         nested_data_list = retrieve_osiris_data([material_id])
-        if not nested_data_list:  # Handle case where item data isn't found
-            raise ValueError(f"Material ID {material_id} not found in Osiris data.")
+        if not nested_data_list:
+            raise ValueError(
+                f"Material ID {material_id} not found in detailed data source."
+            )
         item_data = nested_data_list[0]
-        if "faculty_id" in item_data:
-            item_data["faculty"] = item_data.pop("faculty_id")  # Alias faculty_id
+
+        if "faculty_id" in item_data and "faculty" not in item_data:
+            item_data["faculty"] = item_data.pop("faculty_id")
 
         manual_classification_options = {}
         for val in PRIMARY_CLASSIFICATIONS:
@@ -3328,7 +3879,6 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
         )
 
         # --- Footer Row  ---
-        indicator_attrs = {"hx_indicator": "#modal-loading-indicator"}
 
         # Prev Button
         prev_button_attrs = {
@@ -3342,7 +3892,6 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
                     "hx_get": show_item_details.to(material_id=prev_id),  # Only need ID
                     "hx_target": "#modal-placeholder",
                     "hx_swap": "innerHTML",
-                    **indicator_attrs,
                 }
             )
         prev_button = Button("< Prev", **prev_button_attrs)
@@ -3359,7 +3908,6 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
                     "hx_get": show_item_details.to(material_id=next_id),  # Only need ID
                     "hx_target": "#modal-placeholder",
                     "hx_swap": "innerHTML",
-                    **indicator_attrs,
                 }
             )
         next_button = Button("Next >", **next_button_attrs)
@@ -3377,26 +3925,17 @@ async def show_item_details(session: dict, material_id: int):  # Simplified sign
             Div(
                 Div(header_content, cls="border-b pb-2 flex-shrink-0"),  # Header
                 Div(  # Scrollable Body
-                    # Loading indicator for modal transitions (prev/next/save)
-                    Div(
-                        Span("Loading...", cls="loading loading-lg"),
-                        id="modal-loading-indicator",
-                        cls="htmx-indicator absolute inset-0 bg-base-100/50 flex items-center justify-center z-50",
-                    ),
                     # Form for saving details
                     Form(
-                        # Essential hidden field for the save endpoint
-                        Input(type="hidden", name="material_id", value=material_id),
-                        # --- REMOVE HIDDEN STATE INPUTS ---
-                        # *[Input(type="hidden", name=k, value=v) for k, v in app_state.filter_params_dict().items()],
-                        # *[Input(type="hidden", name=k, value=v) for k, v in app_state.nav_params_dict().items()],
-                        modal_cards_grid,  # The main content grid
+                        Input(
+                            type="hidden", name="material_id", value=material_id
+                        ),  # Essential ID
+                        # REMOVED hidden state inputs
+                        modal_cards_grid,  # The main content grid (includes editable fields)
                         id="modal-details-form",
-                        hx_post=save_item_details.to(),  # Save endpoint doesn't need state params in URL
-                        hx_indicator="#modal-loading-indicator",
-                        # Consider hx_target="body" and hx_swap="none" if only relying on OOB swaps from save_item_details
-                        # Or target a specific small element inside the modal for status messages if needed
-                        # hx_target="#save-status-message", hx_swap="innerHTML"
+                        hx_post=save_item_details.to(),  # Target the save endpoint
+                        hx_target="body",  # Target body to receive OOB swaps from save endpoint
+                        hx_swap="none",  # Let OOB swaps handle UI updates
                     ),
                     cls="relative py-4 flex-grow overflow-y-auto",
                 ),
