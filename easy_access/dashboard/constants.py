@@ -506,65 +506,86 @@ MODAL_TRIGGER = Script("""
         }
     });
 """)
-MODAL_INTERACTION = Script(f"""
-    // Function to update a pill's appearance and hidden input value
-    // ... (keep existing implementation of updatePill, markDirty, resetModalForm) ...
-        function updatePill(fieldName, newValue, newText, newStyleClass) {{
-        const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
-        const inputElement = document.getElementById(`input-${{fieldName}}`);
-        if (pillElement && inputElement) {{
-            inputElement.value = newValue;
-            pillElement.textContent = newText;
-            pillElement.classList.remove('uk-label-primary', 'uk-label-secondary', 'uk-label-destructive', 'badge-neutral', 'badge-primary', 'badge-error'); // Remove old styles
-            if (newStyleClass) {{
-                pillElement.classList.add(newStyleClass); // Add new style
-            }} else {{
-                    pillElement.classList.add('{str(DEFAULT_PILL_STYLE)}'); // Default fallback
-            }}
-            const drop = UIkit.drop(pillElement.closest('[uk-drop]'));
-            if (drop) {{ drop.hide(false); }}
-            markDirty();
-        }} else {{ console.error(`Cannot find pill or input elements for ${{fieldName}}`); }}
-    }}
-    function markDirty() {{
-        const indicator = document.getElementById('save-indicator');
-        const saveButton = document.getElementById('modal-save-btn');
-        if (indicator) indicator.classList.remove('hidden');
-        if (saveButton) saveButton.disabled = false;
-    }}
-    function resetModalForm() {{
-        console.log('Resetting modal form');
-        const form = document.getElementById('modal-details-form');
-        if (!form) return;
-        // Reset editable pills
-        form.querySelectorAll('input[data-original-value][id^="input-"]').forEach(input => {{
-            const originalValue = input.dataset.originalValue;
-            const originalText = input.dataset.originalText || originalValue;
-            const originalStyle = input.dataset.originalStyle || '{str(DEFAULT_PILL_STYLE)}';
-            const fieldName = input.id.replace('input-', '');
-            input.value = originalValue;
-            const pillElement = document.getElementById(`pill-display-${{fieldName}}`);
-            if (pillElement) {{
-                pillElement.textContent = originalText;
-                pillElement.className = ''; // Clear all classes first
-                pillElement.classList.add('uk-label', 'badge-sm'); // Re-add base classes
-                if (originalStyle) {{ pillElement.classList.add(originalStyle); }}
-                else {{ pillElement.classList.add('{str(DEFAULT_PILL_STYLE)}'); }}
-            }}
-        }});
-        // Reset remarks textarea
-        const remarksTextarea = form.querySelector('#modal_remarks');
-        if (remarksTextarea && typeof remarksTextarea.dataset.originalValue !== 'undefined') {{
-            remarksTextarea.value = remarksTextarea.dataset.originalValue;
-        }}
-        // Reset save indicator/button
-        const indicator = document.getElementById('save-indicator');
-        const saveButton = document.getElementById('modal-save-btn');
-        if (indicator) indicator.classList.add('hidden');
-        if (saveButton) saveButton.disabled = true;
-    }}
-""")
+MODAL_INTERACTION = Script("""
+    function updatePill(fieldName, newValue, newText, newStyleClass) {
+        const targetId = `pill-display-${fieldName}`;
+        console.log(`updatePill called for field: ${fieldName}, looking for ID: ${targetId}`); // Add log
+        const pillElement = document.getElementById(targetId);
 
+        if (pillElement) {
+            console.log(`Found element for ${fieldName}:`, pillElement); // Log found element
+            // inputElement.value = newValue; // Optional
+            pillElement.textContent = newText;
+            // --- Style updates ---
+            const currentStyle = pillElement.dataset.currentStyle || '{str(DEFAULT_PILL_STYLE)}';
+            const newStyle = newStyleClass || '{str(DEFAULT_PILL_STYLE)}';
+            console.log(`  Current style: ${currentStyle}, New style: ${newStyle}`); // Log styles
+            if (currentStyle !== newStyle) {
+                if (pillElement.classList.contains(currentStyle)) {
+                    pillElement.classList.replace(currentStyle, newStyle);
+                    console.log(`  Replaced style ${currentStyle} with ${newStyle}`);
+                } else {
+                    console.warn(`  Current style ${currentStyle} not found on element. Attempting to remove old and add new.`);
+                    const existingStyle = Array.from(pillElement.classList).find(cls => cls.startsWith('uk-label-') || cls.startsWith('badge-'))
+                    if(existingStyle && existingStyle !== 'badge-sm') {
+                        pillElement.classList.remove(existingStyle);
+                        console.log(`  Removed existing style: ${existingStyle}`);
+                    }
+                    pillElement.classList.add(newStyle);
+                    console.log(`  Added new style: ${newStyle}`);
+                }
+                pillElement.dataset.currentStyle = newStyle;
+            }
+            if (!pillElement.classList.contains('badge-sm')) {
+                pillElement.classList.add('badge-sm');
+                console.log("  Ensured badge-sm class present.");
+            }
+            // --- End style update ---
+            const drop = UIkit.drop(pillElement.closest('[uk-drop]'));
+            if (drop) {
+                drop.hide(false);
+                console.log("  Closed dropdown.");
+            } else {
+                console.warn("  Could not find dropdown to close.");
+            }
+        } else {
+            // --- Log error if element not found ---
+            console.error(`Cannot find pill element with ID: ${targetId}`);
+        }
+    }
+
+
+
+    // Simplify resetModalForm to only handle remarks and its save button state
+    function resetModalForm() {
+        console.log('Resetting modal remarks');
+        const remarksTextarea = document.getElementById('modal_remarks');
+        // Use AlpineJS context if available, otherwise fallback to dataset (though Alpine should be primary now)
+        const alpineEl = remarksTextarea ? remarksTextarea.closest('[x-data]') : null;
+        if (alpineEl && alpineEl.__x) {
+            alpineEl.__x.data.remarks = alpineEl.__x.data.originalRemarks;
+        } else if (remarksTextarea && typeof remarksTextarea.dataset.originalValue !== 'undefined') {
+             // Fallback if Alpine isn't initialized yet (less likely)
+            remarksTextarea.value = remarksTextarea.dataset.originalValue;
+        }
+
+    }
+
+    // Add helper to store current pill style for reset/update comparison
+    document.addEventListener('htmx:afterSwap', function(evt) {
+      // Store initial style on modal load for pills
+    if (evt.detail.target.id === 'modal-placeholder') {
+        evt.detail.target.querySelectorAll('[id^="pill-display-"]').forEach(pill => {
+        const currentStyle = Array.from(pill.classList).find(cls => cls.startsWith('uk-label-') || cls.startsWith('badge-')) || '{str(DEFAULT_PILL_STYLE)}';
+          pill.dataset.currentStyle = currentStyle.replace('badge-sm','').trim(); // Store base style
+           if (!pill.classList.contains('badge-sm')) { // Ensure badge-sm
+                pill.classList.add('badge-sm');
+            }
+        });
+    }
+    });
+
+""")
 JS = (
     Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit.min.js"),
     Script(
@@ -575,7 +596,7 @@ JS = (
         ALPINE_TOOLTIP_JS,
     ),
     Script(src="https://cdn.tailwindcss.com"),
-    Script("https://unpkg.com/htmx-ext-preload@2.1.0"),
+    Script(src="https://unpkg.com/htmx-ext-preload@2.1.0"),
 )
 
 BODY_JS = (MODAL_TRIGGER, MODAL_INTERACTION)

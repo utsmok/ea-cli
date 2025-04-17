@@ -68,7 +68,6 @@ def process_state(
     filter_change_occurred = False  # Specific flag for filter changes to reset page
 
     if request_params.get("action") == "reset":
-        print("Processing state: Reset action")
         # Only apply reset if there are filters or page is not 1
         if app_state.filters or app_state.page != 1:
             app_state.clear_filters()
@@ -82,7 +81,6 @@ def process_state(
         try:
             page = int(request_params["page"])
             if page != app_state.page:
-                print(f"Processing state: Set page to {page}")
                 app_state.set_page(page)
                 change_applied = True
         except (ValueError, TypeError):
@@ -93,9 +91,6 @@ def process_state(
         sort_by = request_params.get("sort_by")
         sort_desc = request_params.get("sort_desc", "False").lower() == "true"
         if sort_by != app_state.sort_by or sort_desc != app_state.sort_desc:
-            print(
-                f"Processing state: Set sort to {sort_by} ({'DESC' if sort_desc else 'ASC'})"
-            )
             app_state.set_sort(sort_by if sort_by else None, sort_desc)
             change_applied = True
             app_state.set_page(1)
@@ -103,7 +98,6 @@ def process_state(
         try:
             per_page = int(request_params["per_page"])
             if per_page != app_state.per_page:
-                print(f"Processing state: Set per_page to {per_page}")
                 app_state.set_per_page(per_page)
                 app_state.set_page(1)  # Reset page when per_page changes
                 change_applied = True
@@ -113,9 +107,6 @@ def process_state(
             )
 
     else:  # Check for filter changes by comparing with current state
-        print(
-            "Processing state: Checking for filter changes by comparing request params to current state."
-        )
         is_checkbox_change = "checked" in request_params
         current_filters = app_state.get_active_filters()  # Get a copy
 
@@ -156,9 +147,6 @@ def process_state(
 
                     # If the simulated new string is different from the current one, this is our change.
                     if new_simulated_value_str != current_value_str:
-                        print(
-                            f"  Detected checkbox change: key='{filter_key}', value='{clicked_value}', checked={is_checked}"
-                        )
                         # Apply the change using the specific clicked value and intended state
                         if app_state.apply_filter_change(
                             filter_key, clicked_value, is_checked
@@ -172,9 +160,6 @@ def process_state(
                     # For text filters, the param_value is the new text value (can be empty).
                     # Compare directly with the current value string for this key.
                     if param_value != current_value_str:
-                        print(
-                            f"  Detected text filter change: key='{filter_key}', new_value='{param_value}'"
-                        )
                         if app_state.apply_text_filter(filter_key, param_value):
                             change_applied = True
                             filter_change_occurred = True
@@ -184,7 +169,6 @@ def process_state(
 
         # Reset page if a filter changed (and it wasn't handled by per_page already)
         if filter_change_occurred and "per_page" not in request_params:
-            print("Processing state: Filters changed, resetting page to 1")
             app_state.set_page(1)
             change_applied = True  # Setting page is also a state change
 
@@ -213,7 +197,6 @@ async def fetch_data(app_state: AppState, session: dict) -> ProcessedDataResult:
     Returns:
         A ProcessedDataResult object.
     """
-    print(f"Fetching data for state: {app_state}")
     # 1. Get Auth Details from Session
     auth_details = session.get("auth", {})
 
@@ -223,14 +206,12 @@ async def fetch_data(app_state: AppState, session: dict) -> ProcessedDataResult:
     user_role = auth_details.get("role")
     if user_role != "admin" and user_faculty and user_faculty != "all":
         faculty_constraint = {"faculty": user_faculty}
-        print(f"Applying faculty constraint: {faculty_constraint}")
 
     # 3. Filter Data (using adapted get_filtered_sorted_df)
     filtered_df = get_filtered_sorted_df(
         app_state, extra_constraints=faculty_constraint
     )
     total_filtered_rows = filtered_df.height
-    print(f"Filtered data rows: {total_filtered_rows}")
 
     # 4. Calculate Total Pages & *Validate* Page Number in a *copy* of the state
     validated_app_state = deepcopy(app_state)
@@ -243,23 +224,15 @@ async def fetch_data(app_state: AppState, session: dict) -> ProcessedDataResult:
     validated_app_state.page = max(
         1, min(validated_app_state.page, total_pages if total_pages > 0 else 1)
     )
-    if validated_app_state.page != original_page_request:
-        print(
-            f"Page number validated: Requested {original_page_request}, Validated {validated_app_state.page} (Total Pages: {total_pages})"
-        )
 
     # 5. Calculate Filter Counts (using adapted calculate_counts_for_ui)
     # Pass the *requested* state (app_state) because counts show potential changes
     # Pass global_df (copyright_df_global assumed available) and constraint
-    print("Calculating filter counts...")
     filter_counts = calculate_counts_for_ui(app_state, faculty_constraint)
-    print("Filter counts calculated to:")
-    print(filter_counts)
 
     # 6. Prepare Slice using *Validated* State
     offset = (validated_app_state.page - 1) * validated_app_state.per_page
     df_slice = filtered_df.slice(offset, validated_app_state.per_page)
-    print(f"Data slice prepared: Offset {offset}, Length {df_slice.height}")
 
     # 7. Return results with the *Validated* State
     return ProcessedDataResult(
@@ -290,12 +263,9 @@ def calculate_counts_for_ui(
         app_state=app_state, extra_constraints=faculty_constraint
     )
     if not EMPTY_FILTERS:
-        print("Setting EMPTY_FILTERS for the first time")
         tmp_app_state = copy(app_state)
         tmp_app_state.clear_filters()
         get_filter_counts(tmp_app_state)  # Initialize EMPTY_FILTERS if not set
-
-    print(f"calculate_counts_for_ui: EMPTY_FILTERS: {EMPTY_FILTERS}")
 
     applied_filters = app_state.get_active_filters()
 
@@ -314,9 +284,6 @@ def calculate_counts_for_ui(
             options = list(BADGE_STYLES["classification"].keys())
         else:
             if col not in BADGE_STYLES:
-                print(
-                    f"Can't find list of valid options for {col} in BADGE_STYLES, skipping"
-                )
                 continue
             options = list(BADGE_STYLES[col].keys())
         if col in applied_filters:
@@ -328,7 +295,6 @@ def calculate_counts_for_ui(
             # repeat for all options
             # directly store each found count in the result dict
             # then add it to results and continue
-            print(f"{col} is in applied filters: {applied_filters[col]}")
             result = {}
             for option in options:
                 if option in EMPTY_FILTERS.get(col, []):
@@ -468,7 +434,6 @@ def _create_filter_expression(
             print(f"Filter warning processing '{actual_col}'='{value}': {e}")
 
     if extra_constraints:
-        print(f"Applying extra constraints: {extra_constraints}")
         for col, value in extra_constraints.items():
             if col not in df.columns:
                 print(f"Warning: Constraint column '{col}' not in DataFrame. Skipping.")

@@ -1,7 +1,6 @@
 # dash.py
 
 import asyncio
-import json
 import traceback
 from collections import defaultdict
 from pathlib import Path
@@ -13,23 +12,24 @@ from fasthtml.common import *
 from fasthtml.components import Button
 from monsterui.all import *
 from rich import print
+from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 
 from easy_access.dashboard.components import (
     ItemDetailCard,
     create_checkbox_filter_group,
+    create_editable_pill_div,
+    create_readonly_item_div,
     page_header_component,
     render_contact_info,
     render_course_details,
     render_data_grid_component,
     render_item_history,
-    render_labelled_item,
     render_modal_field,
     render_teacher_info,
 )
 from easy_access.dashboard.constants import (
     BADGE_STYLES,
-    DEFAULT_PILL_STYLE,
     INIT_HEADERS,
     MODAL_INTERACTION,
     MODAL_TRIGGER,
@@ -83,70 +83,56 @@ setup_toasts(app)
 async def save_item_details(
     request: Request,
     session: dict,
-    # Only expect editable fields + ID from the form
     material_id: int,
-    workflow_status: str = "",
-    manual_classification: str = "",
     remarks: str = "",
 ):
     """
-    Route to store edited item details from the modal back to the database
-    and return an updated grid view via OOB swap.
+    Route to store edited remarks back to the database
     """
-    print(f"Saving changes for material_id: {material_id}")
+    print(f"Saving remarks for material_id: {material_id}")
     update_data = {
         "material_id": material_id,
-        "workflow_status": workflow_status,
-        "manual_classification": manual_classification
-        if manual_classification.lower() != "none"
-        else None,  # Handle 'None' string
         "remarks": remarks,
     }
-
-    oob_grid_swap = Div(hx_swap_oob="true")  # Default empty OOB swap
-
     try:
-        # 1. Save changes to DB
         await store_item_changes(update_data, session.get("auth", {}))
-
-        # 3. Load current state (reflecting filters/sort *before* save)
-        # We need the state to know *which* page/sort order to display after save
-        app_state_before_save = load_app_state(session)
-
-        # 4. Fetch updated data based on the *existing* state
-        # This will apply current filters/sort and validate the page number
-        # against the *newly reloaded* global data.
-        processed_data = await fetch_data(app_state_before_save, session)
-
-        # 5. Update session if page validation occurred in fetch_data
-        if processed_data.app_state.page != app_state_before_save.page:
-            session["app_state"] = asdict(processed_data.app_state)
-
-        # 6. Render the updated grid component
-        updated_grid_component = render_data_grid_component(
-            df_slice=processed_data.df_slice,
-            app_state=processed_data.app_state,  # Use validated state
-            total_filtered_rows=processed_data.total_filtered_rows,
-            total_pages=processed_data.total_pages,
-        )
-
-        # 7. Create OOB Swap Div for the Grid
-        oob_grid_swap = Div(
-            to_xml(updated_grid_component),  # Render the component to HTML string
-            hx_swap_oob="outerHTML:#data-grid-component",  # Target the grid for replacement
-        )
-
-        add_toast(session, f"Successfully updated item {material_id}", "success")
+        add_toast(session, f"Remarks for item {material_id} saved.", "success")
+        return Response(status_code=200)
 
     except Exception as e:
-        print(f"Error saving changes for {material_id}: {e}")
+        print(f"Error saving remarks for {material_id}: {e}")
         traceback.print_exc()
-        add_toast(session, f"Error saving changes for {material_id}: {e}", "error")
+        add_toast(session, f"Error saving remarks for {material_id}: {e}", "error")
+        return Response(status_code=500)
 
-    # Return only the OOB swap for the grid.
-    # The modal should be closed client-side after successful save (or on explicit close).
-    # Use HTMX headers to prevent default swap.
-    return oob_grid_swap, HtmxResponseHeaders(reswap="none")
+
+@rt("/update_field", methods=["POST"])
+async def update_single_field(
+    session: dict,
+    material_id: int,
+    field_name: str,
+    value: str,
+):
+    """
+    Route to update a single field for an item.
+    Used by editable pills for immediate updates.
+    """
+    print(f"Updating single field for {material_id}: {field_name} = {value}")
+    update_data = {
+        "material_id": material_id,
+        field_name: value if value.lower() != "none" else None,
+    }
+    try:
+        await store_item_changes(update_data, session.get("auth", {}))
+        # Return 200 OK, no content needed, HTMX swap='none' will be used client-side
+        return Response(status_code=200)
+    except Exception as e:
+        print(f"Error updating single field for {material_id}: {e}")
+        traceback.print_exc()
+        # Optionally add a toast message for the error
+        add_toast(session, f"Error updating {field_name}", "error")
+        # Return an error status code
+        return Response(status_code=500)
 
 
 @rt("/osiris/{material_id:int}")
@@ -402,7 +388,10 @@ async def data_grid(session: dict, request: Request):
         modal_placeholder = Dialog(
             id="modal-placeholder",
             cls="modal modal-bottom sm:modal-middle",
-            hx_ext="preload",
+            hx_trigger="close",
+            hx_get=data_grid.to(),
+            hx_target="#data-grid-component",
+            hx_swap="outerHTML",
         )
         return (
             Title("CDD//UT Dashboard"),
@@ -461,118 +450,8 @@ async def show_item_details(session: dict, material_id: int):
     def get_val(key, default=None):
         return item_data.get(key, default)
 
-    def create_editable_pill_div(label_text: str, field_name: str, options_map: dict):
-        # ... (Keep existing implementation)
-        current_value = get_val(field_name)
-        content_component, html_tag = render_modal_field(field_name, current_value)
-        label_el, _ = render_labelled_item(label_text, content_component, html_tag)
-        original_value_str = str(current_value) if current_value is not None else ""
-        original_style_class = str(DEFAULT_PILL_STYLE)  # Default style
-
-        # Logic to find the *actual* style class applied by render_modal_field
-        if hasattr(content_component, "attrs") and "cls" in content_component.attrs:
-            current_classes = content_component.attrs["cls"].split()
-            labelt_values = (
-                {str(lt) for lt in LabelT}
-                | {str(st) for st in BADGE_STYLES["status"].values()}
-                | {str(wt) for wt in BADGE_STYLES["workflow_status"].values()}
-            )
-            found_style = next(
-                (cls for cls in current_classes if cls in labelt_values), None
-            )
-            if found_style:
-                original_style_class = found_style
-            elif (
-                "badge-sm" not in current_classes
-                and isinstance(content_component, FT)
-                and (
-                    content_component.tag == "span"
-                    and "uk-label" in content_component.attrs.get("cls", "")
-                )
-            ):
-                content_component.attrs["cls"] += " badge-sm"
-
-        # Add ID to the display component for JS targeting
-        component_with_id = content_component
-        # Safely add/update the ID
-        if hasattr(component_with_id, "attrs"):
-            component_with_id.attrs = (
-                component_with_id.attrs.copy()
-                if isinstance(component_with_id.attrs, dict)
-                else {}
-            )
-            component_with_id.attrs["id"] = f"pill-display-{field_name}"
-        # else: # Handle cases where it might be a simple string or needs wrapping
-        # component_with_id = Span(content_component, id=f"pill-display-{field_name}") # Example wrap
-
-        dropdown_items = []
-        for opt_val, opt_style_enum in options_map.items():
-            opt_style_class = (
-                str(opt_style_enum) if opt_style_enum else str(DEFAULT_PILL_STYLE)
-            )
-            # Ensure opt_val is treated as a string for JS
-            js_opt_val = json.dumps(
-                str(opt_val)
-            )  # Use json.dumps for safe JS string representation
-            js_opt_text = json.dumps(str(opt_val))  # Text is usually same as value here
-            onclick_js = f"updatePill('{field_name}', {js_opt_val}, {js_opt_text}, '{opt_style_class}'); return false;"
-            # Ensure the label inside the dropdown also has badge-sm
-            dropdown_items.append(
-                Li(
-                    A(
-                        Label(opt_val, cls=f"{opt_style_class} badge-sm"),
-                        href="#",
-                        onclick=onclick_js,
-                    )
-                )
-            )
-
-        hidden_input = Input(
-            type="hidden",
-            id=f"input-{field_name}",
-            name=field_name,
-            value=original_value_str,
-            data_original_value=original_value_str,
-            data_original_text=original_value_str,  # Use same as value for simplicity here
-            data_original_style=original_style_class,
-        )
-
-        pill_container = Div(
-            component_with_id,  # The component with the ID set
-            Div(
-                Ul(*dropdown_items, cls="uk-nav uk-dropdown-nav"),
-                cls="uk-dropdown w-auto bg-base-100 p-2 shadow-lg rounded-md border border-base-300",
-                uk_drop="mode: click; pos: bottom-right; boundary: !.modal-box; flip: false",
-            ),
-            hidden_input,
-            cls="inline-block uk-inline",
-        )
-
-        return Div(
-            label_el,
-            Div(pill_container, cls="text-right"),
-            cls="flex items-center justify-between space-x-2 mb-2",
-        )
-
-    def create_readonly_item_div(
-        label_text: str, field_name: str, is_inline: bool = False
-    ):
-        content_component, html_tag = render_modal_field(
-            field_name, get_val(field_name)
-        )
-        label_el, content_el = render_labelled_item(
-            label_text, content_component, html_tag
-        )
-        container_cls = (
-            "flex items-center justify-between space-x-2 mb-2" if is_inline else "mb-3"
-        )
-        content_wrapper_cls = "text-right" if is_inline else ""
-        return Div(
-            label_el, Div(content_el, cls=content_wrapper_cls), cls=container_cls
-        )
-
     try:
-        nested_data_list = asyncio.to_thread(retrieve_osiris_data([material_id]))
+        nested_data_list = await asyncio.to_thread(retrieve_osiris_data, [material_id])
         if not nested_data_list:
             raise ValueError(
                 f"Material ID {material_id} not found in detailed data source."
@@ -617,36 +496,48 @@ async def show_item_details(session: dict, material_id: int):
 
         # --- Cards ---
         # --- Data Entry Card ---
-        data_entry_content = (
+        data_entry_content = Div(
+            # --- Pass material_id here ---
             create_editable_pill_div(
-                "Workflow Status", "workflow_status", BADGE_STYLES["workflow_status"]
+                get_val("workflow_status"),
+                "Workflow Status",
+                "workflow_status",
+                BADGE_STYLES["workflow_status"],
+                material_id=material_id,
             ),
+            # --- Pass material_id here ---
             create_editable_pill_div(
+                get_val("manual_classification"),
                 "Manual Classification",
                 "manual_classification",
                 BADGE_STYLES["classification"],
+                material_id=material_id,
             ),
+            # --- Remarks Text Area (AlpineJS data/model) ---
             Div(
                 Strong(
                     "Remarks", cls="block text-xs font-medium text-base-content/80 mb-1"
                 ),
-                TextArea(
-                    get_val("remarks", ""),
-                    id="modal_remarks",
-                    name="remarks",
-                    rows="5",
-                    cls="textarea textarea-bordered w-full text-sm bg-base-100",
-                    data_original_value=get_val("remarks", ""),
-                    oninput="markDirty()",
+                Div()(
+                    TextArea(
+                        x_model="remarks",
+                        id="modal_remarks",
+                        name="remarks",
+                        rows="5",
+                        cls="textarea textarea-bordered w-full text-sm bg-base-100",
+                    )
                 ),
                 cls="mb-3",
             ),
+            # --- Buttons (Modify AlpineJS logic) ---
             Div(cls="flex justify-end space-x-2 mt-4")(
                 Button(
                     "Reset",
                     type="button",
                     cls=ButtonT.secondary + " btn-sm",
-                    onclick="resetModalForm(); return false;",
+                    **{
+                        "@click": "remarks = originalRemarks; document.getElementById('modal-save-btn').disabled = true; document.getElementById('save-indicator').classList.add('hidden');"
+                    },
                 ),
                 Button(
                     Span(
@@ -666,37 +557,55 @@ async def show_item_details(session: dict, material_id: int):
                     id="modal-save-btn",
                     type="submit",
                     cls=ButtonT.primary + " btn-sm",
-                    disabled=True,
+                    **{
+                        ":disabled": "remarks == originalRemarks",
+                        ":class": "{ 'opacity-50 cursor-not-allowed': remarks == originalRemarks }",
+                        "x-init": "$watch('remarks', value => { document.getElementById('save-indicator').classList.toggle('hidden', value == originalRemarks) })",
+                    },
                 ),
             ),
-        )
-        # --- Item Info Card ---
-        item_info_content = (
-            create_readonly_item_div(
-                "Classification", "classification", is_inline=True
+            x_data="{{ remarks: '{}', originalRemarks: '{}' }}".format(
+                get_val("remarks", ""), get_val("remarks", "")
             ),
-            create_readonly_item_div("ML Prediction", "ml_prediction", is_inline=True),
-            create_readonly_item_div("Period", "period"),
-            create_readonly_item_div("Faculty", "faculty"),
-            create_readonly_item_div("Owner", "owner"),
-            create_readonly_item_div("Department", "department"),
-            create_readonly_item_div("Course Name", "course_name"),
-            create_readonly_item_div("Course Code", "course_code"),
         )
+
+        # --- Item Info Card ---
+        item_info_fields = [
+            "classification",
+            "ml_prediction",
+            "period",
+            "faculty",
+            "owner",
+            "department",
+            "course_name",
+            "course_code",
+        ]
+        item_info_details = [
+            (get_val(k), k.replace("_", " ").title(), k) for k in item_info_fields
+        ]
+        item_info_content = [
+            create_readonly_item_div(*item_info) for item_info in item_info_details
+        ]
+
         # --- Text Details Card ---
-        text_details_content = (
-            create_readonly_item_div("Title", "title"),
-            create_readonly_item_div("Author", "author"),
-            create_readonly_item_div("Publisher", "publisher"),
-            create_readonly_item_div("DOI", "doi"),
-            create_readonly_item_div("ISBN", "isbn"),
-        )
+        text_details_fields = ["title", "author", "publisher", "doi", "isbn"]
+        text_details = [
+            (get_val(k), k.replace("_", " ").title(), k) for k in text_details_fields
+        ]
+        text_details_content = [
+            create_readonly_item_div(*text_detail) for text_detail in text_details
+        ]
         # --- Numeric Details Card ---
-        numeric_details_content = (
-            create_readonly_item_div("Pages", "pagecount", is_inline=True),
-            create_readonly_item_div("Words", "wordcount", is_inline=True),
-            create_readonly_item_div("Pictures", "picturecount", is_inline=True),
-        )
+        numeric_details_fields = ["pagecount", "wordcount", "picturecount"]
+        numeric_details = [
+            (get_val(k), k.replace("_", " ").replace("count", "").title(), k)
+            for k in numeric_details_fields
+        ]
+        numeric_details_content = [
+            create_readonly_item_div(*numeric_detail)
+            for numeric_detail in numeric_details
+        ]
+
         # --- Osiris Data Cards ---
         contact_info_content = render_contact_info(item_data)
         course_details_content = render_course_details(item_data)
@@ -839,24 +748,21 @@ async def show_item_details(session: dict, material_id: int):
         # --- Assemble Modal Box ---
         modal_box_content = Div(
             Div(
-                Div(header_content, cls="border-b pb-2 flex-shrink-0"),  # Header
-                Div(  # Scrollable Body
-                    # Form for saving details
+                Div(header_content, cls="border-b pb-2 flex-shrink-0"),
+                Div(
                     Form(
-                        Input(
-                            type="hidden", name="material_id", value=material_id
-                        ),  # Essential ID
-                        # REMOVED hidden state inputs
-                        modal_cards_grid,  # The main content grid (includes editable fields)
+                        Input(type="hidden", name="material_id", value=material_id),
+                        modal_cards_grid,
                         id="modal-details-form",
-                        hx_post=save_item_details.to(),  # Target the save endpoint
-                        hx_target="body",  # Target body to receive OOB swaps from save endpoint
-                        hx_swap="none",  # Let OOB swaps handle UI updates
+                        hx_post=save_item_details.to(),
+                        hx_include="[name='material_id'], [name='remarks']",
+                        hx_target="body",
+                        hx_swap="none",
                     ),
                     cls="relative py-4 flex-grow overflow-y-auto",
                 ),
-                footer_content,  # Footer with prev/next/close
-                cls="flex-shrink-0",  # Ensure footer doesn't scroll
+                footer_content,
+                cls="flex-shrink-0",
             ),
             cls="modal-box w-[85vw] max-w-none h-[calc(100vh-5rem)] max-h-none flex flex-col",
         )
@@ -1004,6 +910,7 @@ URLS = {
     Url.save_item_details: save_item_details.to(),
     Url.get_file: get_file.to(),
     Url.get_osiris_data: get_osiris_data.to(),
+    Url.update_single_field: update_single_field.to(),
 }
 global_urls.update(URLS)
 

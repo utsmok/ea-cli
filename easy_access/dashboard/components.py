@@ -110,12 +110,12 @@ def create_checkbox_filter_group(
     counts: Optional[dict[str, int | str]] = None,
 ) -> FT:
     """Creates a compact group of styled checkboxes with counts and HTMX trigger. Disabled options are minimized."""
-    print(f"--- checkbox filter group: {filter_key} ---")
-    print(f"  current_values: {current_values}")
-    print(f"  current_total: {current_total}")
-    print(f"  counts: {counts}")
-    print(f"  options: {options}")
-    print(f"  label_text: {label_text}")
+    # print(f"--- checkbox filter group: {filter_key} ---")
+    # print(f"  current_values: {current_values}")
+    # print(f"  current_total: {current_total}")
+    # print(f"  counts: {counts}")
+    # print(f"  options: {options}")
+    # print(f"  label_text: {label_text}")
     selected_values = set(current_values.split("|") if current_values else [])
     outer_group_id = f"filter-group-{filter_key}"
 
@@ -557,9 +557,8 @@ def render_table_rows(
 
             for col in cols_to_display:
                 val = row_dict.get(col)
-                val_str_norm = str(val).lower().strip() if val is not None else ""
-                cell_content: Any = str(val) if val is not None else ""
                 td_class = f"col-{col.replace('_', '-')}"
+                display_text = str(val) if val else "N/A"
 
                 if col == "url":
                     if val:
@@ -570,6 +569,7 @@ def render_table_rows(
                             rel="noopener noreferrer",
                             title=f"Open link: {val}",
                             cls="link link-hover text-primary hover:text-primary-focus",
+                            onclick="event.stopPropagation()",
                         )
                     else:
                         cell_content = Span(
@@ -579,34 +579,53 @@ def render_table_rows(
                             ),
                             title="No URL provided",
                         )
+                elif (
+                    col in BADGE_STYLES
+                    or "classification" in col
+                    or "prediction" in col
+                ):
+                    if "classification" in col or "prediction" in col:
+                        style = BADGE_STYLES["classification"].get(
+                            val, DEFAULT_PILL_STYLE
+                        )
+                    else:
+                        style = BADGE_STYLES.get(col, {}).get(val, DEFAULT_PILL_STYLE)
 
-                if not val_str_norm:
-                    display_text = "-"
-                    style = ""
-                else:
-                    style = BADGE_STYLES.get(col, {}).get(
-                        val_str_norm, DEFAULT_PILL_STYLE
+                    if "-" in display_text:
+                        print_txt = display_text.split("-")[0].strip()
+                    else:
+                        print_txt = display_text.strip()
+
+                    cell_content = Label(
+                        print_txt,
+                        title=display_text,
+                        cls=style + "badge-sm cursor-help",
+                        onclick="event.stopPropagation()",
                     )
-                    display_text = str(val) if val else "N/A"
 
-                cell_content = Label(display_text, cls=style + " badge-sm")
+                else:
+                    if len(display_text) > 20:
+                        cell_content = display_text[:20] + "..."
+                    else:
+                        cell_content = display_text
 
                 cells.append(
                     Td(
                         cell_content,
-                        cls=f"py-2.5 px-4 border-b border-base-200/80 {td_class}",
+                        title=display_text,
+                        cls=f"py-2.5 px-4 border-b border-base-200/80 {td_class} cursor-help",
                     )
                 )
-            modal_params = {"material_id": material_id}
+            modal_url = urls.URLS[Url.show_item_details].replace(
+                "{material_id:int}", str(material_id)
+            )
             row_attrs: dict[str, Any] = {
                 "id": f"row-{material_id}",
                 "class": "hover:bg-primary/10 cursor-pointer transition-colors duration-150",
-                "hx_get": urls.URLS[Url.show_item_details].replace(
-                    r"{material_id:int}", ""
-                )  # TODO: Fix this, wrong url param: INFO:     127.0.0.1:57365 - "GET /modal/%7B%22material_id%22%3A%2026343949%7D HTTP/1.1" 404 Not Found
-                + str({**modal_params}).replace("'", '"'),  # Pass only material_id
+                "hx_get": modal_url,
                 "hx_target": "#modal-placeholder",
                 "hx_swap": "innerHTML",
+                "preload": True,
             }
 
             rows.append(Tr(*cells, **row_attrs))
@@ -751,11 +770,23 @@ def page_header_component(
     sidebar_component = Div(
         x_data="{ slideOverOpen: false }", cls="relative z-50 w-auto h-auto"
     )(
-        Button(
-            UkIcon("filter"),
-            "Filters",
-            **{"@click": "slideOverOpen=true"},
-            cls="btn btn-sm btn-outline btn-primary align-center",
+        Div(
+            fh.Button(
+                UkIcon("filter", cls="mr-1"),
+                "Filter",
+                **{"@click": "slideOverOpen=true"},
+                cls="btn btn-xs btn-primary mx-1",
+            ),
+            fh.Button(
+                UkIcon("rotate-ccw", cls="mr-1"),
+                "Reset",
+                type="button",
+                hx_post=urls.URLS[Url.data_grid],
+                hx_target="#data-grid-component",
+                hx_vals='{"action": "reset"}',
+                cls="btn btn-xs btn-warning mx-1",
+            ),
+            cls="flex flex-col items-center justify-center gap-y-2 me-2",
         ),
         Template(x_teleport="body")(
             Div(
@@ -1216,13 +1247,17 @@ def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
         return Span("N/A", cls="text-base-content/70 text-sm"), "span"
     elif isinstance(value, int | float):
         return Label(value, cls=style + " badge-sm"), "label"
-    elif col_name in BADGE_STYLES:
-        if not val_str_norm:
-            display_text = "-"
-            style = ""
+    elif col_name in BADGE_STYLES or col_name in [
+        "ml_classification",
+        "classification",
+        "manual_classification",
+        "ml_prediction",
+    ]:
+        if "classification" in col_name or "prediction" in col_name:
+            style = BADGE_STYLES["classification"].get(val_str_norm, DEFAULT_PILL_STYLE)
         else:
-            style = BADGE_STYLES.get(col_name, DEFAULT_PILL_STYLE)
-            display_text = str(val_str_norm) if val_str_norm else "N/A"
+            style = BADGE_STYLES.get(col_name, {}).get(value, DEFAULT_PILL_STYLE)
+
         return Label(display_text, cls=style + " badge-sm"), "label"
     else:
         return Span(display_text, cls="text-sm break-words"), "span"
@@ -1252,3 +1287,146 @@ def render_labelled_item(
         content_element = content_component
 
     return label_element, content_element
+
+
+def create_editable_pill_div(
+    current_value: int | str | float | None,
+    label_text: str,
+    field_name: str,
+    options_map: dict,
+    material_id: int,  # Add material_id parameter
+):
+    content_component, html_tag = render_modal_field(field_name, current_value)
+    label_el, _ = render_labelled_item(label_text, content_component, html_tag)
+    original_value_str = str(current_value) if current_value is not None else ""
+    original_style_class = str(DEFAULT_PILL_STYLE)  # Default style
+
+    # Logic to find the *actual* style class applied by render_modal_field
+    if hasattr(content_component, "attrs") and "cls" in content_component.attrs:
+        current_classes = content_component.attrs["cls"].split()
+        labelt_values = (
+            {str(lt) for lt in LabelT}
+            | {str(st) for st in BADGE_STYLES["status"].values()}
+            | {str(wt) for wt in BADGE_STYLES["workflow_status"].values()}
+        )
+        found_style = next(
+            (cls for cls in current_classes if cls in labelt_values), None
+        )
+        if found_style:
+            original_style_class = found_style
+        elif (
+            "badge-sm" not in current_classes
+            and isinstance(content_component, FT)
+            and (
+                content_component.tag == "span"
+                and "uk-label" in content_component.attrs.get("cls", "")
+            )
+        ):
+            content_component.attrs["cls"] += " badge-sm"
+
+    # --- Refined ID Assignment ---
+    component_with_id = content_component
+    target_id = f"pill-display-{field_name}"
+
+    # Check if it's an FT object with attributes
+    if isinstance(component_with_id, FT) and hasattr(component_with_id, "attrs"):
+        # Ensure attrs is a mutable dict
+        if not isinstance(component_with_id.attrs, dict):
+            component_with_id.attrs = {}
+        component_with_id.attrs["id"] = target_id
+        print(
+            f"Assigned ID '{target_id}' to existing FT component: {component_with_id.tag}"
+        )
+    elif isinstance(component_with_id, str | int | float) or component_with_id is None:
+        # If it's a simple type or None, wrap it in a Span with the ID
+        component_with_id = Span(
+            str(component_with_id) if component_with_id is not None else "",
+            id=target_id,
+        )
+        print(f"Wrapped simple content in Span with ID '{target_id}'")
+    else:
+        # Fallback: Wrap whatever it is in a Span if unsure
+        print(
+            f"Warning: Wrapping unknown component type for '{field_name}' in Span with ID '{target_id}'"
+        )
+        component_with_id = Span(component_with_id, id=target_id)
+
+    # --- End Refined ID Assignment ---
+    dropdown_items = []
+    for opt_val, opt_style_enum in options_map.items():
+        opt_style_class = (
+            str(opt_style_enum) if opt_style_enum else str(DEFAULT_PILL_STYLE)
+        )
+        js_opt_val = json.dumps(str(opt_val))
+        js_opt_text = json.dumps(str(opt_val))  # Text is usually same as value here
+        onclick_js = f"updatePill('{field_name}', {js_opt_val}, {js_opt_text}, '{opt_style_class}'); return false;"
+        htmx_vals = json.dumps(
+            {
+                "material_id": material_id,
+                "field_name": field_name,
+                "value": str(opt_val),
+            }
+        )
+        dropdown_items.append(
+            Li(
+                A(
+                    Label(opt_val, cls=f"{opt_style_class} badge-sm"),
+                    href="#",
+                    onclick=onclick_js,
+                    hx_post=urls.URLS[Url.update_single_field],
+                    hx_vals=htmx_vals,
+                    hx_swap="none",
+                    # Optional: Add indicator during request
+                    hx_indicator=f"#pill-display-{field_name}",
+                )
+            )
+        )
+
+    # --- Hidden input no longer needs data-original-* for reset logic via JS ---
+    # --- It just holds the current value for potential form submission (though not used by pills now) ---
+    # hidden_input = Input(
+    #    type="hidden",
+    #    id=f"input-{field_name}",
+    #    name=field_name,  # Keep name in case needed elsewhere
+    #    value=original_value_str,
+    #    # Remove data-original-* attributes previously used by resetModalForm for pills
+    # )
+
+    pill_container = Div(
+        component_with_id,  # The component with the ID set
+        Div(
+            Ul(*dropdown_items, cls="uk-nav uk-dropdown-nav"),
+            cls="uk-dropdown w-auto bg-base-100 p-2 shadow-lg rounded-md border border-base-300",
+            uk_drop="mode: click; pos: bottom-right; boundary: !.modal-box; flip: false",
+        ),
+        # hidden_input,
+        cls="inline-block uk-inline",
+    )
+
+    return Div(
+        label_el,
+        Div(pill_container, cls="text-right"),
+        cls="flex items-center justify-between space-x-2 mb-2",
+    )
+
+
+def create_readonly_item_div(
+    current_value: int | str | float | None,
+    label_text: str,
+    field_name: str,
+):
+    content_component, html_tag = render_modal_field(field_name, current_value)
+    label_el, content_el = render_labelled_item(label_text, content_component, html_tag)
+    is_inline = field_name in [
+        "classification",
+        "manual_classification",
+        "ml_prediction",
+        "pagecount",
+        "wordcount",
+        "picturecount",
+    ]
+    container_cls = (
+        "flex items-center justify-between space-x-2 mb-2" if is_inline else "mb-3"
+    )
+    content_wrapper_cls = "text-right" if is_inline else ""
+    return Div(label_el, Div(content_el, cls=content_wrapper_cls), cls=container_cls)
