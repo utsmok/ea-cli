@@ -5,6 +5,7 @@ Functions to retrieve data from the database.
 import json
 import traceback
 from collections.abc import Iterable
+from time import time
 from typing import Any, Literal, LiteralString
 
 import polars as pl
@@ -24,6 +25,7 @@ def retrieve_copyright_items() -> pl.DataFrame:
     Retrieve all copyright items currently in db
     returns a flat dataframe with the core fields
     """
+    full_start = time()
     global engine
     if not engine:
         engine = init_engine()
@@ -41,10 +43,14 @@ def retrieve_copyright_items() -> pl.DataFrame:
         select_cols = col_order
 
     query: str = "SELECT " + ", ".join(select_cols) + " FROM copyright_data cd"
-
+    query_start = time()
     df: pl.DataFrame = pl.read_database(
         query=query, connection=engine.connect(), infer_schema_length=None
     )
+    end = time()
+    print(f"db.retrieve.retrieve_copyright_items returned {len(df)} rows")
+    print(f"query took {end - query_start} seconds")
+    print(f"full function took {end - full_start} seconds")
     return df
 
 
