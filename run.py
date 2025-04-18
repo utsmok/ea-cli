@@ -196,7 +196,7 @@ def cli(
 
     if dashboard:
         info("Serving the easy_access dashboard.")
-        info("Once launched, it will be available at https://localhost:8000.")
+        info("Once launched, it will be available at http://localhost:8000.")
         info("Press Ctrl+C or close this terminal window to stop the server.")
         uvicorn.run(
             "easy_access.dashboard.dash:app",

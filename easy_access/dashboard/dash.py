@@ -1,6 +1,7 @@
 # dash.py
 
 import asyncio
+import json
 import traceback
 from collections import defaultdict
 from pathlib import Path
@@ -97,7 +98,9 @@ async def save_item_details(
     try:
         await store_item_changes(update_data, session.get("auth", {}))
         add_toast(session, f"Remarks for item {material_id} saved.", "success")
-        return Response(status_code=200)
+        return Response(
+            status_code=200, headers=HtmxResponseHeaders(trigger="remarksSaveSuccess")
+        )
 
     except Exception as e:
         print(f"Error saving remarks for {material_id}: {e}")
@@ -496,7 +499,7 @@ async def show_item_details(session: dict, material_id: int):
 
         # --- Cards ---
         # --- Data Entry Card ---
-        data_entry_content = Div(
+        data_entry_content = (
             # --- Pass material_id here ---
             create_editable_pill_div(
                 get_val("workflow_status"),
@@ -540,32 +543,27 @@ async def show_item_details(session: dict, material_id: int):
                     },
                 ),
                 Button(
-                    Span(
-                        Span(cls="relative flex size-3 mr-2")(
-                            Span(
-                                cls="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"
-                            ),
-                            UkIcon(
-                                "alert-triangle",
-                                cls="relative inline-flex size-3 text-red-500",
-                            ),
-                        ),
-                        id="save-indicator",
-                        cls="hidden",
-                    ),
                     "Save",
+                    Span(
+                        cls="absolute top-0 right-0 -mr-1 -mt-1 flex size-3 hidden",
+                        id="save-indicator",
+                    )(
+                        # Ping animation span
+                        Span(
+                            cls="absolute inline-flex h-full w-full animate-ping rounded-full bg-info opacity-75"
+                        ),
+                        # Visible dot span
+                        Span(cls="relative inline-flex size-3 rounded-full bg-info"),
+                    ),
                     id="modal-save-btn",
                     type="submit",
-                    cls=ButtonT.primary + " btn-sm",
+                    cls=ButtonT.primary + " btn-sm relative",
                     **{
                         ":disabled": "remarks == originalRemarks",
                         ":class": "{ 'opacity-50 cursor-not-allowed': remarks == originalRemarks }",
                         "x-init": "$watch('remarks', value => { document.getElementById('save-indicator').classList.toggle('hidden', value == originalRemarks) })",
                     },
                 ),
-            ),
-            x_data="{{ remarks: '{}', originalRemarks: '{}' }}".format(
-                get_val("remarks", ""), get_val("remarks", "")
             ),
         )
 
@@ -758,6 +756,10 @@ async def show_item_details(session: dict, material_id: int):
                         hx_include="[name='material_id'], [name='remarks']",
                         hx_target="body",
                         hx_swap="none",
+                        x_data=f"{{ remarks: {json.dumps(get_val('remarks', ''))}, originalRemarks: {json.dumps(get_val('remarks', ''))} }}",
+                        **{
+                            "@remarks-save-success.window": "originalRemarks = remarks; console.log('Remarks saved, updated originalRemarks.')"
+                        },
                     ),
                     cls="relative py-4 flex-grow overflow-y-auto",
                 ),

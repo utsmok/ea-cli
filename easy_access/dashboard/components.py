@@ -984,31 +984,11 @@ def render_pagination(
     """
     Renders pagination controls using AppState and updated HTMX attributes.
     Uses tailwind classes from pines component library to display the page counts, first/prev/next/last buttons,
-    and an array of directly selectable page numbers.
-    first we show the |< button (skip to first page)
-    then the < button (previous page)
-
-    then numbered elements:
-        - current page [highlighted]
-        - max 3 elements before and after, less if close to the edges [regular]
-        - if not already represented, the first 3 and last 3 pages [regular].
-        - ellipsis elements if there is a gap between the current pages set and the first/last pages sets
-
-    then the > button (next page)
-    finally the >| button (skip to last page)
-
-    example:
-    |< < 1 2 3 ...  18 19 20 [!21!] 22 23 24 ... 88 89 90 > >|
-
-    or:
-    |< < 1 2 3 [!4!] 5 6 7 ... 88 89 90 > >|
-
+    and an array of directly selectable page numbers surrounding the current page.
     """
 
     if total_pages <= 1:
-        return Div(cls="h-12 mb-1")  # Reserve space even if no pagination
-
-    # init all the values we'll need
+        return Div(cls="h-12 mb-1")
 
     classes = {
         "btn_enabled": "relative inline-flex items-center h-full px-3 rounded-l group hover:bg-blue-600 hover:text-white font-mono",
@@ -1021,51 +1001,32 @@ def render_pagination(
     start_index = app_state.per_page * (current_page - 1) + 1
     end_index = app_state.per_page * current_page
 
-    # Create the list of numbers to show in the pagination element.
-    # always show the current page, and 8 other pages (4 before and 4 after), and ellipses if not at the edges
-    # this means max amount of these elements is 9 numbers + 2 ellipses = 11 elements
-    # to prevent ux jumping around, we always show 11 elements
-    # if we do not need 2 ellipses, expand the numbers on the other side to compensate and get to 11 elements
-    # if we cannot get 11 elements because the total num of pages is < 9, show all pages always
-    # if a symmetric set of pages is not possible because we're at an edge, expand the other side so the total is always 11
-
     numbers_to_add: list[int] = []
 
     if total_pages <= 11:
-        # if we have less than 11 pages, show them all
         numbers_to_add = list(range(1, total_pages + 1))
     else:
-        # if we have more than 11 pages, create the pagination elements
-        # start with the current page
         numbers_to_add.append(current_page)
-        # add the previous pages
         for i in range(1, 5):
             if current_page - i > 0:
                 numbers_to_add.append(current_page - i)
-        # add the next pages
         for i in range(1, 5):
             if current_page + i <= total_pages:
                 numbers_to_add.append(current_page + i)
 
-        # now sort the list and remove duplicates
         numbers_to_add = sorted(set(numbers_to_add))
 
-        # check if we need to add ellipses
         if numbers_to_add[0] > 1:
             numbers_to_add.insert(0, "...")
         if numbers_to_add[-1] < total_pages:
             numbers_to_add.append("...")
-        # now we need to check if we have 11 elements, if not, add the missing elements
         if len(numbers_to_add) < 11:
             missing_amount = 11 - len(numbers_to_add)
-            # we need to add elements to the left or right side
-            # if we have ellipses, add to the other side
-            print(numbers_to_add)
+
             if isinstance(numbers_to_add[-1], str) or (
                 isinstance(numbers_to_add[0], int)
                 and numbers_to_add[0] <= missing_amount
             ):
-                # add to the right side
                 if numbers_to_add[-1] == "...":
                     numbers_to_add.pop()
                 start_num = numbers_to_add[-1]
@@ -1076,7 +1037,6 @@ def render_pagination(
                 isinstance(numbers_to_add[-1], int)
                 and numbers_to_add[-1] >= total_pages - missing_amount
             ):
-                # add to the left side
                 if numbers_to_add[0] == "...":
                     numbers_to_add.pop(0)
                 start_num = numbers_to_add[0]
@@ -1089,16 +1049,15 @@ def render_pagination(
         if isinstance(numbers_to_add[-1], int) and numbers_to_add[-1] < total_pages:
             numbers_to_add.append("...")
 
-    # now create the elements for the button block
     btn_block = []
     # 1. create first + prev buttons
     attr_dict = {}
     attr_dict["first"] = (
         "⏮",
         {
-            "hx_get": urls.URLS[Url.data_grid],  # Target the central data route
+            "hx_get": urls.URLS[Url.data_grid],
             "hx_target": "#data-grid-component",
-            "hx_vals": json.dumps({"page": 1}),  # Send only the page change
+            "hx_vals": json.dumps({"page": 1}),
             "role": "button",
             "cls": classes["btn_disabled"]
             if current_page <= 1
@@ -1108,11 +1067,9 @@ def render_pagination(
     attr_dict["prev"] = (
         "⏴",
         {
-            "hx_get": urls.URLS[Url.data_grid],  # Target the central data route
+            "hx_get": urls.URLS[Url.data_grid],
             "hx_target": "#data-grid-component",
-            "hx_vals": json.dumps(
-                {"page": max(1, current_page - 1)}
-            ),  # Send only the page change
+            "hx_vals": json.dumps({"page": max(1, current_page - 1)}),
             "role": "button",
             "cls": classes["btn_disabled"]
             if current_page <= 1
@@ -1243,8 +1200,7 @@ def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
                 UkIcon("unlink", cls="w-4 h-4 inline-block text-base-content/50"),
                 title="No URL provided",
             ), "span"
-    elif value is None:
-        return Span("N/A", cls="text-base-content/70 text-sm"), "span"
+
     elif isinstance(value, int | float):
         return Label(value, cls=style + " badge-sm"), "label"
     elif col_name in BADGE_STYLES or col_name in [
@@ -1259,6 +1215,8 @@ def render_modal_field(col_name: str, value: Any) -> tuple[FT, str]:
             style = BADGE_STYLES.get(col_name, {}).get(value, DEFAULT_PILL_STYLE)
 
         return Label(display_text, cls=style + " badge-sm"), "label"
+    elif value is None:
+        return Span("N/A", cls="text-base-content/70 text-sm"), "span"
     else:
         return Span(display_text, cls="text-sm break-words"), "span"
 
@@ -1298,8 +1256,6 @@ def create_editable_pill_div(
 ):
     content_component, html_tag = render_modal_field(field_name, current_value)
     label_el, _ = render_labelled_item(label_text, content_component, html_tag)
-    original_value_str = str(current_value) if current_value is not None else ""
-    original_style_class = str(DEFAULT_PILL_STYLE)  # Default style
 
     # Logic to find the *actual* style class applied by render_modal_field
     if hasattr(content_component, "attrs") and "cls" in content_component.attrs:
@@ -1312,10 +1268,9 @@ def create_editable_pill_div(
         found_style = next(
             (cls for cls in current_classes if cls in labelt_values), None
         )
-        if found_style:
-            original_style_class = found_style
-        elif (
-            "badge-sm" not in current_classes
+        if (
+            not found_style
+            and "badge-sm" not in current_classes
             and isinstance(content_component, FT)
             and (
                 content_component.tag == "span"
@@ -1324,13 +1279,10 @@ def create_editable_pill_div(
         ):
             content_component.attrs["cls"] += " badge-sm"
 
-    # --- Refined ID Assignment ---
     component_with_id = content_component
-    target_id = f"pill-display-{field_name}"
+    target_id = f"pill-display-{field_name}-{material_id}"
 
-    # Check if it's an FT object with attributes
     if isinstance(component_with_id, FT) and hasattr(component_with_id, "attrs"):
-        # Ensure attrs is a mutable dict
         if not isinstance(component_with_id.attrs, dict):
             component_with_id.attrs = {}
         component_with_id.attrs["id"] = target_id
@@ -1338,20 +1290,17 @@ def create_editable_pill_div(
             f"Assigned ID '{target_id}' to existing FT component: {component_with_id.tag}"
         )
     elif isinstance(component_with_id, str | int | float) or component_with_id is None:
-        # If it's a simple type or None, wrap it in a Span with the ID
-        component_with_id = Span(
+        component_with_id = Label(
             str(component_with_id) if component_with_id is not None else "",
             id=target_id,
         )
-        print(f"Wrapped simple content in Span with ID '{target_id}'")
+        print(f"Wrapped simple content in Label with ID '{target_id}'")
     else:
-        # Fallback: Wrap whatever it is in a Span if unsure
         print(
-            f"Warning: Wrapping unknown component type for '{field_name}' in Span with ID '{target_id}'"
+            f"Warning: Wrapping unknown component type for '{field_name}' in Label with ID '{target_id}'"
         )
-        component_with_id = Span(component_with_id, id=target_id)
+        component_with_id = Label(component_with_id, id=target_id)
 
-    # --- End Refined ID Assignment ---
     dropdown_items = []
     for opt_val, opt_style_enum in options_map.items():
         opt_style_class = (
@@ -1382,16 +1331,6 @@ def create_editable_pill_div(
             )
         )
 
-    # --- Hidden input no longer needs data-original-* for reset logic via JS ---
-    # --- It just holds the current value for potential form submission (though not used by pills now) ---
-    # hidden_input = Input(
-    #    type="hidden",
-    #    id=f"input-{field_name}",
-    #    name=field_name,  # Keep name in case needed elsewhere
-    #    value=original_value_str,
-    #    # Remove data-original-* attributes previously used by resetModalForm for pills
-    # )
-
     pill_container = Div(
         component_with_id,  # The component with the ID set
         Div(
@@ -1399,7 +1338,6 @@ def create_editable_pill_div(
             cls="uk-dropdown w-auto bg-base-100 p-2 shadow-lg rounded-md border border-base-300",
             uk_drop="mode: click; pos: bottom-right; boundary: !.modal-box; flip: false",
         ),
-        # hidden_input,
         cls="inline-block uk-inline",
     )
 
