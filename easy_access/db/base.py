@@ -7,13 +7,19 @@ from datetime import datetime
 from pathlib import Path
 
 import polars as pl
+from sqlalchemy import create_engine
 from tortoise import Tortoise
 
 from easy_access.db.models import CopyrightItem, Faculty
-from easy_access.db.retrieve import init_engine
 from easy_access.utils import File, warn
 
 db_path: Path = Path("db.sqlite3")
+
+
+def init_engine(path: str | None = None) -> None:
+    if not path:
+        path = "db.sqlite3"
+    return create_engine(f"sqlite:///{str(path)}")
 
 
 def set_db_path(path: str | Path | File) -> None:

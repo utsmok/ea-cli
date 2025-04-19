@@ -1,36 +1,6 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "bs4",
-#     "httpx",
-#     "lxml",
-#     "openpyxl",
-#     "polars",
-#     "rich",
-#     "typer",
-#     "fastexcel",
-#     "xlsxwriter",
-#     "pyyaml",
-#     "colorama",
-#     "loguru",
-#     "levenshtein",
-#     "selenium",
-#     "google-genai",
-#     "tortoise-orm[accel]",
-#     "aiometer",
-#     "pydantic",
-#     "sqlalchemy",
-#     "pikepdf",
-#     "qdrant_client",
-#     "fastembed",
-#     "xxhash",
-#     "kreuzberg",
-# ]
-# ///
-
 """
 Easy Access Sheet Toolkit
-Feb 2025
+Apr 2025
 Samuel Mok / s.mok@utwente.nl / cip@utwente.nl
 homepage: https://github.com/utsmok/ea-cli
 Note: only tested on windows systems
@@ -41,8 +11,8 @@ See readme.md for more info, and the settings.yaml example file for specific par
 
 quickstart:
 1. install uv (https://docs.astral.sh/uv/getting-started/installation/)
-2. make sure settings.yaml is present in the same dir as run.py and the contents are correct
-3. > uv run run.py --help
+2. > uv run run.py --help
+3. you'll probably see a lot of error messages, try to fix them and run again! :)
 """
 
 import asyncio
@@ -50,10 +20,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 
-from easy_access.classification.classifier_api import main
-from easy_access.classification.downloader import Downloader
-from easy_access.classification.pdf_handling import enrich_pdfs
+# from easy_access.classification.classifier_api import main
+# from easy_access.classification.downloader import Downloader
+# from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.db.ingest import load_pdfs
 from easy_access.main import EasyAccessTool
 from easy_access.settings import SETTINGS, EasyAccessSettings, Functions
@@ -70,13 +41,15 @@ cli_app = typer.Typer()
 
 
 async def download_files():
+    warn("Downloader currently disabled. Returning without downloading files.")
+    return
     info("downloading files. Will use Chrome do so.")
     warn(
         "Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing."
     )
     input("Press any key to continue...")
-    downloader = Downloader()
-    await downloader.download_pdfs(subset=None, max_amount=None)
+    # downloader = Downloader()
+    # await downloader.download_pdfs(subset=None, max_amount=None)
     cool("done downloading!")
 
 
@@ -84,14 +57,21 @@ async def enrich():
     info("Loading existing PDFs into database.")
     await load_pdfs()
     cool("done loading existing PDFs into database.")
+    warn("Enrichment of PDFs is currently disabled. Returning without enriching PDFs.")
+    return
     info("Enriching & deduplicating PDFs.")
-    await enrich_pdfs(max_pages=50, str_limit=50000)
+    # await enrich_pdfs(max_pages=50, str_limit=50000)
     cool("done enriching & deduplicating PDFs.")
 
 
 async def classify_items():
+    warn(
+        "Classification of PDFs is currently disabled. Returning without classifying PDFs."
+    )
+    return
     info("Classifying PDFS.")
-    await main()
+
+    # await main()
     cool("done classifying PDFs.")
 
 
@@ -109,6 +89,13 @@ async def run_preprocessing(download, deduplicate, classify):
 
 @cli_app.command()
 def cli(
+    dashboard: Annotated[
+        bool,
+        typer.Option(
+            help="Serves the easy_access dashboard. Ignores all other parameters.",
+            rich_help_panel="Frontend",
+        ),
+    ] = False,
     do: Annotated[
         Functions,
         typer.Option(
@@ -206,6 +193,20 @@ def cli(
     ] = False,
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
+
+    if dashboard:
+        info("Serving the easy_access dashboard.")
+        info("Once launched, it will be available at http://localhost:8000.")
+        info("Press Ctrl+C or close this terminal window to stop the server.")
+        uvicorn.run(
+            "easy_access.dashboard.dash:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True,
+        )
+
+        cool("Done serving the dashboard. Exiting tool!")
+        raise typer.Exit(code=0)
 
     if export:
         info("Creating export sheets.")

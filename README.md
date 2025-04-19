@@ -1,4 +1,7 @@
 # Easy Access Sheet Toolkit
+*April 2025*
+Note: This project has been significantly updated, changed, and expanded in the meantime, but is not in a 'shareable' state yet. Once it is (if it is...) I'll update the README... someday!
+
 *February 2025*
 
 Note: only tested on windows systems (actually, only tested on my personal computer with very specific data and settings)

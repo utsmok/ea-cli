@@ -140,6 +140,7 @@ async def update_copyright_items(
     data: pl.DataFrame | list[dict],
     update_relations: bool = True,
     overwrite: bool = False,
+    user_info: dict | None = None,
 ) -> None:
     """
     Update the db with copyrightitems from the dataframe (or pre-filtered list of dicts from a df).
@@ -391,6 +392,7 @@ async def update_copyright_items(
                     "material_id": new_item.get("material_id"),
                     "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
+
                 print(f"now in overwrite function for {new_item.get('material_id')}")
                 for k in changeable_fields | added_fields:
                     print(f"checking field {k}")
@@ -459,6 +461,9 @@ async def update_copyright_items(
         info(f"Updating {len(changelist)} items in db for fields {changed_fields}.")
         info(f"Updating {len(updates)} changelog items in db.")
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)
+        if user_info:
+            changes.update({"modified_by": user_info.get("email")})
+            print(f"items modified by {user_info.get('email')}")
         await ItemUpdate.bulk_create(
             [
                 ItemUpdate(change_details=changes, material_id=mat_id)
