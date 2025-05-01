@@ -1,27 +1,31 @@
-import pathlib
+import contextlib
 import os
+import pathlib
 import shutil
-from datetime import datetime
 import time
-from rich.console import Console
+from datetime import datetime
+
 from loguru import logger
+from rich.console import Console
 
 # rich Console + overload the print function
 cons = Console(emoji=True, markup=True)
 print: callable = cons.print
 
+
 def info(text: str) -> None:
     logger.info(text)
 
+
 def warn(text: str) -> None:
     logger.warning(text)
+
 
 def cool(text: str) -> None:
     logger.success(text)
 
 
-
-def determine_course_code(code: str, name: str) -> set[str|None]:
+def determine_course_code(code: str, name: str) -> set[str | None]:
     """
     For a given course code and name (cols of a copyright item; canvas data), determine the correct osiris course code(s).
     Returns a set of course codes; if no valid course code could be found it will be empty.
@@ -82,15 +86,13 @@ def determine_course_code(code: str, name: str) -> set[str|None]:
                     --> return empty list
 
     """
+
     def is_valid_course_code(check_code) -> bool:
         try:
             check_code = str(check_code).strip()
 
-            if check_code.isdigit() and len(check_code) >= 8:
-                return True
-            else:
-                return False
-        except Exception as e:
+            return bool(check_code.isdigit() and len(check_code) >= 8)
+        except Exception:
             return False
 
     tempresults = set()
@@ -100,9 +102,13 @@ def determine_course_code(code: str, name: str) -> set[str|None]:
     try:
         first_try = code.split("-")[1].strip()
         tempresults.add(first_try) if is_valid_course_code(first_try) else None
-        if (';' in name) and ('(' in name):
+        if (";" in name) and ("(" in name):
             second_try = name.split(";")[1].split("(")[0]
-            [tempresults.add(c.strip()) for c in second_try.split(",") if is_valid_course_code(c)]
+            [
+                tempresults.add(c.strip())
+                for c in second_try.split(",")
+                if is_valid_course_code(c)
+            ]
 
         if not tempresults:
             warn(f"No valid course code found for {code} - {name}")
@@ -114,9 +120,11 @@ def determine_course_code(code: str, name: str) -> set[str|None]:
         warn(f"Error in determine_course_code for input: code={code}, name={name}: {e}")
         return tempresults
 
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Classes for handling files and directories.
 # ----------------------------------------------------------------------------------------------------------------------
+
 
 class Directory:
     """
@@ -124,7 +132,9 @@ class Directory:
     Init with an absolute path, or a path relative to the current working directory.
     If the dir does not yet exist, it will be created. Disable this by setting the 'create_dir' parameter to False.
     """
+
     full: pathlib.Path
+
     def __init__(self, path: str | pathlib.Path, create_dir: bool = True) -> None:
         if isinstance(path, pathlib.Path):
             self.input_path_str = str(object=path)
@@ -162,7 +172,9 @@ class Directory:
         Gets all files in the dir as a list of File objects.
         """
         return [
-            File(path=self.full / file) for file in self.full.iterdir() if file.is_file()
+            File(path=self.full / file)
+            for file in self.full.iterdir()
+            if file.is_file()
         ]
 
     @property
@@ -171,14 +183,19 @@ class Directory:
         Recursively gets all files in the dir, so including files in subdirs, as a list of File objects.
         """
         return [
-            File(path=self.full / file) for file in self.full.rglob(pattern="*") if file.is_file()
+            File(path=self.full / file)
+            for file in self.full.rglob(pattern="*")
+            if file.is_file()
         ]
+
     @property
     def name(self) -> str:
         return self.full.name
+
     @property
     def created(self) -> datetime:
         return datetime.strptime(time.ctime(self.full.stat().st_birthtime), "%c")
+
     @property
     def dirs(self, r: bool = False) -> list["Directory"]:
         """
@@ -186,11 +203,19 @@ class Directory:
         If r is set to True, it will return all children dirs recursively.
         """
         if not r:
-            return [Directory(path=str(d), create_dir=False) for d in self.full.iterdir() if d.is_dir()]
+            return [
+                Directory(path=str(d), create_dir=False)
+                for d in self.full.iterdir()
+                if d.is_dir()
+            ]
         if r:
-            return [Directory(path=str(d), create_dir=False) for d in self.full.rglob(pattern="*") if d.is_dir()]
+            return [
+                Directory(path=str(d), create_dir=False)
+                for d in self.full.rglob(pattern="*")
+                if d.is_dir()
+            ]
 
-    def newest_file(self, file_type:list[str]|str|None = None) -> "File":
+    def newest_file(self, file_type: list[str] | str | None = None) -> "File":
         """
         Returns the newest file in the dir as a File object.
         Parameters:
@@ -201,11 +226,15 @@ class Directory:
         if file_type:
             if isinstance(file_type, str):
                 file_type = [file_type]
-            all_files = [file for file in all_files if file.extension in file_type if 'overview' not in file.name]
+            all_files = [
+                file
+                for file in all_files
+                if file.extension in file_type
+                if "overview" not in file.name
+            ]
         if not all_files:
             return None
         return max(all_files, key=lambda x: x.created)
-
 
     @property
     def newest_file_r(self) -> str:
@@ -224,15 +253,13 @@ class Directory:
         return self.full.is_dir()
 
     def create(self) -> None:
-        try:
+        with contextlib.suppress(FileExistsError):
             self.full.mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            pass
 
     def delete(self) -> None:
         shutil.rmtree(self.full)
 
-    def copy(self, target: pathlib.Path | str, overwrite:bool = True) -> None:
+    def copy(self, target: pathlib.Path | str, overwrite: bool = True) -> None:
         def copy_only_new(src, dst, *, follow_symlinks=True):
             if dst.exists():
                 return dst
@@ -244,10 +271,15 @@ class Directory:
 
         info(text=f"Copying {self.full} to {target}")
         if not overwrite:
-            info(text='Overwrite set to False, copying only new files.')
-            shutil.copytree(src=self.full, dst=target, dirs_exist_ok=True, copy_function=copy_only_new)
+            info(text="Overwrite set to False, copying only new files.")
+            shutil.copytree(
+                src=self.full,
+                dst=target,
+                dirs_exist_ok=True,
+                copy_function=copy_only_new,
+            )
         else:
-            info(text='Overwrite set to True, copying all files.')
+            info(text="Overwrite set to True, copying all files.")
             shutil.copytree(src=self.full, dst=target, dirs_exist_ok=True)
 
     def rename_latest_file(self, new_name: str) -> None:
@@ -264,6 +296,7 @@ class Directory:
     def __repr__(self) -> str:
         return f"DirPath('{self.input_path_str}') -> {self.full}"
 
+
 class File:
     """
     Simple class for files + operations
@@ -278,7 +311,7 @@ class File:
     def __init__(self, path: str | pathlib.Path) -> None:
         self._path_init_str = str(object=path)
 
-        assert isinstance(path, str) or isinstance(path, pathlib.Path)
+        assert isinstance(path, str | pathlib.Path)
 
         if isinstance(path, pathlib.Path):
             self._path: pathlib.Path = path
@@ -288,7 +321,9 @@ class File:
         elif isinstance(path, str):
             if "/" in path:
                 self._name = path.rsplit(sep="/", maxsplit=1)[-1]
-                self._dir = Directory(path=path.rsplit(sep="/", maxsplit=1)[0], create_dir=True)
+                self._dir = Directory(
+                    path=path.rsplit(sep="/", maxsplit=1)[0], create_dir=True
+                )
             else:
                 self._name = path
                 self._dir = Directory(path=os.getcwd())
@@ -331,22 +366,31 @@ class File:
     @property
     def size(self) -> int:
         return self._path.stat().st_size
+
     def copy(self, new_path: str) -> "File":
         shutil.copy(src=self._path, dst=new_path)
         return File(path=new_path)
 
     def move(self, new_path: str | pathlib.Path) -> "File":
-        '''
+        """
         Moves the file to the indicated new path.
         If the
-        '''
+        """
         if isinstance(new_path, str):
             new_path = pathlib.Path(new_path)
         if new_path.exists():
-            if '.' in str(object=new_path):
-                new_path = pathlib.Path(str(object=new_path).split(sep=".")[0]+"_" +str(object=int(time.time()))+'.'+str(object=new_path).split(sep=".")[1])
+            if "." in str(object=new_path):
+                new_path = pathlib.Path(
+                    str(object=new_path).split(sep=".")[0]
+                    + "_"
+                    + str(object=int(time.time()))
+                    + "."
+                    + str(object=new_path).split(sep=".")[1]
+                )
             else:
-                new_path = pathlib.Path(str(object=new_path)+"_" +str(object=int(x=time.time())))
+                new_path = pathlib.Path(
+                    str(object=new_path) + "_" + str(object=int(x=time.time()))
+                )
         shutil.move(src=self._path, dst=str(object=new_path.absolute()))
         return File(path=new_path)
 

@@ -26,11 +26,7 @@ def configure_logger() -> None:
 
     def console_formatter(record) -> Literal["<level>{level} |> </level>{message}\n"]:
         level: str = record["level"].name
-        if level == "INFO":
-            return "<level>{level} |> </level>{message}\n"
-        elif level == "WARNING":
-            return "<level>{level} |> </level>{message}\n"
-        elif level == "SUCCESS":  # We'll use SUCCESS level for 'cool' messages
+        if level == "INFO" or level == "WARNING" or level == "SUCCESS":
             return "<level>{level} |> </level>{message}\n"
         else:
             return "<level>{level} |> </level>{message}\n"
@@ -138,7 +134,7 @@ class Functions(str, Enum):
 class EasyAccessSettings:
     """Configuration settings for the Easy Access Tool."""
 
-    functions: Functions
+    export: bool = False
     only_changes: bool = True
     refresh_osiris_data: bool = False
     only_retrieve_missing_osiris_data: bool = False
@@ -146,6 +142,7 @@ class EasyAccessSettings:
     enrich_with_osiris_data: bool = True
     dirs: dict[DirSetting, Directory] = field(default_factory=dict)
     disable_writes: bool = False
+    faculty: str | None = None
 
     @classmethod
     def from_env(cls, **kwargs) -> "EasyAccessSettings":
@@ -292,7 +289,7 @@ class Settings:
     def load(self) -> None:
         """Load the settings from the settings.yaml file"""
         try:
-            with open(file=self.settings_file.path, mode="r", encoding="utf-8") as f:
+            with open(file=self.settings_file.path, encoding="utf-8") as f:
                 self.raw_settings = yaml.load(stream=f, Loader=yaml.FullLoader)
         except Exception as e:
             logger.error(f"Error while loading settings from {self.settings_file}: {e}")
@@ -516,7 +513,7 @@ class SampleSettings:
     def load(self) -> None:
         """Load the settings from the settings.yaml file"""
         try:
-            with open(file=self.settings_file.path, mode="r", encoding="utf-8") as f:
+            with open(file=self.settings_file.path, encoding="utf-8") as f:
                 self.raw_settings = yaml.load(stream=f, Loader=yaml.FullLoader)
         except Exception as e:
             logger.error(f"Error while loading settings from {self.settings_file}: {e}")

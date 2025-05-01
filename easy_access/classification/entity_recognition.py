@@ -16,6 +16,13 @@ from easy_access.db.retrieve import retrieve_osiris_data
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import warn
 
+"""
+This module uses GLiNER and regex to identify entities in text files.
+Extract text from the pdfs first using pdf_handling module, then use this to extract entities and save them to json files.
+The text is also annotated with HTML <mark> tags for the entities found to display them in the frontend.
+
+"""
+
 FILE_DIR = SETTINGS.dirs.get(DirSetting.PDF_DOWNLOADS)
 
 MODEL = GLiNER.from_pretrained(
@@ -290,7 +297,7 @@ def regex_extraction(
         "orcid",
     )
 
-    # TODO: add specific names/entities like utwente, universiteit twente, employee names, publisher names ... etc
+    # TODO: add more specific names/entities like utwente, universiteit twente, employee names, publisher names ... etc
     keyword_dict = {
         "University of Twente": [
             "universiteit twente",

@@ -7,6 +7,13 @@ from kreuzberg import ExtractionConfig, PSMMode, TesseractConfig, extract_file
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import File
 
+"""
+This module uses pymupdf4llm to parse pdfs in SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
+also tesseract / kreuzberg
+
+all tests -- I don't think this is the way to go anymore, move to paddle for ocr and the existing kreuzberg functions in pdf_handling
+"""
+
 pdf_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
 
 

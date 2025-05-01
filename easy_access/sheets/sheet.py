@@ -1,13 +1,11 @@
-from copy import copy
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from itertools import batched
 from pathlib import Path
 
 import openpyxl
 import openpyxl.worksheet
 import openpyxl.worksheet.datavalidation
-import openpyxl.worksheet.table
 import openpyxl.worksheet.worksheet
 import polars as pl
 import typer
@@ -20,7 +18,7 @@ from easy_access.db.retrieve import (
     retrieve_llm_classifications,
 )
 from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting
-from easy_access.utils import File, info, warn
+from easy_access.utils import Directory, File, info, warn
 
 
 def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
@@ -123,10 +121,7 @@ class DataEntrySheet:
 
         for col in self.cols:
             colnum += 1
-            if col.new_name:
-                col_name = col.new_name
-            else:
-                col_name = col.name
+            col_name = col.new_name if col.new_name else col.name
             if col.is_new:
                 # Check if col is truly new first by retrieving the data from the dataframe
                 # fill empty cells with default value if the col exists
@@ -248,7 +243,11 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     sheet.add_data(data)
     info(f"Added data entry sheet to {file.name}")
     llm_classification_data = enrich_with_llm_classifications(data)
-    if isinstance(llm_classification_data, pl.DataFrame):
+    if "overview" in file.path.stem:
+        # only add the llm classification data if the file is an overview file
+        llm_classification_data = enrich_with_llm_classifications(data)
+        if llm_classification_data.is_empty():
+            return style_iter
         llm_sheet_path = (
             file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
         )
@@ -306,7 +305,11 @@ def read_export_sheets() -> pl.DataFrame:
     return returndata
 
 
-def create_export_sheet(data: pl.DataFrame | None = None, print_overview: bool = True):
+def create_export_sheet(
+    data: pl.DataFrame | None = None,
+    faculty: str | None = None,
+    print_overview: bool = True,
+):
     """
         Create an export sheet to import back into CopyRight tool.
         Specifications:
@@ -320,139 +323,45 @@ def create_export_sheet(data: pl.DataFrame | None = None, print_overview: bool =
             Filename                --	Filename	            --  n/a
             Manual_classification   --	Manual classification   --  Classification of the item
             Manual_identifier       --	Manual identifier	    --  e.g. for ISBN/DOI/...
-            Owner                   --	Owner	                --  E-mail adress of whomever classified the item aanpasser
+            Auditor                 --	Auditor	                --  E-mail adress of whomever classified the item
             Remarks                 --	Remarks	                --  Free text field
             Scope                   --	Scope                   --  Pick between:  Altijd / Eenmaal / DezePeriode
 
 
         Also store a full details sheet with all the data available for each entry.
-
-        Returns a list of material_ids for the items that were exported, for further processing.
-
-        #TODO: Determine if for 'Owner' the actual 'Owner' field in copyright data should be used, or if it should be 'auditor' instead??
-
     """
     COL_NAMES = [
         "material_id",
         "filename",
         "manual_classification",
-        "owner",
+        "auditor",
         "remarks",
         "scope",
     ]
     TODAY: str = datetime.now().strftime(format="%Y-%m-%d_%H-%M-%S")
-    if False:
-        # previous implementation
-        data = data.filter(pl.col(name="workflow_status") == "Done")
-        full_data: pl.DataFrame = copy(x=data)
+    if not isinstance(data, pl.DataFrame):
+        data = retrieve_copyright_items()
+        if faculty:
+            data = data.filter(pl.col("faculty") == faculty)
 
-        data = data.select([col for col in COL_NAMES if col in data.columns])
-        data = data.rename(
-            mapping={col: col.replace("_", "").lower() for col in data.columns}
-        )
-
-        existing_data: pl.DataFrame = read_export_sheets()
-        if not existing_data.is_empty():
-            data = data.join(other=existing_data, on="materialid", how="anti")
-
-        if data.is_empty():
-            warn(text="No new data found to export!")
-
-        full_data = full_data.filter(
-            (pl.col(name="material_id").is_in(other=data["materialid"]))
-            & (pl.col(name="workflow_status") == "Done")
-        )
-        material_ids_exported: list[str] = data["Material id"].to_list()
-
-        if not print_overview:
-            return material_ids_exported
-
-        # messy code to print some data on what is being exported
-        overview = {
-            "Number of items per faculty": full_data.group_by("faculty")
-            .len()
-            .sort("len", descending=True)
-            .to_dicts(),
-            "Number of items per classification": full_data.group_by(
-                "manual_classification"
-            )
-            .len()
-            .sort("len", descending=True)
-            .to_dicts(),
-            "Number of items per ml_prediction": full_data.group_by("ml_prediction")
-            .len()
-            .sort("len", descending=True)
-            .to_dicts(),
-            "man_class per ml_pred": full_data.group_by(
-                ["ml_prediction", "manual_classification"]
-            )
-            .agg(pl.len().alias(name="len"))
-            .sort("ml_prediction", "len", descending=[False, True])
-            .to_dicts(),
-        }
-        print(overview)
-        info(text=f"Creating export sheet with {data.shape[0]} rows.")
-        print()
-        print()
-        for key, value in overview.items():
-            print(
-                "    -------------------------------------------------------------------"
-            )
-            print(f"                                   {key}")
-            print(
-                "    -------------------------------------------------------------------"
-            )
-            if "man_class per ml_pred" in key:
-                batch_num = 3
-
-            else:
-                batch_num = 2
-            maxgap: int = max(
-                [max([len(str(object=val)) for val in item.values()]) for item in value]
-            )
-            if batch_num == 3:
-                maxgap = maxgap * 2
-            for n, item in enumerate(value):
-                item: dict[str, int] = item
-                if n == 0:
-                    if batch_num == 3:
-                        print(
-                            f"      {list(item.keys())[0]}:{list(item.keys())[1]}{' ' * (maxgap - len(list(item.keys())[0]) - len(list(item.keys())[1]))} |     {list(item.keys())[2]}"
-                        )
-                        print(
-                            f" {'-' * (len(str(list(item.keys())[0]) + ':' + str(list(item.keys())[1])) + 5)}{'-' * (maxgap - len(str(list(item.keys())[0]) + ':' + str(list(item.keys())[1])) + 4)}|{'-' * (len(list(item.keys())[2]) + 10)}"
-                        )
-
-                    else:
-                        print(
-                            f"      {list(item.keys())[0]}{' ' * (maxgap - len(list(item.keys())[0]) - 3)} |     {list(item.keys())[1]}"
-                        )
-                        print(
-                            f" {'-' * (len(list(item.keys())[0]) + 5)}{'-' * (maxgap - len(list(item.keys())[0]) + 4)}|{'-' * (len(list(item.keys())[1]) + 10)}"
-                        )
-                for results in batched(item.items(), batch_num):
-                    if batch_num != 3:
-                        key = results[0][1]
-                        value = results[1][1]
-                    else:
-                        key = f"{results[0][1]} --> {results[1][1]}"
-                        value = results[2][1]
-                    print(f"      {key}{' ' * (maxgap - len(key) + 3)} |     {value}")
-
-    data = retrieve_copyright_items()
-    # get all data from db
-    # filter out only 'Done' items (?)
-    # write to the two excel files with different sets of cols
-    export_file_path: Path = (
-        SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full
-        / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
-    )
-    full_details_file_path: Path = (
-        SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full
-        / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
-    )
-    info(f"Exporting data to {export_file_path} and {full_details_file_path}")
     data = data.filter(pl.col(name="workflow_status") == "Done")
+    if data.is_empty():
+        warn("No data to export")
+        return
+    if not faculty:
+        dir = Directory(SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full)
+    else:
+        dir = Directory(SETTINGS.dirs[DirSetting.EXPORT_TO_SURF].full / faculty)
+
+    export_file_path: Path = (
+        dir.full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
+    )
+    full_details_file_path = (
+        dir.full
+        / f"utwente__{TODAY}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
+    )
+
+    info(f"Exporting data to {export_file_path} and {full_details_file_path}")
     data.select(COL_NAMES).write_excel(export_file_path)
 
     # store formatted / styled export file with all details
@@ -468,7 +377,8 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     select only the relevant columns
     return the joined dataframe
     """
-
+    warn("Enriching data with llm classification data currently disabled")
+    return pl.DataFrame()
     llm_data = retrieve_llm_classifications(
         selected_material_ids=data.select("material_id")
         .unique("material_id")
@@ -519,3 +429,85 @@ def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
     if missing_cols:
         warn(f"Missing expected columns in llm classification data: {missing_cols}")
     return joined_data.select(col_order)
+
+
+def retrieve_all_classifications() -> pl.DataFrame:
+    """
+    -> read all .json files in script_data / classifications /
+    -> each json file has name {material_id}_.......json
+    -> open each json, use key as colname, contents as values, add material_id col with material_id from filename as value
+    -> if a json is not found, check if a .replace file is present --> should have format {input_mat_id}_{replacement_mat_id}.replace
+        -> if a .replace file exists, read the replacement mat_id instead and add that row data
+    -> return as dataframe
+    """
+    all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
+    all_jsons = [
+        file
+        for file in all_files
+        if all(
+            [
+                file.extension == ".json",
+                "_" not in file.name,
+                file.name.rstrip(".json").isdigit(),
+            ]
+        )
+    ]
+    all_replacements = [
+        file.name.replace(".replace", "")
+        for file in all_files
+        if file.extension == ".replace"
+    ]
+    info(
+        f"Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full}"
+    )
+    # rename all jsons to {material_id}.json --> split filename on _ and take first part
+
+    # all_jsons = [file.rename(file.name.split("_")[0] + ".json") for file in all_jsons if '_' in file.name]
+    # all_files = Directory(SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full).files
+    # all_jsons = [file for file in all_files if file.extension == ".json"]
+    # read all jsons
+
+    data: dict[str, dict] = {}
+
+    for file in all_jsons:
+        with open(file.path, encoding="utf-8", errors="replace") as f:
+            read_str = f.read()
+            try:
+                data[file.name.replace(".json", "")] = json.loads(read_str)
+            except json.JSONDecodeError:
+                continue
+
+    final_data = []
+    final_data_dict = {}
+    for mat_id, mat_data in data.items():
+        if not str(mat_id).isdigit():
+            warn(f"Skipping llm data for {mat_id} as it is not a valid material_id")
+            continue
+        mat_id = int(mat_id)
+        tmp = {}
+        for key, value in mat_data.items():
+            if isinstance(value, list):
+                value = "\n".join(value)
+            if not value:
+                value = None
+            tmp[key + "_llm"] = value
+        tmp["material_id"] = mat_id
+        final_data.append(tmp)
+        final_data_dict[mat_id] = tmp
+
+    for replace in all_replacements:
+        old, new = replace.split("_")
+        if not old.isdigit() or not new.isdigit():
+            warn(
+                f"Skipping replacement file {replace} as it on or both material_ids are not valid: {old}, {new}"
+            )
+            continue
+        old, new = int(old), int(new)
+        if old not in final_data_dict:
+            if new not in final_data_dict:
+                continue
+            replace_data = final_data_dict[new]
+            replace_data["material_id"] = old
+            final_data.append(replace_data)
+
+    return pl.from_dicts(final_data, infer_schema_length=None)

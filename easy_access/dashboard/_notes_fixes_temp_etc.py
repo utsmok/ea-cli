@@ -1,4 +1,4 @@
-# This file contains old / temp / misc code that is not used (directly) in the main codebase.
+# This file contains old / temp / misc code that is not used (directly) in the main code for the frontend.
 # this will eventually be removed, for now it's something like a recycling bin
 
 

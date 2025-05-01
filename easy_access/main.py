@@ -12,7 +12,6 @@ from easy_access.settings import (
     SETTINGS,
     DirSetting,
     EasyAccessSettings,
-    Functions,
 )
 from easy_access.sheets.analysis import create_faculty_overviews
 from easy_access.sheets.enrichment import update_osiris_data
@@ -37,34 +36,18 @@ class EasyAccessTool:
 
     def __init__(self, settings: EasyAccessSettings) -> None:
         """
-        Parameters:
-            setting:  str | None
-                Pick which functions to run when self.run() is called. If no argument is passed, it will run all functions.
-                pick from one of the presets below:
-                    'none' -> don't run any functions
-                    'all' -> run all functions
-                    'new_data' -> read in new data, process it, create new faculty and all itemssheets
-                    'read_sheets' -> read in faculty sheet data, process, create import sheet
-            dirs: dict[str,str] | None
-                A dict containing the str path to the directories to use. If not provided, it will use the default dirs from settings.env.
-            only_changes: bool = True
-                True (default): only add items that have been changed to the created sheets
-                False: add all items from the CopyRight export to the created sheets
-            other_sheets: list[str] | None
-                A list of paths to additional .xlsx files to ingest instead the raw data from CopyRight.
+        Parameter:
+            settings: EasyAccessSettings object containing all the settings for the script.
         """
 
         self.settings = settings
         self.functions: list[callable] = []
         self.dirs = settings.dirs
-
-        # Initialize data structures
+        self.disable_writes = settings.disable_writes
         self.copyright_data = pl.DataFrame()
         self.mat_ids_on_disk = set()
 
-        # Initialize other attributes
         self.only_changes = settings.only_changes
-        self.disable_writes = settings.disable_writes
         self.refresh_osiris_data = settings.refresh_osiris_data
         self.enrich_with_osiris_data = settings.enrich_with_osiris_data
         self.only_retrieve_missing_osiris_data = (
@@ -72,19 +55,14 @@ class EasyAccessTool:
         )
         self.style_iter = 2
 
-        # Set functions to run
-        self.set_functions(settings.functions)
+        self.set_functions(settings.export)
 
-    def set_functions(self, functions: Functions | None) -> None:
+    def set_functions(self, export: bool) -> None:
         """
-        Sets the functions to run based on the input parameter 'functions'.
+        Sets the functions to run based on the input parameter 'export'.
         stores it in self.settings as a list of functions to run.
-        Returns None.
         """
-        if functions is None:
-            return
 
-        # Common functions
         self.functions.extend(
             [
                 self.process_raw_copyright_data,
@@ -94,8 +72,7 @@ class EasyAccessTool:
             ]
         )
 
-        # exclusive for 'Both'
-        if functions == Functions.both:
+        if export:
             self.functions.extend([self.create_export_sheet])
 
     def run(self) -> None:
@@ -153,6 +130,10 @@ class EasyAccessTool:
             .sort()
             .to_list()
         )
+        if self.settings.faculty:
+            # only include data for the given selected faculty
+            info(f"Selected single faculty: {self.settings.faculty}")
+            self.faculties = [self.settings.faculty]
 
         # determine which material_ids are already on stored in the faculty sheets
         updated_items, mat_ids = asyncio.get_event_loop().run_until_complete(
@@ -286,7 +267,6 @@ class EasyAccessTool:
         update_df: pl.DataFrame = pl.DataFrame()
         for faculty in self.faculties:
             # get all .xlsx files except llm_classification files
-            # TODO: decide if we want to include overview xlsx files here, or skip them (i.e. can users add data to the overview files, or should they stick to the weekly sheets?)
             fac_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
             files = fac_dir.files_r
             files = [
@@ -339,6 +319,8 @@ class EasyAccessTool:
                 f"Sending {update_df.shape[0]} items from faculty sheets to the database for updating."
             )
             await update_copyright_items(update_df)
+            info(f"Returning {len(material_ids)} material_ids from faculty sheets.")
+
             return (True, material_ids)
         info("No items to update based on faculty sheet contents.")
         return (False, material_ids)
@@ -548,34 +530,8 @@ class EasyAccessTool:
         )
 
     def create_export_sheet(self) -> None:
-        # TODO: change to retrieve data from db first
-        warn("this function needs updates to work properly, returning for now.")
-        return
-        material_ids: list[str] = create_export_sheet(data=self.import_sheet_data)
-        if material_ids:
-            info(f"Updating export status for {len(material_ids)} material ids.")
-            warn("NOT YET IMPLEMENTED")
-            item_data: pl.DataFrame = self.import_sheet_data.filter(
-                pl.col(name="material_id").is_in(other=material_ids)
-            )
-
-            # group by faculty
-            item_data_per_faculty: dict[str, pl.DataFrame] = {
-                faculty: item_data.filter(pl.col(name="faculty") == faculty)
-                for faculty in item_data.select(pl.col(name="faculty"))
-                .unique()
-                .to_series()
-                .to_list()
-            }
-            for faculty, data in item_data_per_faculty.items():
-                # for each file in the faculty dir, open it
-                # read the data
-                # if the material_id is in the data, add col 'exported_on' with the current date (YYYY-MM-DD)
-                # save the file
-                info(f"Updating export status for {faculty}")
-                print(data)
-                warn("NOT YET IMPLEMENTED")
-
-            # once done, run 'update_export_sheets' to create/update the export sheets for each faculty
-            # these sheets show all the exported item for that faculty
-            # items in these sheets should be removed from the overview sheets of that faculty
+        for faculty in self.faculties:
+            if not faculty or faculty == "" or faculty == "Unmapped":
+                continue
+            info(f"creating export sheet for {faculty}")
+            create_export_sheet(faculty=faculty)

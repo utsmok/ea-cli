@@ -91,7 +91,7 @@ Department = Enum(
     "Department",
     {
         department: department
-        for department in SETTINGS.university_settings.department_mapping.keys()
+        for department in SETTINGS.university_settings.department_mapping
     },
 )
 
@@ -451,11 +451,11 @@ class PDF(Model, TimestampMixin):
         """
         now = datetime.now().timestamp()
         if self.file_modification_date:
-            return int((now - self.file_modification_date.timestamp()))
+            return int(now - self.file_modification_date.timestamp())
         elif self.file_creation_date:
-            return int((now - self.file_creation_date.timestamp()))
+            return int(now - self.file_creation_date.timestamp())
         else:
-            return int((now - self.modified_at.timestamp()))
+            return int(now - self.modified_at.timestamp())
 
     def as_file(self) -> File:
         return File(self.path)

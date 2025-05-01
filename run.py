@@ -15,7 +15,6 @@ quickstart:
 3. you'll probably see a lot of error messages, try to fix them and run again! :)
 """
 
-import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -25,9 +24,8 @@ import uvicorn
 # from easy_access.classification.classifier_api import main
 # from easy_access.classification.downloader import Downloader
 # from easy_access.classification.pdf_handling import enrich_pdfs
-from easy_access.db.ingest import load_pdfs
 from easy_access.main import EasyAccessTool
-from easy_access.settings import SETTINGS, EasyAccessSettings, Functions
+from easy_access.settings import SETTINGS, EasyAccessSettings
 from easy_access.sheets.backup import (
     BackupFlag,
     Backupper,
@@ -40,53 +38,6 @@ from easy_access.utils import cool, info, warn
 cli_app = typer.Typer()
 
 
-async def download_files():
-    warn("Downloader currently disabled. Returning without downloading files.")
-    return
-    info("downloading files. Will use Chrome do so.")
-    warn(
-        "Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing."
-    )
-    input("Press any key to continue...")
-    # downloader = Downloader()
-    # await downloader.download_pdfs(subset=None, max_amount=None)
-    cool("done downloading!")
-
-
-async def enrich():
-    info("Loading existing PDFs into database.")
-    await load_pdfs()
-    cool("done loading existing PDFs into database.")
-    warn("Enrichment of PDFs is currently disabled. Returning without enriching PDFs.")
-    return
-    info("Enriching & deduplicating PDFs.")
-    # await enrich_pdfs(max_pages=50, str_limit=50000)
-    cool("done enriching & deduplicating PDFs.")
-
-
-async def classify_items():
-    warn(
-        "Classification of PDFs is currently disabled. Returning without classifying PDFs."
-    )
-    return
-    info("Classifying PDFS.")
-
-    # await main()
-    cool("done classifying PDFs.")
-
-
-async def run_preprocessing(download, deduplicate, classify):
-    info(
-        "Running preprocessing steps: download files, deduplication, and classification."
-    )
-    if download:
-        await download_files()
-    if deduplicate:
-        await enrich()
-    if classify:
-        await classify_items()
-
-
 @cli_app.command()
 def cli(
     dashboard: Annotated[
@@ -96,14 +47,14 @@ def cli(
             rich_help_panel="Frontend",
         ),
     ] = False,
-    do: Annotated[
-        Functions,
+    export: Annotated[
+        bool,
         typer.Option(
             case_sensitive=False,
-            help="Which tool to run: read in new data, export current data, or both.",
+            help="Also create export sheets?",
             rich_help_panel="Functions",
         ),
-    ] = "read",
+    ] = False,
     changes: Annotated[
         bool,
         typer.Option(
@@ -184,13 +135,13 @@ def cli(
             rich_help_panel="Enrichment",
         ),
     ] = False,
-    export: Annotated[
-        bool,
+    single_faculty: Annotated[
+        str | None,
         typer.Option(
-            help="Create export sheets for data ingestion.",
+            help="Only run the tool for a single faculty. use the faculty abbreviation as the parameter (e.g. 'BMS').",
             rich_help_panel="Functions",
         ),
-    ] = False,
+    ] = None,
 ) -> None:
     """Easy Access toolkit for managing faculty sheet data."""
 
@@ -209,8 +160,12 @@ def cli(
         raise typer.Exit(code=0)
 
     if export:
-        info("Creating export sheets.")
-        create_export_sheet()
+        if single_faculty:
+            info(f"Exporting data for faculty: {single_faculty}")
+            create_export_sheet(faculty=single_faculty)
+        else:
+            info("Creating export sheets.")
+            create_export_sheet()
         cool("Done creating export sheets. Exiting tool!")
         raise typer.Exit(code=0)
     backupper = Backupper()
@@ -257,24 +212,18 @@ def cli(
         info(
             "Doing the rest of the preprocessing steps: download files, deduplication, and classification."
         )
-        asyncio.get_event_loop().run_until_complete(
-            run_preprocessing(download, deduplicate, classify)
-        )
+        warn("currently not implemented")
 
     # Load settings from env and CLI params
     ea_settings = EasyAccessSettings.from_env(
-        functions=do,
+        export=export,
         only_changes=changes,
         refresh_osiris_data=osiris_update,
         other_sheet=other_sheet,
         only_retrieve_missing_osiris_data=not osiris_full_refresh,
         disable_writes=disable_writes,
+        faculty=single_faculty,
     )
-
-    if do not in [Functions.both, Functions.read, Functions.export]:
-        warn("No functions selected! Aborting. Run ea-cli --help for details.")
-        cool("Thank you for using the Easy Access tool!")
-        raise typer.Exit(code=1)
 
     tool = EasyAccessTool(ea_settings)
     tool.run()

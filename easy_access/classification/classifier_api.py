@@ -14,7 +14,6 @@ from aiometer import amap
 from google import genai
 from rich.console import Console
 
-from easy_access.classification.api_keys import gemini
 from easy_access.classification.classifier_models import Classification
 from easy_access.classification.pdf_handling import extract_pdf_text
 from easy_access.db.base import init
@@ -86,7 +85,7 @@ The requested output format is replicated here as a set of Python classes, inclu
 
 def activate_client():
     global client
-    client = genai.Client(api_key=gemini)
+    client = genai.Client(api_key="gemini_api_key")
 
 
 async def classify_pdf(

@@ -121,11 +121,10 @@ def create_faculty_overviews(
             "write operations disabled, skipping creation of faculty and programme overviews"
         )
     for faculty, all_faculty_data in faculty_data.items():
-        if faculty in COURSE_MAPPING:
-            if not disable_writes:
-                style_iter = create_programme_overviews(
-                    all_faculty_data, faculty, style_iter
-                )
+        if faculty in COURSE_MAPPING and not disable_writes:
+            style_iter = create_programme_overviews(
+                all_faculty_data, faculty, style_iter
+            )
 
         if all_faculty_data.is_empty():
             continue
@@ -144,7 +143,7 @@ def create_faculty_overviews(
 
         data_to_update.append(all_faculty_data)
 
-    asyncio.get_event_loop().run_until_complete((update_db(data_to_update)))
+    asyncio.get_event_loop().run_until_complete(update_db(data_to_update))
     return style_iter
 
 

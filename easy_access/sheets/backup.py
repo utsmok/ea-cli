@@ -1,7 +1,9 @@
-from easy_access.utils import Directory, cool, warn, info, print
-from easy_access.settings import SETTINGS, DirSetting
 from datetime import datetime
 from enum import Enum
+
+from easy_access.settings import SETTINGS, DirSetting
+from easy_access.utils import Directory, cool, info, print, warn
+
 
 class BackupFlag(Enum):
     BACKUP = "backup"
@@ -9,10 +11,12 @@ class BackupFlag(Enum):
     NONE = "none"
     DEFAULT = "default"
 
+
 class RestoreOptions(Enum):
     LATEST = "latest"
     OLDEST = "oldest"
     MANUAL = "manual"
+
 
 class RestoreStrategy(Enum):
     REPLACE = "replace"
@@ -21,7 +25,6 @@ class RestoreStrategy(Enum):
 
 
 class Backupper:
-
     def __init__(self) -> None:
         """
         This class contains the functions for handling and restoring backups.
@@ -44,24 +47,37 @@ class Backupper:
         max_backups = SETTINGS.backup_settings.max_backups
 
         if not dirs_to_backup:
-            warn('backup_all is set to true in settings.yaml, but no dirs to backup were specified. Skipping.')
+            warn(
+                "backup_all is set to true in settings.yaml, but no dirs to backup were specified. Skipping."
+            )
             return
         if not backup_location:
-            warn('backup_all is set to true in settings.yaml, but no backup location was specified. Skipping.')
+            warn(
+                "backup_all is set to true in settings.yaml, but no backup location was specified. Skipping."
+            )
             return
         if not max_backups:
-            warn('backup_all is set to true in settings.yaml, but no max amount of backups was specified. Skipping.')
+            warn(
+                "backup_all is set to true in settings.yaml, but no max amount of backups was specified. Skipping."
+            )
             return
 
-
         if len(backup_location.dirs) >= max_backups:
-            info(f"Found {len(backup_location.dirs)} backups, making room by deleting oldest backup(s).")
+            info(
+                f"Found {len(backup_location.dirs)} backups, making room by deleting oldest backup(s)."
+            )
             while len(backup_location.dirs) >= max_backups:
                 min(backup_location.dirs, key=lambda x: x.created).delete()
 
-        info(f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}")
+        info(
+            f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}"
+        )
         for i in range(0, max_backups + 4):
-            new_backup_dir = Directory(backup_location.full / f"backup{i if i > 0 else ""}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}", create_dir=False)
+            new_backup_dir = Directory(
+                backup_location.full
+                / f"backup{i if i > 0 else ''}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+                create_dir=False,
+            )
             if not new_backup_dir.exists:
                 new_backup_dir.create()
                 break
@@ -69,9 +85,14 @@ class Backupper:
         for d in dirs_to_backup:
             d.copy(new_backup_dir)
 
-        cool(f'Backups done, stored in {new_backup_dir.full}')
+        cool(f"Backups done, stored in {new_backup_dir.full}")
 
-    def restore_backup(self, backup_dir: Directory = None, strategy: RestoreStrategy = RestoreStrategy.REPLACE, select: RestoreOptions = RestoreOptions.LATEST) -> None:
+    def restore_backup(
+        self,
+        backup_dir: Directory = None,
+        strategy: RestoreStrategy = RestoreStrategy.REPLACE,
+        select: RestoreOptions = RestoreOptions.LATEST,
+    ) -> None:
         """
         Restore a backup from a directory. Defaults to restoring the latest backup.
 
@@ -95,10 +116,14 @@ class Backupper:
             try:
                 backup_dir = Directory(backup_dir)
             except Exception:
-                warn(f"Could not convert {backup_dir} to a Directory object. Cannot restore backup.")
+                warn(
+                    f"Could not convert {backup_dir} to a Directory object. Cannot restore backup."
+                )
                 return
         if not backup_dir.exists:
-            warn(f"Backup dir {backup_dir.full} does not exist -- cannot restore backup.")
+            warn(
+                f"Backup dir {backup_dir.full} does not exist -- cannot restore backup."
+            )
             return
 
         selected_backup_dir = None
@@ -114,7 +139,13 @@ class Backupper:
             print("\n")
             while not selected_backup_dir:
                 try:
-                    selected_backup_dir = backup_dir.dirs[int(input(f"  Select backup to restore (0-{len(backup_dir.dirs) - 1}): "))]
+                    selected_backup_dir = backup_dir.dirs[
+                        int(
+                            input(
+                                f"  Select backup to restore (0-{len(backup_dir.dirs) - 1}): "
+                            )
+                        )
+                    ]
                 except Exception as e:
                     warn(f"Invalid input. Please select a valid backup. ({e})")
 
@@ -125,7 +156,9 @@ class Backupper:
         if strategy == RestoreStrategy.REPLACE:
             target_dir.delete()
             info(f"Deleted {target_dir.full}")
-            info(f"Restoring backup from {selected_backup_dir.full} to {target_dir.full} using strategy: {strategy}")
+            info(
+                f"Restoring backup from {selected_backup_dir.full} to {target_dir.full} using strategy: {strategy}"
+            )
             selected_backup_dir.copy(target_dir)
         elif strategy == RestoreStrategy.MERGE_PREFER_BACKUP:
             selected_backup_dir.copy(target_dir)

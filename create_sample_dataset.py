@@ -13,8 +13,8 @@ import typer
 from sqlalchemy import Engine, create_engine
 
 from easy_access.classification.classifier_api import main
-from easy_access.classification.downloader import Downloader
 from easy_access.classification.pdf_handling import enrich_pdfs
+from easy_access.classification.to_delete_downloader import Downloader
 from easy_access.db.base import init, set_db_path
 from easy_access.db.ingest import load_pdfs
 from easy_access.db.retrieve import retrieve_full_data

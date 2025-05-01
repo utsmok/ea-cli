@@ -22,10 +22,8 @@ from easy_access.db.models import (
     Infringement,
     ItemUpdate,
     LLMClassification,
-    Status,
     WorkflowStatus,
 )
-from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import cool, determine_course_code, info, warn
 
 
@@ -36,14 +34,6 @@ async def link_llm_classifications_to_copyright_items() -> None:
     # get all LLM classifications without a corresponding CopyrightItem
 
     classifications_to_link = await LLMClassification().filter(item__isnull=True)
-
-    missing_classifications = []
-    # load dedupe info from .replace files
-    replace_files = {
-        f.name.split("_")[0]: f.name.split("_")[1]
-        for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files
-        if f.name.endswith(".replace")
-    }
 
     for classification in classifications_to_link:
         try:
@@ -304,29 +294,6 @@ async def update_copyright_items(
         "scope": None,
     }
 
-    core_fields = {
-        "title": None,
-        "classification": None,
-        "ml_prediction": None,
-        "auditor": None,
-        "last_change": None,
-        "status": [
-            Status.DELETED,
-            Status.PUBLISHED,
-            Status.UNPUBLISHED,
-        ],
-        "isbn": None,
-        "doi": None,
-        "in_collection": None,
-        "pagecount": None,
-        "wordcount": None,
-        "picturecount": None,
-        "author": None,
-        "publisher": None,
-        "reliability": None,
-        "pages_x_students": None,
-        "count_students_registered": None,
-    }
     # standardize df
     # loop over items
     # if item is not in db: add it

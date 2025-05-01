@@ -19,9 +19,6 @@ from easy_access.dashboard.web import AppState, load_app_state
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_item_history
 from easy_access.db.update import update_copyright_items
 
-# globals
-
-
 EMPTY_FILTERS: dict[str, list[str]] = {}
 
 
@@ -64,7 +61,6 @@ def process_state(
     app_state = load_app_state(session)
     initial_state_dict = asdict(app_state)  # For change detection
 
-    change_applied = False  # Flag to track if any state modification occurred
     filter_change_occurred = False  # Specific flag for filter changes to reset page
 
     if request_params.get("action") == "reset":
@@ -72,7 +68,6 @@ def process_state(
         if app_state.filters or app_state.page != 1:
             app_state.clear_filters()
             app_state.set_page(1)
-            change_applied = True
             filter_change_occurred = True  # Resetting filters counts
         else:
             print("No change needed for reset.")
@@ -82,7 +77,6 @@ def process_state(
             page = int(request_params["page"])
             if page != app_state.page:
                 app_state.set_page(page)
-                change_applied = True
         except (ValueError, TypeError):
             print(
                 f"Warning: Invalid page parameter '{request_params['page']}'. Ignoring."
@@ -92,7 +86,6 @@ def process_state(
         sort_desc = request_params.get("sort_desc", "False").lower() == "true"
         if sort_by != app_state.sort_by or sort_desc != app_state.sort_desc:
             app_state.set_sort(sort_by if sort_by else None, sort_desc)
-            change_applied = True
             app_state.set_page(1)
     elif "per_page" in request_params:
         try:
@@ -100,7 +93,6 @@ def process_state(
             if per_page != app_state.per_page:
                 app_state.set_per_page(per_page)
                 app_state.set_page(1)  # Reset page when per_page changes
-                change_applied = True
         except (ValueError, TypeError):
             print(
                 f"Warning: Invalid per_page parameter '{request_params['per_page']}'. Ignoring."
@@ -151,7 +143,6 @@ def process_state(
                         if app_state.apply_filter_change(
                             filter_key, clicked_value, is_checked
                         ):
-                            change_applied = True
                             filter_change_occurred = True
                         break  # Process only the first detected difference for checkboxes
 
@@ -161,7 +152,6 @@ def process_state(
                     # Compare directly with the current value string for this key.
                     if param_value != current_value_str:
                         if app_state.apply_text_filter(filter_key, param_value):
-                            change_applied = True
                             filter_change_occurred = True
                         # Important: Break here assumes only one text filter changes per request.
                         # This holds true if text inputs use hx-vals with getElementById.
@@ -170,7 +160,6 @@ def process_state(
         # Reset page if a filter changed (and it wasn't handled by per_page already)
         if filter_change_occurred and "per_page" not in request_params:
             app_state.set_page(1)
-            change_applied = True  # Setting page is also a state change
 
     # 3. Save potentially modified state back to session *if* a change occurred
     final_state_dict = asdict(app_state)
@@ -220,7 +209,6 @@ async def fetch_data(app_state: AppState, session: dict) -> ProcessedDataResult:
         if validated_app_state.per_page > 0
         else 1
     )
-    original_page_request = validated_app_state.page
     validated_app_state.page = max(
         1, min(validated_app_state.page, total_pages if total_pages > 0 else 1)
     )

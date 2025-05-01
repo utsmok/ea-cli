@@ -18,11 +18,8 @@ from types import CoroutineType
 import kreuzberg
 import numpy as np
 import pikepdf
-from fastembed import TextEmbedding
 from kreuzberg import ExtractionResult, batch_extract_file, extract_file
-from paddleocr import PaddleOCR
 from pydantic import BaseModel
-from qdrant_client import QdrantClient, models
 from tortoise.queryset import QuerySet
 from xxhash import xxh64
 
@@ -126,7 +123,7 @@ async def extract_pdf_text(
         The updated PDF object with extracted text and metadata (if successful).
     """
     path = pdf.path
-    if not path.exists() or not path.is_file() or not path.suffix.lower() == ".pdf":
+    if not path.exists() or not path.is_file() or path.suffix.lower() != ".pdf":
         warn(f"Invalid/Not existing PDF file. Not parsing {path}")
         return pdf
 
@@ -255,6 +252,94 @@ async def extract_pdf_text(
     return pdf
 
 
+def ocr_with_paddle(
+    pdf_dir: Path,
+    PAGE_NUM: int | None = None,
+    outputdir: Path | None = None,
+    suffix: str = "_paddleocr",
+):
+    """
+    This function uses PaddleOCR to perform OCR on the given PDF files.
+    It converts each page of the PDF to an image, processes the image with PaddleOCR,
+    and saves the extracted text to a .txt file.
+
+    Parameters:
+        - PAGE_NUM: The number of pages to process from each PDF file. Default is 15.
+        - pdfs: a generator that returns Paths for the PDF files to parse. Use Path().glob(*.pdf) for a dir of pdf files for example.
+        - outputdir: The directory where the output text files will be saved. Default is the current working directory + /paddle_output.
+        - suffix: The suffix to add to the output text files. Default is "_paddleocr". Will create files like {pdf_name}_paddleocr.txt.
+
+    Requires a CUDA compatible gpu for PaddleOCR to work at a decent speed.
+    """
+    import cv2
+    import fitz
+    import numpy as np
+    from paddleocr import PaddleOCR
+    from PIL import Image
+
+    if not PAGE_NUM:
+        PAGE_NUM = 15
+    if not pdf_dir or not pdf_dir.exists():
+        pdf_dir = Path().cwd() / "pdfs"
+    if not pdf_dir.exists():
+        print(f"[red]Directory {pdf_dir} does not exist.[/red]")
+        return
+    if not outputdir or not outputdir.exists():
+        outputdir = Path().cwd() / "paddle_output"
+
+    pdfs = pdf_dir.glob("*.pdf")
+    ocr = PaddleOCR(use_angle_cls=True, lang="en", page_num=PAGE_NUM, use_gpu=True)
+
+    for pdf in pdfs:
+        pdf_path = pdf
+        pdf_name = pdf_path.stem
+
+        if (outputdir / "{pdf_name}_paddle.txt").exists():
+            print(f"[red]skipping {pdf_name}[/red]")
+            continue
+        imgs: list[Image.Image] = []
+        full_text = []
+        try:
+            with fitz.open(pdf_path) as pdf:
+                for pg in range(0, PAGE_NUM):
+                    try:
+                        page = pdf[pg]
+                        mat = fitz.Matrix(2, 2)
+                        pm = page.get_pixmap(matrix=mat, alpha=False)
+                        if pm.width > 2000 or pm.height > 2000:
+                            pm = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+                        img = Image.frombytes("RGB", [pm.width, pm.height], pm.samples)
+                        img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                        imgs.append(img)
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[red]Error processing {pdf_name}: {e}[/red]")
+            continue
+        if not imgs:
+            continue
+        for img in imgs:
+            result = ocr.ocr(img, cls=True)
+
+            if result is None:
+                continue
+
+            for residx in range(len(result)):
+                res = result[residx]
+                if res is None:
+                    continue
+
+                txts = [line[1][0] for line in res]
+                full_text.extend(txts)
+
+        full_text = " ".join(full_text)
+        full_text = full_text.replace("  ", " ")
+        with open(
+            outputdir / f"{pdf_name}" + suffix + ".txt", "w", encoding="utf-8"
+        ) as f:
+            f.write(full_text)
+
+
 async def extract_metadata(pdf: PDF) -> PDF:
     """
     Extracts metadata from a PDF file and updates the PDF object with the extracted information.
@@ -308,15 +393,6 @@ async def extract_metadata(pdf: PDF) -> PDF:
         subject = metadata.get("/Subject") if metadata.get("/Subject") else None
         creator = metadata.get("/Creator") if metadata.get("/Creator") else None
         producer = metadata.get("/Producer") if metadata.get("/Producer") else None
-        file_creation_date = (
-            metadata.get("/CreationDate") if metadata.get("/CreationDate") else None
-        )
-        file_modification_date = (
-            metadata.get("/ModDate") if metadata.get("/ModDate") else None
-        )
-
-        doi = metadata.get("/doi") if metadata.get("/doi") else None
-
         metadata = {
             "title": str(title) if title else None,
             "author": str(author) if author else None,
@@ -357,9 +433,6 @@ async def enrich_pdfs(
         list[PDF]: The same list of PDF objects, but updated with deduplication info, metadata & extracted text.
     """
     await init()
-    ocr = PaddleOCR(
-        use_angle_cls=True, lang="en", use_gpu=True
-    )  # need to run only once to download and load model into memory
     if pdfs:
         input_mat_ids = [pdf.material_id for pdf in pdfs]
 
@@ -462,8 +535,9 @@ async def enrich_pdfs(
     else:
         pdfs = await PDF.all()
 
-    info(f"Deduplicating {len(pdfs)} pdfs.")
-    deduplicated_pdfs = await deduplicate_pdfs(pdfs, False)
+    # info(f"Deduplicating {len(pdfs)} pdfs.")
+    # deduplicated_pdfs: list[PDF] = await deduplicate_pdfs(pdfs, False)
+    # do something with deduplicated_pdfs
 
 
 async def deduplicate_pdfs(pdfs: list[PDF], compare_with_db=True) -> list[PDF]:
@@ -475,6 +549,8 @@ async def deduplicate_pdfs(pdfs: list[PDF], compare_with_db=True) -> list[PDF]:
     Returns:
         list[PDF]: The same list of pdfs, but updated where possible.
     """
+    from qdrant_client import QdrantClient, models
+
     client = QdrantClient(path="qdrant.db")
     ids_per_hash = defaultdict(list)
     new_mapping: dict[int, int] = {}  # store duplicates as {id_to_replace: target_id}
@@ -643,6 +719,8 @@ def get_embedding(pdf: PDF) -> list[np.ndarray] | None:
     Returns:
         list[float] or None: List of floats representing the file's embedding; None if an error occurs.
     """
+    from fastembed import TextEmbedding
+
     embedding_model = TextEmbedding()
     return embedding_model.embed(pdf.extracted_text)
 
