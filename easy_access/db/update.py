@@ -5,7 +5,7 @@ functions to update existing data in the database
 import contextlib
 import traceback
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 import polars as pl
@@ -126,12 +126,63 @@ async def update_copyright_relations() -> None:
     await Tortoise.close_connections()
 
 
+class DataSource(StrEnum):
+    """Enum for the source of the data.
+
+    This is used to determine how to handle the data when updating the database.
+    """
+
+    RAW_QLIK_DATA = "raw_qlik_data"
+    WEEKLY_SHEET = "weekly_sheet"
+    OVERVIEW_SHEET = "overview_sheet"
+    EA_SCRIPT = "ea_script"
+    WEB_DASHBOARD = "dashboard"
+
+
 async def update_copyright_items(
     data: pl.DataFrame | list[dict],
     update_relations: bool = True,
     overwrite: bool = False,
     user_info: dict | None = None,
 ) -> None:
+    """
+    TODO: REFACTOR
+
+    Split functionality based on type of input. Reuse logic where possible.
+    Type of input mainly determines what to overwrite/update/compare.
+    See also the notes in main.py for more details on the refactoring.
+
+    Types of input:
+    -> Raw data import from Qlik
+    -> User input from weekly sheet
+    -> User input from overview sheet
+    -> User input from web dashboard
+    -> Directly from script / overwrite
+
+
+    All input should be dataframes or lists of dicts (which are turned into dataframes then?),
+    standardized/normalized to the same format (handle that in this function? or expect input to be standardized?)
+
+    Does not return anything, directly updates the db.
+
+    New params:
+    -> data: pl.DataFrame | list[dict] (or only accept pl.DataFrame?)
+        The input data used to update the items. Pref. a standardized dataframe.
+    -> source: DataSource (StrEnum), default: DataSource.EA_SCRIPT
+        The input source of data, used to determine how to handle updating. Use the enum DataSource.
+    --> update_relations: bool, default: True
+        If True, will call `update_copyright_relations` to update the m2m relations after the update.
+    --> overwrite: bool, default: False
+        If True, will overwrite the existing items in the db with the new ones instead of using the comparison logic.
+        This is automatically set to True if the source is DataSource.EA_SCRIPT or DataSource.WEB_DASHBOARD.
+    --> user_info: dict | None, default: None
+        The user info used to determine who made the changes. If None, will use the default user info.
+        Currently only uses the 'email' field, stored in 'modified_by' in ItemUpdate.changes.
+
+
+
+
+    """
     """
     Update the db with copyrightitems from the dataframe (or pre-filtered list of dicts from a df).
     Adds new if they don't exist, or updates if they do.
@@ -143,6 +194,15 @@ async def update_copyright_items(
     - `update_relations`: if True, will call `update_copyright_relations` to update the m2m relations after the update.
     - `overwrite`: if True, will overwrite the existing items in the db with the new ones instead of using the comparison logic.
     """
+
+    if user_info is None:
+        user_info = dict()
+
+    cur_user = (
+        user_info.get("email")
+        if user_info.get("email")
+        else {"email": "cip-admin@utwente.nl"}
+    )
 
     def change(
         changes: dict, field: str, new_value: Any, old_value: Any, reason: str
@@ -429,8 +489,9 @@ async def update_copyright_items(
         info(f"Updating {len(updates)} changelog items in db.")
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)
         if user_info:
-            changes.update({"modified_by": user_info.get("email")})
-            print(f"items modified by {user_info.get('email')}")
+            [changes.update({"modified_by": cur_user}) for changes in updates.values()]
+            print(f"items modified by {cur_user}")
+
         await ItemUpdate.bulk_create(
             [
                 ItemUpdate(change_details=changes, material_id=mat_id)

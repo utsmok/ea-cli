@@ -23,6 +23,134 @@ from easy_access.sheets.sheet import (
 )
 from easy_access.utils import Directory, File, cool, info, print, warn
 
+"""
+    TODO: Make changes to the logic of importing data / syncing up sheets and DB.
+
+
+    Currently, updating / merging data is done all over the codebase, and there are cases where this results in data loss, errors, or inconsistencies.
+    Part of the update logic is in this file (main.py), part in sheets/sheets.py and, part in db/update.py and db/ingest.py.
+
+    We need clear priorities of how we handle merging data from the possible data sources:
+        - raw copyright export files (folder raw_copyright_data, excel files)
+        - weekly sheets (one sheet per week per faculty, in faculty_sheets dir with a subdir for each faculty)
+        - overview sheets (one sheet per faculty, in the same subdir as the weekly sheets)
+        - sqlite db (db.sqlite3, not user editable)
+
+    Let's walk through each source and discuss how we handle the various cases.
+
+    # How to handle each data source
+
+    1. Raw copyright export file
+        Items **always** initially enter the dataset through a raw copyright export file.
+        These are ingested into the sqlite db first after standardization and adding some basic fields (e.g. faculty).
+
+        If an item is already present in the db, we need to compare only a few fields, as most fields are either never updated in the source data, or updates are not relevant for us:
+            Always overwrite:
+            - status (published/unpublished/deleted)
+            - last change
+            - students registered, pages * students
+
+            Compare but don't change things (?)
+            these fields are entered in the sheets first and read back into the raw data, so our sheets are the source of truth.
+            So, dont' update sheets with the raw data, but compare to check for errors/inconsistencies:
+            - Manual classification
+            - Manual identifier
+            - Scope
+            - Remarks
+            - Auditor
+
+    2. Weekly sheets
+        These sheets are made once a week, and never updated/changed by the script. Only shows items that are new in the import of that week.
+        Users can change a few fields in the data entry sheet:
+        - Manual classification
+        - Scope
+        - Remarks
+        - Workflow status
+
+        Any changes in this field should overwrite the db data for these fields, with one exception: the overview sheet can also be used by users to change this. This needs some more thought / work
+
+    3. Overview sheets
+        These sheets are refreshed every week. First, all the data from the overview sheet is read to memory, we create a new weekly sheet, and update the DB using heuristics to determine priorities/changes/conflicts.
+        Then the DB should be the source of truth. A new overview sheet is created, which is basically a snapshot of the DB at that moment.
+
+        Users can also change the same fields as in the weekly sheets in this sheet:
+        - Manual classification
+        - Scope
+        - Remarks
+        - Workflow status
+
+        In case of conflicts between weekly sheets and overview sheets, we need to determine priorities. This needs some more thought / work.
+
+    4. SQLite DB
+
+        This is used as the source of truth for the current state of the copyright data.
+        I believe all details on how to store/update the data are already mentioned above.
+
+    5. User input from webapp
+
+        The (experimental) web frontend for this app can be used to add or change Workflow status, manual classification, and remarks.
+        Any changes made using this webapp should directly update the DB, and probably also update the overview sheets -- but we'll need to think about the best way to do this, so for now we'll just ignore this and only update the DB.
+
+    # Order of operations
+
+    Let's walk through the order of operations for each script run when using batch mode (only way to run the script currently):
+
+    A. Read in data from the various source into memory
+        1. New items from Qlik: Latest raw copyright data excel file from Qlik or, if given, the 'other_sheet' file
+        2. Weekly sheets: Read in all weekly sheets from the faculty_sheets dir (one sheet per week per faculty)
+        3. Overview sheets: Read in all overview sheets from the faculty_sheets dir (one sheet per faculty)
+        4. DB: Read in all data from the sqlite db
+
+    B. Standardize, normalize, cleanup, verify the ingested data
+        - this is done separately for each source, no comparisons yet
+        - Required, otherwise we cannot compare the data or might be reading in invalid data, etc
+        - NEW: keep track of errors in the weekly + overview sheets per faculty, write these to a separate error sheet per faculty to let the users know what to fix
+
+    C. Use priorities / heuristics to compare the data to determine the current absolute state
+        - This is the most important step, and needs to be done carefully to avoid data loss or errors
+        - Currently partly done in main.py, partly in db/update.py, and partly in db/ingest.py -- this needs to be cleaned up and made more consistent
+
+        - Let's use this order of operations:
+
+        1. As the overview sheets are remade every week as a direct copy of the DB, start by comparing the DB with the overview sheets row-by-row using material_id as pk.
+            - item in overview sheet but not in db: should not happen, mark as error
+            - difference in any of the fields below: update the db with the overview sheet data:
+                - workflow status
+                - manual classification
+                - remarks
+
+        Then delete the overview sheets - we've ingested that data and will remake them at the end.
+        Next step:
+
+        2. Compare DB with the raw copyright data - pk is material_id
+            - item not in db: create new item in db based on the raw copyright data
+            - item in db: overwrite the db data with the raw copyright data for the following fields:
+                - status (published/unpublished/deleted)
+                - last change
+                - students registered, pages * students
+
+        Done with raw copyright data. Now on to the weekly sheets:
+
+        3. Compare DB with the weekly sheets - pk is material_id
+            - item in sheet but not in db: should not happen, mark as error
+            - if there is a difference in any of the fields below, use a detailed heuristic to determine which data to keep, see below.
+                - workflow status
+                - manual classification
+                - remarks
+
+        heuristic for determining which data to keep:
+        1. If the current db value is empty, use the value from the weekly sheet
+        2. If the current db value is not empty:
+            - If available, compare the change date of the db value (using the itemupdate log) with the change date of the weekly sheet. Keep the most recent value.
+            - Else, if the workflow status of the weekly sheet is 'higher' than the db value, keep all weekly sheet values; and vice versa. Priority order: Done > InProgress > ToDo
+            - Else, if the workflow status is equal but manual classification is different, use priority order for manual classification:
+                Open Access, [korte/middel/lange] overname, eigen materiaal [powerpoint/titelindicatie/overig], onbekend, licentie beschikbaar, niet geanalyseerd, in onderzoek, verwijderverzoek verstuurd
+            - If all are the same except remarks, merge the strings in both remark fields (if there is overlap in the text, don't add it twice, e.g. "hello this is a remark" + "this is a remark, but better" = "hello this is a remark, but better")
+
+
+
+"""
+
 
 class EasyAccessTool:
     """
