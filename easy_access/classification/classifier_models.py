@@ -1,61 +1,87 @@
+"""
+This module defines Pydantic models and enumerations used for representing
+the classification results of copyright items, particularly those processed
+by an LLM or similar classification engine. These models structure information
+about copyright status, allowed usage, item type, and extracted metadata.
+"""
+
 from enum import Enum
-from pydantic import BaseModel
+from typing import List # For Python < 3.9 compatibility with list type hints if needed, else use list
+from pydantic import BaseModel, Field # Field for descriptions
 
 class CopyrightStatus(str, Enum):
     """
-    The possible classifications
+    Enumerates the possible copyright statuses of a classified item.
     """
-    OPEN_ACCESS = "open access" # free to use
-    OWN_MATERIAL = "own material" # made for or by an employee of the university of Twente
-    COPYRIGHTED_MATERIAL = "copyrighted material" # not free to use, owned by a publisher for instance
-    OTHER = "other" # should not be used? maybe if unable to classify otherwise.
+    OPEN_ACCESS = "open access" # Material is freely available under an open license.
+    OWN_MATERIAL = "own material" # Material created by or for an employee of the University of Twente.
+    COPYRIGHTED_MATERIAL = "copyrighted material" # Material owned by a third party (e.g., publisher) and not openly licensed.
+    OTHER = "other" # A catch-all for statuses not fitting other categories; usage should be minimized.
 
 class AllowedUsageByUT(str, Enum):
     """
-    These possible classifications denote if the item is allowed to be shared with students in the context of the University of Twente learning environment.
+    Enumerates classifications for whether an item is allowed to be shared
+    with students within the University of Twente's learning environment.
     """
-    ALLOWED = "allowed" # the item can be shared with students without further limitations, e.g. it is open access or own material by a UT employee.
-    RESTRICTED = "restricted" # the item has limitations on sharing; e.g. only this year, only if the uploader is the author, or only with specific permissions/acknowledgements etc.
-    NOT_ALLOWED = "not allowed" # the item cannot be shared without further permissions, e.g. it is fully copyrighted without any other routes to obtain permission
-    UNDETERMINED = "undetermined" # the item cannot be classified as allowed or not allowed, e.g. if the classification is not possible due to missing or conflicting information.
+    ALLOWED = "allowed" # Can be shared without further limitations (e.g., open access, own UT material).
+    RESTRICTED = "restricted" # Sharing has limitations (e.g., specific academic year, author permissions, specific acknowledgements).
+    NOT_ALLOWED = "not allowed" # Cannot be shared without explicit permission (e.g., fully copyrighted with no exceptions).
+    UNDETERMINED = "undetermined" # Classification not possible due to missing or conflicting information.
 
 class ItemType(str, Enum):
     """
-    Possible item types of the item
+    Enumerates possible types of copyright items.
     """
-    PRESENTATION = "presentation" # a powerpoint in pdf format for example. By definition, this should have CopyrightStatus.OWN_MATERIAL.
-    READER = "reader" # often self-written information by teachers for students for this specific course. By definition, this should have CopyrightStatus.OWN_MATERIAL.
-    BOOK = "book" # Often COPYRIGHTED_MATERIAL or OPEN_ACCESS.
-    ARTICLE = "article" # Often COPYRIGHTED_MATERIAL or OPEN_ACCESS.
-    REPORT = "report" # Often COPYRIGHTED_MATERIAL or OPEN_ACCESS.
-    ASSIGNMENT = "assignment" # an assignment description for this course. By definition, this should have CopyrightStatus.OWN_MATERIAL
-    THESIS = "thesis" # Often COPYRIGHTED_MATERIAL or OPEN_ACCESS.
-    MANUAL = "manual" # e.g. for a measuring device. Often COPYRIGHTED_MATERIAL or OPEN_ACCESS, but can be OWN_MATERIAL.
-    UNKNOWN = "unknown" # if not possible to determine.
+    PRESENTATION = "presentation" # e.g., a PowerPoint in PDF format. Often OWN_MATERIAL.
+    READER = "reader" # Custom course material by teachers. Often OWN_MATERIAL.
+    BOOK = "book" # Full books or book chapters. Often COPYRIGHTED_MATERIAL or OPEN_ACCESS.
+    ARTICLE = "article" # Journal articles, conference papers. Often COPYRIGHTED_MATERIAL or OPEN_ACCESS.
+    REPORT = "report" # Technical reports, research reports. Varied copyright.
+    ASSIGNMENT = "assignment" # Assignment descriptions for a course. Often OWN_MATERIAL.
+    THESIS = "thesis" # Student theses. Often COPYRIGHTED_MATERIAL or OPEN_ACCESS (if in repository).
+    MANUAL = "manual" # e.g., for equipment or software. Varied copyright.
+    UNKNOWN = "unknown" # If item type cannot be determined.
 
 
 class Classification(BaseModel):
     """
-    contains the allowed usage status, itemtype, and copyright status of a pdf file.
+    Pydantic model representing the comprehensive classification of a PDF file,
+    typically generated by an LLM. Includes assessments of usage rights, copyright
+    status, item type, and extracted metadata.
     """
-    allowed_usage: AllowedUsageByUT = AllowedUsageByUT.UNDETERMINED
-    allowed_usage_reasoning: str # add a 1 to 2 sentence explanation on why this allowed usage was chosen
-    copyright_status: CopyrightStatus = CopyrightStatus.OTHER
-    copyright_classification_reason: str  # add a 1 to 2 sentence explanation on why this copyright status was chosen
-    item_type: ItemType = ItemType.UNKNOWN
-    item_type_classification_reason: str # add a 1 to 2 sentence explanation on why this item type was chosen
-    pdf_name: str
+    allowed_usage: AllowedUsageByUT = Field(default=AllowedUsageByUT.UNDETERMINED, description="Assessed allowed usage within the university context.")
+    allowed_usage_reasoning: str = Field(description="Explanation (1-2 sentences) for the allowed_usage classification.")
 
-    # metadata fields -- if not possible to determine from the pdf store an empty string instead
-    author_names: list[str] # the name of the author(s) that created the item, if possible to determine
-    publisher_name: str # who published the item, if possible to determine
-    copyright_holder: str # who holds the copyright, if possible to determine
-    item_title: str # the title of the item, if possible to determine
-    doi: list[str] # the DOI(s) for the item if included in the document itself
-    isbn: list[str] # the ISBN(s) for the item if included in the document itself
-    source_url: list[str] # the source URL(s) for the item if included in the document itself
-    license: list[str]  # the license(s) for the item if included in the document itself
-    topic: str # the topic of the item, what it covers
-    pdf_page_count: int # the amount of pages in the pdf
+    copyright_status: CopyrightStatus = Field(default=CopyrightStatus.OTHER, description="Assessed copyright status of the item.")
+    copyright_classification_reason: str = Field(description="Explanation (1-2 sentences) for the copyright_status classification.")
 
-    remarks: str # any additional remarks on the item relevant to copyright status, metadata, and item type
+    item_type: ItemType = Field(default=ItemType.UNKNOWN, description="Assessed type of the item.")
+    item_type_classification_reason: str = Field(description="Explanation (1-2 sentences) for the item_type classification.")
+
+    pdf_name: str = Field(description="Filename of the PDF that was classified.")
+
+    # Extracted Metadata Fields:
+    # These fields store information extracted from the PDF. If not determinable,
+    # they should be empty lists for list types or empty strings for string types,
+    # or None if the field is optional and truly absent (Pydantic handles defaults).
+    # Using default_factory=list for list fields to ensure they default to [] if not provided.
+
+    author_names: List[str] = Field(default_factory=list, description="Author(s) of the item, if determinable from the PDF.")
+    publisher_name: str = Field(default="", description="Publisher of the item, if determinable.")
+    copyright_holder: str = Field(default="", description="Copyright holder of the item, if determinable.")
+    item_title: str = Field(default="", description="Title of the item, if determinable from the PDF.")
+
+    doi: List[str] = Field(default_factory=list, description="DOI(s) found within the document.")
+    isbn: List[str] = Field(default_factory=list, description="ISBN(s) found within the document.")
+    source_url: List[str] = Field(default_factory=list, description="Source URL(s) found within the document.")
+    license: List[str] = Field(default_factory=list, description="License information found within the document (e.g., Creative Commons URL or text).")
+
+    topic: str = Field(default="", description="Main topic or subject of the item. Consider if list[str] might be better for multiple topics.") # TODO: Consider list[str] for topic?
+    pdf_page_count: int = Field(description="Total number of pages in the PDF document.")
+
+    remarks: str = Field(default="", description="Any additional remarks relevant to copyright, metadata, or item type from the classification process.")
+
+    class Config:
+        """Pydantic model configuration."""
+        use_enum_values = True # Ensures enum values (strings) are used, not enum members themselves.
+        extra = "ignore" # Ignore extra fields during parsing, if any.

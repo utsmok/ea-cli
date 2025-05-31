@@ -1,727 +1,677 @@
 """
-Functions to handle PDF files:
-- download missing pdfs from canvas
-- extract text from pdfs
-- deduplicate pdfs
-- store extracted text
-- ...
+This module provides functions to handle PDF files for the classification workflow.
+Its capabilities include:
+- Extracting text and metadata from PDF files using the 'kreuzberg' library.
+- Batch processing for text extraction.
+- OCR (Optical Character Recognition) using PaddleOCR as a fallback or standalone utility.
+- Deduplication of PDFs based on content hashes (embedding-based deduplication is currently disabled).
+- Storing extracted information and linking it to PDF records in the database.
 """
 
 import asyncio
 import contextlib
+import logging # Added
 import traceback
 from collections import defaultdict
-from itertools import batched
+from itertools import batched # Python 3.12+ feature, ensure compatibility or provide alternative
 from pathlib import Path
-from types import CoroutineType
+from typing import Any, List, Coroutine, Optional # Used Coroutine instead of CoroutineType
 
-import kreuzberg
-import numpy as np
-import pikepdf
+import kreuzberg # For PDF text/metadata extraction
+import numpy as np # For embedding, if re-enabled
+import pikepdf # For PDF metadata extraction and manipulation
 from kreuzberg import ExtractionResult, batch_extract_file, extract_file
-from pydantic import BaseModel
-from tortoise.queryset import QuerySet
-from xxhash import xxh64
+# from pydantic import BaseModel # Not used directly in this file's current code
+from tortoise.queryset import QuerySet # For type hint if needed
 
-from easy_access.db.base import init
-from easy_access.db.ingest import load_pdfs
-from easy_access.db.models import PDF
+from easy_access.db.base import init as init_tortoise_orm
+from easy_access.db.ingest import load_pdfs # To ensure PDFs are in DB before processing
+from easy_access.db.models import PDF # The ORM model for PDFs
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import File, cool, info, warn
+# from easy_access.utils import File # File objects not directly used here, paths are used.
 
-TIMEOUT = 20  # set timeout for functions that might hang, e.g. text extraction
-pdf_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
+logger = logging.getLogger(__name__)
 
+# --- Configuration Candidates (Consider moving to settings.yaml) ---
+PDF_PROCESSING_TIMEOUT: int = 30  # Timeout in seconds for potentially long operations like text extraction
+PDF_TEXT_STR_LIMIT: int = 50000    # Character limit for extracted text to store
+PDF_TEXT_MAX_PAGES: int = 15       # Max pages to process for text extraction by default
+PDF_BATCH_SIZE: int = 20           # Batch size for processing multiple PDFs
+OCR_LANGUAGE: str = "en"           # Default OCR language
+OCR_USE_GPU: bool = True           # Whether to attempt using GPU for OCR
+QDRANT_DB_PATH: str = "qdrant.db"  # Path for Qdrant vector database
+DEDUPLICATION_SIMILARITY_THRESHOLD: float = 0.98
+# --- End Configuration Candidates ---
 
-class TimeoutException(Exception):  # Custom exception class
-    pass
-
-
-def timeout_handler(signum, frame):  # Custom signal handler
-    raise TimeoutException
+# pdf_dir is already correctly fetched from SETTINGS later where needed.
+# pdf_dir: Path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full # Global might be problematic if SETTINGS not loaded
 
 
 async def batch_extract_pdf_text(
-    pdfs: list[PDF], max_pages: int | None = 15, str_limit: int | None = 50000
-) -> list[PDF]:
-    pdfs = [p for p in pdfs if p.path.exists() and not p.extracted_text]
-    total = 0
-    for batch in batched(pdfs, 20):
-        total += len(batch)
-        file_paths = [pdf.path for pdf in batch]
-        results = await batch_extract_file(file_paths)
-        for pdf, result in zip(batch, results, strict=False):
-            content = result.content
-            metadata = result.metadata
-            if content:
-                if len(content) > str_limit:
+    pdfs_to_process: List[PDF],
+    max_pages: Optional[int] = PDF_TEXT_MAX_PAGES,
+    str_limit: Optional[int] = PDF_TEXT_STR_LIMIT
+) -> List[PDF]:
+    """
+    Extracts text and metadata in batches from a list of PDF model instances.
+
+    Uses `kreuzberg.batch_extract_file` for efficient batch processing.
+    Updates PDF instances with extracted text (truncated to `str_limit`) and metadata.
+    Saves extracted text to individual .md files and updates PDF records in the database.
+
+    Args:
+        pdfs_to_process (List[PDF]): A list of PDF ORM objects to process.
+        max_pages (Optional[int]): Maximum number of pages to extract text from.
+                                   Defaults to PDF_TEXT_MAX_PAGES.
+        str_limit (Optional[int]): Maximum length of the extracted text to store.
+                                   Defaults to PDF_TEXT_STR_LIMIT.
+
+    Returns:
+        List[PDF]: The list of processed PDF objects (some may be unchanged if processing failed).
+    """
+    # Filter for PDFs that exist and don't already have sufficient extracted text
+    valid_pdfs_for_extraction: List[PDF] = [
+        p for p in pdfs_to_process
+        if p.path.exists() and not (p.extracted_text and len(p.extracted_text) >= (str_limit or float('inf')))
+    ]
+
+    if not valid_pdfs_for_extraction:
+        logger.info("No valid PDFs found requiring text extraction in this batch.")
+        return pdfs_to_process # Return original list if nothing to process
+
+    logger.info(f"Starting batch text extraction for {len(valid_pdfs_for_extraction)} PDFs.")
+
+    processed_count: int = 0
+    pdfs_updated_in_db: List[PDF] = []
+
+    pdf_download_dir: Path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full
+
+    for pdf_batch in batched(valid_pdfs_for_extraction, PDF_BATCH_SIZE): # Use configured batch size
+        batch_file_paths: List[Path] = [p.path for p in pdf_batch]
+        extraction_results: List[ExtractionResult] = []
+        try:
+            # Assuming batch_extract_file can take an ExtractionConfig, if not, max_pages needs to be handled differently
+            # For now, kreuzberg's batch_extract_file doesn't directly support max_pages in the same way as single extract_file.
+            # This means max_pages here is only for record-keeping unless individual extraction is used.
+            extraction_results = await batch_extract_file(batch_file_paths)
+        except Exception as e_batch:
+            logger.error(f"Error during kreuzberg.batch_extract_file: {e_batch}")
+            # Continue to next batch or mark these as failed
+            for pdf_in_failed_batch in pdf_batch:
+                pdf_in_failed_batch.parsing_failed = True
+                pdfs_updated_in_db.append(pdf_in_failed_batch) # To save parsing_failed status
+            continue
+
+        for pdf_obj, result in zip(pdf_batch, extraction_results):
+            if result and result.content:
+                content: str = result.content
+                if str_limit and len(content) > str_limit:
                     content = content[:str_limit]
-                pdf.extracted_text = content
-                pdf.extracted_text_max_length = str_limit
-                # write extracted text to file
-                with open(pdf_dir.full / f"{pdf.material_id}.md", "w") as f:
-                    f.write(content)
-                print(f"Extracted text for {pdf.material_id}:\n")
-                print(content)
 
-            if metadata:
-                title = metadata.get("title")
-                if metadata.get("subtitle"):
-                    title += " - " + metadata.get("subtitle")
+                pdf_obj.extracted_text = content
+                pdf_obj.extracted_text_max_length = str_limit
+                pdf_obj.extracted_text_max_pages = max_pages # Record intended max_pages
+                pdf_obj.parsing_failed = False
 
-                author = metadata.get("authors")
-                if isinstance(author, list):
-                    author = ", ".join(author)
-                subject = metadata.get("subject")
-                creator = metadata.get("creator")
-                producer = (
-                    metadata.get("/Producer") if metadata.get("/Producer") else None
-                )
+                # Save extracted text to a .md file
+                try:
+                    md_file_path = pdf_download_dir / f"{pdf_obj.material_id}.md"
+                    with open(md_file_path, "w", encoding="utf-8") as f_md:
+                        f_md.write(content)
+                    logger.debug(f"Extracted text for PDF {pdf_obj.material_id} saved to {md_file_path.name}")
+                except OSError as e_io:
+                    logger.warning(f"Could not write extracted text to .md file for {pdf_obj.material_id}: {e_io}")
 
-                metadata = {
-                    "title": str(title) if title else None,
-                    "author": str(author) if author else None,
-                    "subject": str(subject) if subject else None,
-                    "creator": str(creator) if creator else None,
-                    "producer": str(producer) if producer else None,
-                }
+            if result and result.metadata:
+                metadata_dict = result.metadata
+                title = str(metadata_dict.get("title", "") or "")
+                if metadata_dict.get("subtitle"): title += f" - {metadata_dict['subtitle']}"
 
-                pdf = pdf.update_from_dict(metadata)
+                authors_list = metadata_dict.get("authors", [])
+                author_str = ", ".join(authors_list) if isinstance(authors_list, list) else str(authors_list or "")
 
-        info(
-            f"{total}/{len(file_paths)} ({total / len(file_paths):.2%}) pdfs processed"
-        )
-        await PDF.bulk_update(
-            batch,
-            fields=[
-                "extracted_text",
-                "extracted_text_max_length",
-                "title",
-                "author",
-                "subject",
-                "creator",
-                "producer",
-            ],
-        )
+                pdf_obj.title = title or None
+                pdf_obj.author = author_str or None
+                pdf_obj.subject = str(metadata_dict.get("subject", "") or "") or None
+                pdf_obj.creator = str(metadata_dict.get("creator", "") or "") or None
+                # Kreuzberg might use '/Producer', pikepdf uses 'Producer'
+                producer_val = metadata_dict.get("Producer") or metadata_dict.get("/Producer")
+                pdf_obj.producer = str(producer_val or "") or None
+
+            pdfs_updated_in_db.append(pdf_obj)
+
+        processed_count += len(pdf_batch)
+        logger.info(f"{processed_count}/{len(valid_pdfs_for_extraction)} ({processed_count / len(valid_pdfs_for_extraction):.0%}) PDFs processed in batches.")
+
+    if pdfs_updated_in_db:
+        try:
+            await PDF.bulk_update(
+                pdfs_updated_in_db,
+                fields=[
+                    "extracted_text", "extracted_text_max_length", "extracted_text_max_pages", "parsing_failed",
+                    "title", "author", "subject", "creator", "producer", "modified_at"
+                ],
+            )
+            logger.info(f"Bulk updated {len(pdfs_updated_in_db)} PDF records in DB after batch extraction.")
+        except Exception as e_db_update:
+            logger.error(f"Error bulk updating PDFs in DB after batch extraction: {e_db_update}")
+            # Optionally, try individual saves or log failures for manual review
+
+    return pdfs_to_process # Return the original list, with objects modified in place
 
 
 async def extract_pdf_text(
     pdf: PDF,
-    max_pages: int | None = 15,
-    str_limit: int | None = 50000,
+    max_pages: Optional[int] = PDF_TEXT_MAX_PAGES,
+    str_limit: Optional[int] = PDF_TEXT_STR_LIMIT,
     skip_failed: bool = True,
 ) -> PDF:
     """
-    Extracts text from a PDF file using kreuzberg
-    Limit the extraction length by number of pdf pages or output string length.
-    Parameters:
-        pdf (PDF): A PDF object (tortoise orm model)
-        max_pages (int, optional): Max num of pages to process. Defaults to None (all pages).
-        str_limit (int, optional): Truncate the result to this length. Defaults to None (no limit).
-        skip_failed (bool, optional): Skip pdfs that have failed parsing previously. Defaults to True.
+    Extracts text and metadata from a single PDF file using `kreuzberg`.
+    Includes OCR fallback with PaddleOCR if direct extraction yields no text.
+    Updates the PDF ORM object with extracted information and saves it.
+
+    Args:
+        pdf (PDF): The PDF ORM object to process.
+        max_pages (Optional[int]): Max number of pages for text extraction.
+        str_limit (Optional[int]): Max character length for stored text.
+        skip_failed (bool): If True, skips PDFs previously marked as parsing_failed.
+
     Returns:
-        The updated PDF object with extracted text and metadata (if successful).
+        PDF: The updated (or original if failed/skipped) PDF ORM object.
     """
-    path = pdf.path
-    if not path.exists() or not path.is_file() or path.suffix.lower() != ".pdf":
-        warn(f"Invalid/Not existing PDF file. Not parsing {path}")
+    pdf_path: Path = pdf.path
+    if not pdf_path.exists() or not pdf_path.is_file() or pdf_path.suffix.lower() != ".pdf":
+        logger.warning(f"Invalid or non-existent PDF file path: {pdf_path}. Cannot parse.")
         return pdf
 
     if pdf.parsing_failed and skip_failed:
-        warn(f"PDF parsing failed previously. Not parsing {path}")
+        logger.info(f"Skipping PDF {pdf_path.name} as it previously failed parsing.")
         return pdf
+
+    # Check if text already extracted is sufficient
+    current_text_len = len(pdf.extracted_text) if pdf.extracted_text else 0
+    current_max_len_setting = pdf.extracted_text_max_length if pdf.extracted_text_max_length else 0
+    if str_limit and current_text_len >= str_limit and current_max_len_setting >= str_limit:
+        logger.info(f"PDF {pdf_path.name} already has extracted text of sufficient length ({current_text_len}). Skipping.")
+        return pdf
+
+    extraction_result: Optional[ExtractionResult] = None
+    extraction_method_used = "direct" # For logging
+
     try:
-        cur_len = len(pdf.extracted_text) if pdf.extracted_text else 0
-        cur_max_len = (
-            pdf.extracted_text_max_length if pdf.extracted_text_max_length else 0
+        logger.debug(f"Attempting direct text extraction for {pdf_path.name} (max_pages: {max_pages}).")
+        # kreuzberg.extract_file might not support max_pages directly in its config for all backends.
+        # If max_pages is critical, pre-processing the PDF or using a library that supports it per page is needed.
+        # For now, it's passed as a record of intent.
+        extract_config = kreuzberg.ExtractionConfig(page_limit=max_pages if max_pages else 0) # page_limit=0 means all pages for some backends
+
+        extraction_result = await asyncio.wait_for(
+            asyncio.to_thread(extract_file, file_path=pdf_path, config=extract_config),
+            timeout=PDF_PROCESSING_TIMEOUT,
         )
-        if cur_max_len and str_limit and cur_max_len >= str_limit:
-            info(f"pdf already has extracted text of length {cur_max_len}")
-            return pdf
-    except Exception:
-        ...
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout during direct text extraction for {pdf_path.name}.")
+    except Exception as e_direct:
+        logger.warning(f"Direct text extraction failed for {pdf_path.name}: {e_direct}")
 
-    result: None | ExtractionResult | CoroutineType = None
-    try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(extract_file, file_path=path),
-            TIMEOUT,
-        )
-
-        if isinstance(result, CoroutineType):
-            result = await result
-
-    except Exception:
-        result = None
-
-    if not result:
+    # Fallback to OCR if direct extraction failed or yielded no content
+    if not extraction_result or not extraction_result.content:
+        logger.info(f"Direct extraction yielded no content for {pdf_path.name}. Attempting OCR.")
+        extraction_method_used = "ocr"
         try:
-            info(f"trying OCR for {path}")
-            result: ExtractionResult | CoroutineType = await asyncio.wait_for(
-                asyncio.to_thread(
-                    extract_file,
-                    file_path=path,
-                    config=kreuzberg.ExtractionConfig(
-                        force_ocr=True,
-                        ocr_backend="paddleocr",
-                        ocr_config=kreuzberg.PaddleOCRConfig(
-                            language="en",
-                            use_gpu=True,  # Enable GPU acceleration if paddlepaddle-gpu is available (experimental)
-                        ),
-                    ),
-                ),
-                TIMEOUT,
+            ocr_config_paddle = kreuzberg.PaddleOCRConfig(language=OCR_LANGUAGE, use_gpu=OCR_USE_GPU)
+            ocr_extract_config = kreuzberg.ExtractionConfig(
+                force_ocr=True, ocr_backend="paddleocr", ocr_config=ocr_config_paddle, page_limit=max_pages if max_pages else 0
             )
-
-            if isinstance(result, CoroutineType):
-                result = await result
-
-        except TimeoutError:
-            warn(
-                f"Timeout extracting text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}"
+            extraction_result = await asyncio.wait_for(
+                asyncio.to_thread(extract_file, file_path=pdf_path, config=ocr_extract_config),
+                timeout=PDF_PROCESSING_TIMEOUT * 2 # Allow more time for OCR
             )
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout during OCR extraction for {pdf_path.name}.")
             pdf.parsing_failed = True
-            await pdf.save()
-            return pdf
-        except Exception as e:
-            warn(
-                f"Error extracting text from PDF: {e}.\n    Setting parsing_failed to True for material id {pdf.material_id}"
-            )
+        except Exception as e_ocr:
+            logger.warning(f"OCR extraction failed for {pdf_path.name}: {e_ocr}")
             pdf.parsing_failed = True
-            await pdf.save()
-            return pdf
 
-    if not result:
-        warn(
-            f"Failed to extract text from PDF: {path}\n    Setting parsing_failed to True for material id {pdf.material_id}"
-        )
+    if not extraction_result or not extraction_result.content:
+        logger.warning(f"All extraction attempts (direct and OCR) failed for {pdf_path.name}.")
+        pdf.parsing_failed = True # Mark as failed if all attempts yield nothing
+    else:
+        pdf_text_content: str = extraction_result.content
+        if str_limit and len(pdf_text_content) > str_limit:
+            pdf_text_content = pdf_text_content[:str_limit]
 
-        pdf.parsing_failed = True
-        await pdf.save()
-        return pdf
-    pdf_text = result.content
-    metadata = result.metadata
+        pdf.extracted_text = pdf_text_content
+        pdf.extracted_text_max_length = str_limit
+        pdf.extracted_text_max_pages = max_pages # Record what was attempted
+        pdf.parsing_failed = False # Mark as success
+        logger.info(f"Successfully extracted text (length {len(pdf_text_content)}, method: {extraction_method_used}) from {pdf_path.name}.")
 
-    if str_limit and len(pdf_text) > str_limit:
-        pdf_text = pdf_text[:str_limit]
+        # Update metadata if available from the successful extraction
+        if extraction_result.metadata:
+            meta = extraction_result.metadata
+            pdf.title = str(meta.get("title", pdf.title) or "") or None # Keep existing if new is empty
+            authors = meta.get("authors", [])
+            pdf.author = ", ".join(authors) if isinstance(authors, list) else (str(authors) if authors else None)
+            pdf.subject = str(meta.get("subject", pdf.subject) or "") or None
+            pdf.creator = str(meta.get("creator", pdf.creator) or "") or None
+            producer_val = meta.get("Producer") or meta.get("/Producer") # Check both keys
+            pdf.producer = str(producer_val or pdf.producer or "") or None
 
-    if pdf_text and cur_len:
-        if len(str(pdf_text)) <= int(cur_len):
-            warn(
-                f"Extracted text is shorter or equal to current text: {len(str(pdf_text))} <= {cur_len}. Not updating."
-            )
-            return pdf
+        # Save extracted text to a .md file
+        pdf_download_dir: Path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full
+        md_file_path = pdf_download_dir / f"{pdf.material_id}.md"
+        try:
+            with open(md_file_path, "w", encoding="utf-8") as f_md:
+                f_md.write(pdf.extracted_text or "")
+            logger.debug(f"Extracted text for PDF {pdf.material_id} also saved to {md_file_path.name}")
+        except OSError as e_io_md:
+            logger.warning(f"Could not write extracted text to .md file for {pdf.material_id}: {e_io_md}")
 
-    update_dict = {
-        "extracted_text": pdf_text,
-        "extracted_text_max_length": str_limit,
-        "extracted_text_max_pages": max_pages,
-        "parsing_failed": False,
-    }
-
-    if metadata:
-        title = metadata.get("title")
-        if metadata.get("subtitle"):
-            title += " - " + metadata.get("subtitle")
-
-        author = metadata.get("authors")
-        if isinstance(author, list):
-            author = ", ".join(author)
-        subject = metadata.get("subject")
-        creator = metadata.get("creator")
-        producer = metadata.get("/Producer") if metadata.get("/Producer") else None
-
-        update_dict.update(
-            {
-                "title": str(title) if title else None,
-                "author": str(author) if author else None,
-                "subject": str(subject) if subject else None,
-                "creator": str(creator) if creator else None,
-                "producer": str(producer) if producer else None,
-            }
-        )
-
-    # write extracted text to file
-
-    pdf = pdf.update_from_dict(update_dict)
-    await pdf.save()
-    with open(pdf_dir.full / f"{pdf.material_id}.md", "w") as f:
-        f.write(pdf_text)
-    cool(f"Extracted text with len {len(pdf_text)} from {path}")
-
+    try:
+        await pdf.save() # Save changes (text, metadata, parsing_failed status)
+    except Exception as e_save:
+        logger.error(f"Failed to save PDF model instance {pdf.material_id} after text extraction: {e_save}")
     return pdf
 
 
-def ocr_with_paddle(
-    pdf_dir: Path,
-    PAGE_NUM: int | None = None,
-    outputdir: Path | None = None,
-    suffix: str = "_paddleocr",
-):
+def ocr_with_paddle( # This function appears to be a standalone utility, not directly integrated.
+    pdf_input_dir: Path,
+    num_pages_to_ocr: Optional[int] = PDF_TEXT_MAX_PAGES, # Use configured default
+    ocr_output_dir: Optional[Path] = None,
+    output_suffix: str = "_paddleocr",
+) -> None:
     """
-    This function uses PaddleOCR to perform OCR on the given PDF files.
-    It converts each page of the PDF to an image, processes the image with PaddleOCR,
-    and saves the extracted text to a .txt file.
+    Performs OCR on PDF files in a directory using PaddleOCR via `fitz` (PyMuPDF) for image conversion.
+    Saves extracted text to .txt files. This is a standalone utility.
 
-    Parameters:
-        - PAGE_NUM: The number of pages to process from each PDF file. Default is 15.
-        - pdfs: a generator that returns Paths for the PDF files to parse. Use Path().glob(*.pdf) for a dir of pdf files for example.
-        - outputdir: The directory where the output text files will be saved. Default is the current working directory + /paddle_output.
-        - suffix: The suffix to add to the output text files. Default is "_paddleocr". Will create files like {pdf_name}_paddleocr.txt.
-
-    Requires a CUDA compatible gpu for PaddleOCR to work at a decent speed.
-    """
-    import cv2
-    import fitz
-    import numpy as np
-    from paddleocr import PaddleOCR
-    from PIL import Image
-
-    if not PAGE_NUM:
-        PAGE_NUM = 15
-    if not pdf_dir or not pdf_dir.exists():
-        pdf_dir = Path().cwd() / "pdfs"
-    if not pdf_dir.exists():
-        print(f"[red]Directory {pdf_dir} does not exist.[/red]")
-        return
-    if not outputdir or not outputdir.exists():
-        outputdir = Path().cwd() / "paddle_output"
-
-    pdfs = pdf_dir.glob("*.pdf")
-    ocr = PaddleOCR(use_angle_cls=True, lang="en", page_num=PAGE_NUM, use_gpu=True)
-
-    for pdf in pdfs:
-        pdf_path = pdf
-        pdf_name = pdf_path.stem
-
-        if (outputdir / "{pdf_name}_paddle.txt").exists():
-            print(f"[red]skipping {pdf_name}[/red]")
-            continue
-        imgs: list[Image.Image] = []
-        full_text = []
-        try:
-            with fitz.open(pdf_path) as pdf:
-                for pg in range(0, PAGE_NUM):
-                    try:
-                        page = pdf[pg]
-                        mat = fitz.Matrix(2, 2)
-                        pm = page.get_pixmap(matrix=mat, alpha=False)
-                        if pm.width > 2000 or pm.height > 2000:
-                            pm = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
-                        img = Image.frombytes("RGB", [pm.width, pm.height], pm.samples)
-                        img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                        imgs.append(img)
-                    except Exception:
-                        continue
-        except Exception as e:
-            print(f"[red]Error processing {pdf_name}: {e}[/red]")
-            continue
-        if not imgs:
-            continue
-        for img in imgs:
-            result = ocr.ocr(img, cls=True)
-
-            if result is None:
-                continue
-
-            for residx in range(len(result)):
-                res = result[residx]
-                if res is None:
-                    continue
-
-                txts = [line[1][0] for line in res]
-                full_text.extend(txts)
-
-        full_text = " ".join(full_text)
-        full_text = full_text.replace("  ", " ")
-        with open(
-            outputdir / f"{pdf_name}" + suffix + ".txt", "w", encoding="utf-8"
-        ) as f:
-            f.write(full_text)
-
-
-async def extract_metadata(pdf: PDF) -> PDF:
-    """
-    Extracts metadata from a PDF file and updates the PDF object with the extracted information.
-    This function reads various metadata fields from the PDF file including title, author,
-    subject, creator, producer, and dates. If any of these fields contain values, they are
-    set as attributes on the PDF object.
     Args:
-        pdf (PDF): A PDF object containing the path to the PDF file and other attributes.
-    Returns:
-        PDF: The updated PDF object with extracted metadata fields set as attributes.
-    Note:
-        The function will only set attributes for metadata fields that contain values.
-        The PDF object is saved to persistence storage after metadata extraction.
+        pdf_input_dir (Path): Directory containing PDF files to OCR.
+        num_pages_to_ocr (Optional[int]): Number of pages to process from each PDF. Defaults to PDF_TEXT_MAX_PAGES.
+        ocr_output_dir (Optional[Path]): Directory to save output .txt files.
+                                     Defaults to 'paddle_output' in the current working directory.
+        output_suffix (str): Suffix to append to output filenames (before .txt).
     """
-    print(f"Extracting metadata from {pdf.path}")
     try:
-        file_data = await asyncio.wait_for(
-            asyncio.to_thread(pikepdf.open, pdf.path), TIMEOUT
+        import cv2
+        import fitz # PyMuPDF
+        import numpy as np_cv # Alias to avoid clash with main np
+        from paddleocr import PaddleOCR # Heavy dependency
+        from PIL import Image
+    except ImportError as e_import:
+        logger.error(f"Missing dependencies for ocr_with_paddle: {e_import}. Please install PyMuPDF, opencv-python, paddleocr, and Pillow.")
+        return
+
+    if not pdf_input_dir.exists() or not pdf_input_dir.is_dir():
+        logger.error(f"PDF input directory {pdf_input_dir} does not exist or is not a directory.")
+        return
+
+    if ocr_output_dir is None:
+        ocr_output_dir = Path.cwd() / "paddle_output"
+    ocr_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Initializing PaddleOCR (lang='{OCR_LANGUAGE}', use_gpu={OCR_USE_GPU}). This may take a moment...")
+    try:
+        ocr_engine = PaddleOCR(use_angle_cls=True, lang=OCR_LANGUAGE, page_num=num_pages_to_ocr, use_gpu=OCR_USE_GPU)
+    except Exception as e_paddle_init: # PaddleOCR can raise various errors on init
+        logger.error(f"Failed to initialize PaddleOCR engine: {e_paddle_init}")
+        return
+
+    for pdf_path_obj in pdf_input_dir.glob("*.pdf"):
+        pdf_filename_stem = pdf_path_obj.stem
+        output_txt_path = ocr_output_dir / f"{pdf_filename_stem}{output_suffix}.txt"
+
+        if output_txt_path.exists():
+            logger.info(f"Skipping {pdf_filename_stem}, output already exists: {output_txt_path.name}")
+            continue
+
+        logger.info(f"Processing {pdf_filename_stem} with PaddleOCR...")
+        extracted_text_parts: List[str] = []
+        try:
+            with fitz.open(pdf_path_obj) as pdf_doc:
+                pages_to_process = min(num_pages_to_ocr or len(pdf_doc), len(pdf_doc))
+                for page_num in range(pages_to_process):
+                    page = pdf_doc.load_page(page_num)
+                    # Convert to image (PNG) for OCR
+                    # Higher DPI can improve OCR but increases processing time
+                    pix = page.get_pixmap(dpi=200, alpha=False)
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    img_cv = cv2.cvtColor(np_cv.array(img), cv2.COLOR_RGB2BGR)
+
+                    ocr_result = ocr_engine.ocr(img_cv, cls=True)
+                    if ocr_result and ocr_result[0] is not None: # Check if result is not None
+                        for line_data in ocr_result[0]: # Result is a list of lists of lines
+                            if line_data and len(line_data) >= 2 and isinstance(line_data[1], tuple):
+                                extracted_text_parts.append(line_data[1][0]) # Text is in line[1][0]
+
+            full_extracted_text = " ".join(extracted_text_parts).replace("  ", " ")
+            with open(output_txt_path, "w", encoding="utf-8") as f_out:
+                f_out.write(full_extracted_text)
+            logger.info(f"Successfully OCR'd {pdf_filename_stem} to {output_txt_path.name}")
+
+        except Exception as e_ocr_process:
+            logger.error(f"Error processing {pdf_filename_stem} with PaddleOCR: {e_ocr_process}")
+
+
+async def extract_metadata(pdf: PDF) -> Optional[PDF]:
+    """
+    Extracts metadata from a PDF file using `pikepdf` and updates the PDF ORM object.
+
+    Args:
+        pdf (PDF): The PDF ORM object to process.
+
+    Returns:
+        Optional[PDF]: The updated PDF object if successful, or None if the PDF
+                       was deleted due to critical errors (e.g., password protected).
+                       The original PDF object is returned if metadata extraction times out
+                       or non-critical errors occur.
+    """
+    logger.debug(f"Attempting metadata extraction from {pdf.path}")
+    try:
+        # Use asyncio.to_thread for the blocking pikepdf.open call
+        pdf_document: pikepdf.Pdf = await asyncio.wait_for(
+            asyncio.to_thread(pikepdf.open, pdf.path, allow_overwriting_input=False), # type: ignore
+            timeout=PDF_PROCESSING_TIMEOUT
         )
-        metadata = file_data.docinfo
-    except TimeoutError:
-        warn(f"Timeout extracting metadata from PDF: {pdf.path}")
-        return pdf
-    except (
-        pikepdf.PdfError,
-        TypeError,
-        FileNotFoundError,
-        pikepdf.PasswordError,
-        pikepdf.DataDecodingError,
-    ) as e:
-        warn(f"Error extracting metadata from PDF: {e}")
-        warn("Deleting pdf file and db entry.")
-        # delete pdf
-        with contextlib.suppress(Exception):
-            File(pdf.path).delete()
-        with contextlib.suppress(Exception):
-            await pdf.delete()
+        # Accessing docinfo might also block if it parses parts of the PDF
+        docinfo = await asyncio.to_thread(lambda: dict(pdf_document.docinfo)) if pdf_document.docinfo else {} # type: ignore
 
+        # Ensure pdf_document is closed
+        await asyncio.to_thread(pdf_document.close)
+
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout extracting metadata from PDF: {pdf.path}")
+        return pdf # Return original object
+    except pikepdf.PasswordError:
+        logger.warning(f"PDF {pdf.path} is password protected. Marking as parsing_failed and deleting file.")
+        pdf.parsing_failed = True
+        await pdf.save(update_fields=["parsing_failed", "modified_at"])
+        with contextlib.suppress(OSError): pdf.path.unlink(missing_ok=True) # Delete the file
+        return None # Indicate file was problematic and handled (deleted)
+    except (pikepdf.PdfError, TypeError, FileNotFoundError, pikepdf.DataDecodingError) as e_pikepdf:
+        logger.warning(f"Pikepdf error extracting metadata from {pdf.path}: {e_pikepdf}. Marking as parsing_failed.")
+        pdf.parsing_failed = True
+        await pdf.save(update_fields=["parsing_failed", "modified_at"])
+        return pdf # Return original object, but marked
+    except Exception as e_generic:
+        logger.error(f"Unexpected error extracting metadata from {pdf.path}: {e_generic}")
+        logger.debug(traceback.format_exc())
+        return pdf
+
+    if not docinfo:
+        logger.info(f"No standard docinfo metadata found in {pdf.path}.")
+        return pdf
+
+    update_dict: Dict[str, Any] = {}
+    # Helper to safely convert PdfType objects to string
+    def _to_str_if_pdf_type(val: Any) -> Optional[str]:
+        if isinstance(val, (pikepdf.String, pikepdf.Name, pikepdf.Date)): return str(val)
+        if val is None: return None
+        return str(val) # Fallback for other types, though usually they are PdfType
+
+    title = _to_str_if_pdf_type(docinfo.get("/Title"))
+    if title: update_dict["title"] = title
+
+    author = _to_str_if_pdf_type(docinfo.get("/Author"))
+    if author: update_dict["author"] = author
+
+    subject = _to_str_if_pdf_type(docinfo.get("/Subject"))
+    if subject: update_dict["subject"] = subject
+
+    creator = _to_str_if_pdf_type(docinfo.get("/Creator"))
+    if creator: update_dict["creator"] = creator
+
+    producer = _to_str_if_pdf_type(docinfo.get("/Producer"))
+    if producer: update_dict["producer"] = producer
+
+    # Date parsing for pikepdf dates (format D:YYYYMMDDHHMMSSOHH'mm')
+    def parse_pdf_date(pdf_date_str: Optional[str]) -> Optional[datetime]:
+        if not pdf_date_str: return None
+        pdf_date_str = str(pdf_date_str) # Ensure it's a string
+        if pdf_date_str.startswith("D:"):
+            pdf_date_str = pdf_date_str[2:]
+            # Basic parsing, can be extended for timezone
+            formats_to_try = ["%Y%m%d%H%M%S%z", "%Y%m%d%H%M%S", "%Y%m%d"]
+            for fmt in formats_to_try:
+                try: return datetime.strptime(pdf_date_str[:len(fmt)], fmt) # Match length of format
+                except ValueError: continue
+        logger.debug(f"Could not parse PDF date string: {pdf_date_str}")
         return None
-    except Exception as e:
-        warn(f"Error extracting metadata from PDF: {e}")
-        print(traceback.format_exc())
-        input("Press enter to continue...")
-        return pdf
-    if not metadata:
-        return pdf
 
-    try:
-        title = metadata.get("/Title") if metadata.get("/Title") else None
-        author = metadata.get("/Author") if metadata.get("/Author") else None
-        subject = metadata.get("/Subject") if metadata.get("/Subject") else None
-        creator = metadata.get("/Creator") if metadata.get("/Creator") else None
-        producer = metadata.get("/Producer") if metadata.get("/Producer") else None
-        metadata = {
-            "title": str(title) if title else None,
-            "author": str(author) if author else None,
-            "subject": str(subject) if subject else None,
-            "creator": str(creator) if creator else None,
-            "producer": str(producer) if producer else None,
-        }
+    creation_date_str = _to_str_if_pdf_type(docinfo.get("/CreationDate"))
+    mod_date_str = _to_str_if_pdf_type(docinfo.get("/ModDate"))
 
-        pdf = pdf.update_from_dict(metadata)
+    if creation_date_str: update_dict["file_creation_date"] = parse_pdf_date(creation_date_str)
+    if mod_date_str: update_dict["file_modification_date"] = parse_pdf_date(mod_date_str)
+
+    if update_dict:
+        logger.info(f"Extracted metadata for {pdf.path}: {list(update_dict.keys())}")
+        for key, value in update_dict.items():
+            setattr(pdf, key, value)
+        pdf.parsing_failed = False # Successfully parsed metadata
         await pdf.save()
-        """        date_data = {
-            'file_creation_date': datetime.strptime(str(file_creation_date), "%Y%m%d%H%M%S") if file_creation_date else None,
-            'file_modification_date': datetime.strptime(str(file_modification_date), "%Y%m%d%H%M%S") if file_modification_date else None
-        }
-        pdf = pdf.update_from_dict(date_data)
-        await pdf.save()
-        """
-    except Exception as e:
-        warn(f"Error extracting metadata from {pdf.path}: {e}")
+    else:
+        logger.info(f"No new standard metadata fields extracted for {pdf.path}.")
 
     return pdf
 
 
 async def enrich_pdfs(
-    pdfs: list[PDF] | None = None,
-    input_mat_ids: list[int] | list[str] | None = None,
-    max_pages: int | None = 15,
-    str_limit: int | None = 20000,
-) -> list[PDF]:
+    pdfs_queryset: Optional[QuerySet[PDF]] = None, # Allow passing a queryset
+    input_mat_ids: Optional[List[int]] = None,
+    max_pages_text: Optional[int] = PDF_TEXT_MAX_PAGES,
+    char_limit_text: Optional[int] = PDF_TEXT_STR_LIMIT,
+) -> List[PDF]:
     """
-    Deduplicates, and then extracts text & metadata from a list of PDF files, and updates the objects accordingly.
-    If no input pdfs are provided, it will first load all pdfs into the DB from disk, then retrieve PDF objects from the db
-    Parameters:
-        pdfs (list[PDF]): A list of PDF objects (tortoise orm models).
-        max_pages (int, optional): Max num of pages to process. Defaults to None (all pages).
-        str_limit (int, optional): Truncate the result to this length. Defaults to None (no limit).
+    Enriches a list of PDF ORM objects by extracting metadata and text.
+    If no PDFs are provided, it fetches them based on `input_mat_ids` or all PDFs from the DB.
+    It prioritizes PDFs that haven't had metadata or text extracted yet.
+
+    Args:
+        pdfs_queryset (Optional[QuerySet[PDF]]): A Tortoise ORM queryset of PDFs to process.
+        input_mat_ids (Optional[List[int]]): A list of material IDs to filter PDFs if `pdfs_queryset` is not given.
+        max_pages_text (Optional[int]): Max pages for text extraction.
+        char_limit_text (Optional[int]): Character limit for extracted text.
+
     Returns:
-        list[PDF]: The same list of PDF objects, but updated with deduplication info, metadata & extracted text.
+        List[PDF]: The list of processed PDF objects, updated with extracted information.
     """
-    await init()
-    if pdfs:
-        input_mat_ids = [pdf.material_id for pdf in pdfs]
+    await init_tortoise_orm()
 
-    if not pdfs:
-        if input_mat_ids:
-            input_mat_ids = [int(mat_id) for mat_id in input_mat_ids]
-            pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
-        else:
-            pdfs = await PDF.all()
-            input_mat_ids = [pdf.material_id for pdf in pdfs]
+    processed_pdfs: List[PDF] = []
+    pdfs_to_process: List[PDF]
 
-    if input_mat_ids:
-        pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
+    if pdfs_queryset is not None:
+        pdfs_to_process = await pdfs_queryset
+        logger.info(f"Received {len(pdfs_to_process)} PDFs from queryset for enrichment.")
+    elif input_mat_ids:
+        sanitized_mat_ids = [int(mid) for mid in input_mat_ids if str(mid).isdigit()]
+        pdfs_to_process = await PDF.filter(material_id__in=sanitized_mat_ids).all()
+        logger.info(f"Fetched {len(pdfs_to_process)} PDFs based on input material IDs for enrichment.")
     else:
-        pdfs = await PDF.all()
-    await load_pdfs()
-    pdfs = await PDF.all()
+        logger.info("No specific PDFs or material_ids provided. Fetching all PDFs from DB for enrichment check.")
+        await load_pdfs() # Ensure PDF table is populated from disk if not already
+        pdfs_to_process = await PDF.all()
+        logger.info(f"Fetched all {len(pdfs_to_process)} PDFs from DB for enrichment.")
 
-    pdfs_without_metadata = [
-        pdf
-        for pdf in pdfs
-        if not any(
-            [
-                getattr(pdf, field)
-                for field in [
-                    "title",
-                    "author",
-                    "subject",
-                    "creator",
-                    "producer",
-                    "file_creation_date",
-                    "file_modification_date",
-                ]
-            ]
-        )
+    if not pdfs_to_process:
+        logger.info("No PDFs found to enrich.")
+        await Tortoise.close_connections()
+        return []
+
+    # Phase 1: Extract metadata for those missing it
+    logger.info("Starting metadata extraction phase.")
+    pdfs_needing_metadata = [
+        p for p in pdfs_to_process
+        if not (p.title or p.author or p.subject or p.creator or p.producer or p.file_creation_date or p.file_modification_date)
     ]
-    # metadata_extracted = [await extract_metadata(pdf) for pdf in pdfs_without_metadata]
+    logger.info(f"Found {len(pdfs_needing_metadata)} PDFs potentially needing metadata extraction.")
+    metadata_tasks = [extract_metadata(pdf) for pdf in pdfs_needing_metadata]
+    await asyncio.gather(*metadata_tasks, return_exceptions=True) # Results are PDF objects or None
 
-    # pdfs = await PDF.all()
-    # pdfs_without_metadata = [
-    #    pdf
-    #    for pdf in pdfs
-    #    if not any(
-    #        [
-    #            getattr(pdf, field)
-    #            for field in [
-    #                "title",
-    #                "author",
-    #                "subject",
-    #                "creator",
-    #                "producer",
-    #                "file_creation_date",
-    #                "file_modification_date",
-    #            ]
-    #        ]
-    #    )
-    # ]
-    # if pdf is in pdfs_without_metadata, remove from pdfs
-    pdfs = [pdf for pdf in pdfs if pdf not in pdfs_without_metadata]
-    pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
-    # info(
-    #    f"Found {len(pdfs_missing_text)} pdfs without extracted text. First trying batch extract with kreuzberg"
-    # )
-    # await batch_extract_pdf_text(
-    #    pdfs_missing_text, max_pages=max_pages, str_limit=str_limit
-    # )
-    # input("Press enter to continue...")
-    # pdfs_missing_text = [pdf for pdf in pdfs if not pdf.extracted_text]
-    info(f"found {len(pdfs_missing_text)} pdfs without extracted text.")
+    # Refresh from DB or update in-memory objects if extract_metadata saves individually (it does)
+    # For simplicity, assume objects in pdfs_to_process are updated if extract_metadata saves.
 
-    for pdf in pdfs_missing_text:
-        try:
-            await extract_pdf_text(pdf, max_pages=max_pages, str_limit=str_limit)
-        except Exception as e:
-            warn(f"Error extracting text from {pdf.path}: {e}")
-            continue
-
-    pdfs_missing_metadata = [
-        pdf
-        for pdf in pdfs
-        if not any(
-            [
-                getattr(pdf, field)
-                for field in [
-                    "title",
-                    "author",
-                    "subject",
-                    "creator",
-                    "producer",
-                    "file_creation_date",
-                    "file_modification_date",
-                ]
-            ]
-        )
+    # Phase 2: Extract text for those missing it (can use batch for efficiency)
+    logger.info("Starting text extraction phase.")
+    pdfs_needing_text = [
+        p for p in pdfs_to_process # Use the full list again, in case metadata step marked some as parsing_failed
+        if (not p.extracted_text or (char_limit_text and len(p.extracted_text) < char_limit_text)) and not p.parsing_failed
     ]
-    info(f"Found {len(pdfs_missing_metadata)} pdfs without metadata.")
+    logger.info(f"Found {len(pdfs_needing_text)} PDFs potentially needing text extraction.")
+    if pdfs_needing_text:
+        # Using batch_extract_pdf_text (assuming it's more efficient for many files)
+        await batch_extract_pdf_text(pdfs_needing_text, max_pages=max_pages_text, str_limit=char_limit_text)
+        # If some still need text (e.g., batch failed for some, or individual retry logic is desired):
+        # remaining_needing_text = [p for p in pdfs_needing_text if not p.extracted_text and not p.parsing_failed]
+        # if remaining_needing_text:
+        #     logger.info(f"Retrying text extraction individually for {len(remaining_needing_text)} PDFs.")
+        #     text_tasks = [extract_pdf_text(pdf, max_pages=max_pages_text, str_limit=char_limit_text, skip_failed=True) for pdf in remaining_needing_text]
+        #     await asyncio.gather(*text_tasks, return_exceptions=True)
 
-    if input_mat_ids:
-        pdfs = await PDF.filter(material_id__in=input_mat_ids).all()
-    else:
-        pdfs = await PDF.all()
 
-    # info(f"Deduplicating {len(pdfs)} pdfs.")
-    # deduplicated_pdfs: list[PDF] = await deduplicate_pdfs(pdfs, False)
-    # do something with deduplicated_pdfs
+    # Phase 3: Deduplication (currently disabled for embeddings)
+    # logger.info(f"Starting deduplication for {len(pdfs_to_process)} PDFs.")
+    # processed_pdfs = await deduplicate_pdfs(pdfs_to_process, compare_with_db=True) # compare_with_db=True is default
+
+    # For now, returning the list that went through metadata and text extraction.
+    # If deduplication were active and modified relationships, a final fetch might be needed.
+    processed_pdfs = pdfs_to_process
+
+    logger.info("PDF enrichment process (metadata, text) completed.")
+    await Tortoise.close_connections()
+    return processed_pdfs
 
 
-async def deduplicate_pdfs(pdfs: list[PDF], compare_with_db=True) -> list[PDF]:
+async def deduplicate_pdfs(pdfs: List[PDF], compare_with_db: bool = True) -> List[PDF]:
     """
-    Deduplicate a list of PDF files. Uses various techniques to compare the files.
-    When duplicates are found, keep the -oldest- (?) file and make the others point to it.
-    Parameters:
-        pdfs (list[PDF]): A list of pdfs from the db to deduplicate.
+    Deduplicates a list of PDF files based on content hashes.
+    Updates `replace_with` field in PDF ORM objects for duplicates.
+    The embedding-based deduplication part is currently disabled.
+
+    Args:
+        pdfs (List[PDF]): A list of PDF ORM objects to deduplicate.
+        compare_with_db (bool): If True, considers existing `replace_with` relations from DB.
+
     Returns:
-        list[PDF]: The same list of pdfs, but updated where possible.
+        List[PDF]: The list of PDF objects, potentially updated with deduplication info.
     """
-    from qdrant_client import QdrantClient, models
+    try:
+        from qdrant_client import QdrantClient, models as qdrant_models # Renamed models
+    except ImportError:
+        logger.warning("qdrant_client not installed. Embedding-based deduplication will be skipped.")
+        # Fallback to hash-based only if Qdrant is not available
+        # For now, the embedding part is 'if False' anyway.
 
-    client = QdrantClient(path="qdrant.db")
-    ids_per_hash = defaultdict(list)
-    new_mapping: dict[int, int] = {}  # store duplicates as {id_to_replace: target_id}
-    replaced_ids = set()  # store ids for pdfs that have been replaced: they do not need to be processed any further
+    logger.info(f"Starting deduplication process for {len(pdfs)} PDFs. Compare with DB: {compare_with_db}")
+    await init_tortoise_orm()
+
+    ids_per_hash: defaultdict[str, list[int]] = defaultdict(list)
+    new_hash_mappings: dict[int, int] = {}  # Maps: duplicate_id -> original_id
+    already_replaced_ids: set[int] = set()
 
     if compare_with_db:
-        pdfs_in_db = (
-            await PDF.all()
-            .prefetch_related("replace_with")
-            .values("material_id", "replace_with__material_id")
-        )
-    else:
-        input_mat_ids = [pdf.material_id for pdf in pdfs]
-        pdfs_in_db = (
-            await PDF.filter(material_id__in=input_mat_ids)
-            .prefetch_related("replace_with")
-            .values("material_id", "replace_with__material_id")
-        )
+        db_pdfs_info = await PDF.all().values("material_id", "replace_with_id")
+        for pdf_info in db_pdfs_info:
+            if pdf_info["replace_with_id"] is not None:
+                already_replaced_ids.add(int(pdf_info["material_id"]))
+        logger.info(f"Found {len(already_replaced_ids)} PDFs already marked as duplicates in DB.")
 
-    pdfs_with_replace_with = [
-        pdf for pdf in pdfs_in_db if pdf.get("replace_with__material_id")
-    ]
-    replaced_ids.update({pdf.get("material_id") for pdf in pdfs_with_replace_with})
-    info(f"Found {len(replaced_ids)} pdfs that are already replaced in db.")
-    # first sort the pdfs on their 'age' property
-    pdfs.sort(key=lambda pdf: pdf.age)
+    # Sort by age to prefer keeping the oldest PDF as the original
+    # Requires PDF objects to have a reliable 'age' or 'created' attribute.
+    # Assuming PDF model has 'created_at' from TimestampMixin.
+    pdfs_for_hashing = sorted([p for p in pdfs if p.material_id not in already_replaced_ids], key=lambda p: p.created_at or datetime.min)
 
-    # now use list comprehension to populate ids_per_hash.
-    # should result in a dict with hash as key and list of ids as value
-    # if len(ids_per_hash[hash]) > 1, we have duplicates for that hash!
+    for pdf_obj in pdfs_for_hashing:
+        if not pdf_obj.path.exists():
+            logger.warning(f"PDF file not found for hashing: {pdf_obj.path}. Skipping.")
+            continue
+        file_hash = get_hash(pdf_obj.path)
+        if file_hash:
+            ids_per_hash[file_hash].append(pdf_obj.material_id)
 
-    [ids_per_hash[get_hash(pdf.path)].append(pdf.material_id) for pdf in pdfs]
-    for file_hash, ids in ids_per_hash.items():
-        if len(ids) > 1:
-            new_mapping.update({id_to_replace: ids[0] for id_to_replace in ids[1:]})
-            replaced_ids.union(set(ids[1:]))
-    info(f"Found {len(new_mapping)} duplicates by hash.")
-    by_hash = len(new_mapping)
-    replaced = 0
-    already_replaced = 0
-    for old_id, new_id in new_mapping.items():
-        replace_pdf = await PDF.get_or_none(material_id=new_id)
-        if replace_pdf:
-            pdf = await PDF.get_or_none(material_id=old_id)
-            if pdf:
-                current_replacement = await pdf.replace_with
-                if current_replacement:
-                    already_replaced += 1
-                    continue
-                pdf.replace_with = replace_pdf
-                replaced += 1
-                await pdf.save()
+    updated_count_by_hash: int = 0
+    for file_hash_val, mat_ids_list in ids_per_hash.items():
+        if len(mat_ids_list) > 1:
+            original_id = mat_ids_list[0] # Oldest one due to sort
+            for duplicate_id in mat_ids_list[1:]:
+                if duplicate_id != original_id: # Should always be true here
+                    new_hash_mappings[duplicate_id] = original_id
 
-    info(
-        f"Replaced {replaced} duplicate pdfs with alternative material_id.\n {already_replaced} pdfs already had a replacement."
-    )
+    if new_hash_mappings:
+        logger.info(f"Found {len(new_hash_mappings)} potential new duplicates by hash.")
+        for duplicate_id, original_id in new_hash_mappings.items():
+            try:
+                pdf_to_update = await PDF.get_or_none(material_id=duplicate_id)
+                original_pdf_ref = await PDF.get_or_none(material_id=original_id)
+                if pdf_to_update and original_pdf_ref and pdf_to_update.replace_with_id is None:
+                    pdf_to_update.replace_with = original_pdf_ref
+                    await pdf_to_update.save(update_fields=["replace_with_id", "modified_at"])
+                    updated_count_by_hash += 1
+                    already_replaced_ids.add(duplicate_id) # Add to set to exclude from embedding part
+            except Exception as e_save_hash:
+                logger.error(f"Error saving hash-based duplicate link for {duplicate_id} -> {original_id}: {e_save_hash}")
+    logger.info(f"Updated {updated_count_by_hash} PDFs as duplicates based on hash.")
 
-    # step 2: load extracted text for pdfs into qdrant
-    new_mapping = {}
-    TRESHOLD = 0.98  # treshold for similarity
-    all_embedding_pdfs = [
-        pdf
-        for pdf in pdfs
-        if pdf.extracted_text and pdf.material_id not in replaced_ids
-    ]
-    info("!!!! \n       Disabled embedding deduplication for now\n!!!!!!")
-    if False:
-        for embedding_pdfs in batched(all_embedding_pdfs, 20):
-            selected: list[PDF] = []
-            for pdf in embedding_pdfs:
-                result = client.retrieve(
-                    collection_name="pdfs",
-                    ids=[pdf.material_id],
-                    with_payload=False,
-                    with_vectors=False,
-                )
-                if len(result) > 1:
-                    continue
-                selected.append(pdf)
-            if not selected:
-                continue
-            docs = [pdf.extracted_text for pdf in selected]
-            ids = [pdf.material_id for pdf in selected]
-            client.add(collection_name="pdfs", documents=docs, ids=ids)
-        # once stored, we can query for duplicates
-        # determine this by looping over all pdfs & searching for the extracted text in the qdrant db
-        # if QueryResponse has a score above treshold: mark as match (add to new_mapping etc).
-        info(f"deduplicating {len(all_embedding_pdfs)} by embedding")
-        for pdf in all_embedding_pdfs:
-            query = pdf.extracted_text
-            rep_w: QuerySet[PDF] = pdf.replace_with
-            if rep_w:
-                rep_pdf: PDF | None = await rep_w.first()
-                if rep_pdf:
-                    mat_id = rep_pdf.material_id
-                    if mat_id:
-                        info(f"Item is replaced by {mat_id}, skipping")
-                        continue
+    # Embedding-based deduplication (currently disabled)
+    if False:  # pragma: no cover
+        logger.info("Embedding-based deduplication is currently disabled.")
+        # ... (embedding logic would go here if re-enabled) ...
+        # Remember to handle already_replaced_ids for this part too.
 
-            # exclude the pdf itself from the query: so id in qdrant != pdf.material_id
-            response: list[BaseModel] = client.query(
-                collection_name="pdfs",
-                query_text=query,
-                query_filter=models.Filter(
-                    must_not=[
-                        models.HasIdCondition(has_id=[pdf.material_id]),
-                    ],
-                ),
-                limit=5,
-            )
-            for result in response:
-                if result.score > TRESHOLD:
-                    new_mapping[pdf.material_id] = result.id
-                    break
-
-        info(f"Found {len(new_mapping)} duplicates by embedding.")
-
-    if not new_mapping:
-        info("No duplicates found!")
-        return pdfs
-
-    replaced = 0
-    already_replaced = 0
-    for old_id, new_id in new_mapping.items():
-        replace_pdf = await PDF.get_or_none(material_id=new_id)
-        if replace_pdf:
-            pdf = await PDF.get_or_none(material_id=old_id)
-            if pdf:
-                current_replacement = await pdf.replace_with
-                if current_replacement:
-                    already_replaced += 1
-                    continue
-                pdf.replace_with = replace_pdf
-                replaced += 1
-                await pdf.save()
-
-    info(
-        f"Replaced {replaced} duplicate pdfs with alternative material_id.\n {already_replaced} pdfs already had a replacement."
-    )
+    await Tortoise.close_connections()
+    # Return the original list of PDF objects; their 'replace_with' may have been updated.
     return pdfs
 
 
-def get_hash(file_path: Path) -> str | None:
+def get_hash(file_path: Path) -> Optional[str]:
     """
-    Calculate the XXH64 hash of a file and return it as a hexadecimal string.
+    Calculates the XXH64 hash of a file.
+
     Args:
-        file_path (Path): Path to the file to be hashed.
+        file_path (Path): Path to the file.
+
     Returns:
-        str or None: Hexadecimal string representation of the file's XXH64 hash; None if an error occurs.
+        Optional[str]: Hexadecimal string of the hash, or None if an error occurs.
     """
     try:
         with open(file_path, "rb") as f:
             contents = f.read()
         return xxh64(contents).hexdigest()
+    except FileNotFoundError:
+        logger.warning(f"File not found for hashing: {file_path}")
+    except OSError as e_os: # Catch other I/O errors
+        logger.warning(f"OS error hashing file {file_path}: {e_os}")
+    except Exception as e_generic:
+        logger.error(f"Unexpected error hashing file {file_path}: {e_generic}")
+    return None
 
-    except Exception as e:
-        warn(f"Error hashing {file_path}: {e}")
-        return None
 
-
-def get_embedding(pdf: PDF) -> list[np.ndarray] | None:
+def get_embedding(pdf: PDF) -> Optional[List[np.ndarray]]: # Type for list of numpy arrays
     """
-    Calculate the embedding of the extracted pdf text using a pre-trained model.
+    Calculates the embedding of the extracted text of a PDF using FastEmbed.
+    (Note: This function is currently not actively used as embedding deduplication is disabled).
+
     Args:
-        pdf (PDF): PDF object with extracted text.
+        pdf (PDF): PDF ORM object with `extracted_text`.
+
     Returns:
-        list[float] or None: List of floats representing the file's embedding; None if an error occurs.
+        Optional[List[np.ndarray]]: List of embeddings (typically one for the whole text,
+                                     but FastEmbed can return per-passage). None on error.
     """
-    from fastembed import TextEmbedding
-
-    embedding_model = TextEmbedding()
-    return embedding_model.embed(pdf.extracted_text)
-
-    pass
+    if not pdf.extracted_text:
+        logger.debug(f"No extracted text for PDF {pdf.material_id}, cannot get embedding.")
+        return None
+    try:
+        from fastembed import TextEmbedding # Local import as it's a heavy dependency
+        embedding_model = TextEmbedding() # Initialize model (could be slow if done repeatedly)
+        # embed() returns List[np.ndarray]
+        embeddings: List[np.ndarray] = list(embedding_model.embed(pdf.extracted_text))
+        return embeddings
+    except ImportError:
+        logger.warning("FastEmbed library not installed. Cannot generate embeddings.")
+    except Exception as e:
+        logger.error(f"Error generating embedding for PDF {pdf.material_id}: {e}")
+    return None
