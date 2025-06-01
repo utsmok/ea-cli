@@ -507,9 +507,19 @@ def render_item_history(history: list[ItemUpdate]):
         if not changes:
             continue
         max_key_len = max(len(key) for key in changes)
-        edit_content = [
-            f"<span class='badge badge-xs  badge-secondary text-[10px]'>{datetime.datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S')}</span>"
-        ]
+        try:
+            edit_content = [
+                f"<span class='badge badge-xs  badge-secondary text-[10px]'>{datetime.datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S')}</span>"
+            ]
+        except Exception:
+            try:
+                edit_content = [
+                    f"<span class='badge badge-xs  badge-secondary text-[10px]'>{datetime.datetime.strptime(date, '%Y-%m-%d')}</span>"
+                ]
+            except Exception:
+                edit_content = [
+                    "<span class='badge badge-xs  badge-secondary text-[10px]'>?</span>"
+                ]
         edit_content.extend(
             [
                 f"<span class='flex flex-col ml-2'><span class='badge badge-xs badge-outline badge-secondary text-[10px]'>{key.replace('_', ' '):>{max_key_len}}</span><span class='ml-2'><span class='text-[10px] badge badge-xs badge-outline badge-accent'>{value[0]}</span>  →  <span class='text-[10px] badge badge-xs badge-primary'>{value[1]}</span></span></span>"

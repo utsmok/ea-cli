@@ -1,12 +1,13 @@
 import asyncio
 import os
+from collections import defaultdict
 
 import polars as pl
 
 from easy_access.db.base import init
 from easy_access.db.ingest import load_base_data, load_raw_copyright_data
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_full_data
-from easy_access.db.update import update_copyright_items
+from easy_access.db.update import DataSource, update_copyright_items
 from easy_access.settings import (
     COURSE_MAPPING,
     SETTINGS,
@@ -22,134 +23,6 @@ from easy_access.sheets.sheet import (
     store_complete_data,
 )
 from easy_access.utils import Directory, File, cool, info, print, warn
-
-"""
-    TODO: Make changes to the logic of importing data / syncing up sheets and DB.
-
-
-    Currently, updating / merging data is done all over the codebase, and there are cases where this results in data loss, errors, or inconsistencies.
-    Part of the update logic is in this file (main.py), part in sheets/sheets.py and, part in db/update.py and db/ingest.py.
-
-    We need clear priorities of how we handle merging data from the possible data sources:
-        - raw copyright export files (folder raw_copyright_data, excel files)
-        - weekly sheets (one sheet per week per faculty, in faculty_sheets dir with a subdir for each faculty)
-        - overview sheets (one sheet per faculty, in the same subdir as the weekly sheets)
-        - sqlite db (db.sqlite3, not user editable)
-
-    Let's walk through each source and discuss how we handle the various cases.
-
-    # How to handle each data source
-
-    1. Raw copyright export file
-        Items **always** initially enter the dataset through a raw copyright export file.
-        These are ingested into the sqlite db first after standardization and adding some basic fields (e.g. faculty).
-
-        If an item is already present in the db, we need to compare only a few fields, as most fields are either never updated in the source data, or updates are not relevant for us:
-            Always overwrite:
-            - status (published/unpublished/deleted)
-            - last change
-            - students registered, pages * students
-
-            Compare but don't change things (?)
-            these fields are entered in the sheets first and read back into the raw data, so our sheets are the source of truth.
-            So, dont' update sheets with the raw data, but compare to check for errors/inconsistencies:
-            - Manual classification
-            - Manual identifier
-            - Scope
-            - Remarks
-            - Auditor
-
-    2. Weekly sheets
-        These sheets are made once a week, and never updated/changed by the script. Only shows items that are new in the import of that week.
-        Users can change a few fields in the data entry sheet:
-        - Manual classification
-        - Scope
-        - Remarks
-        - Workflow status
-
-        Any changes in this field should overwrite the db data for these fields, with one exception: the overview sheet can also be used by users to change this. This needs some more thought / work
-
-    3. Overview sheets
-        These sheets are refreshed every week. First, all the data from the overview sheet is read to memory, we create a new weekly sheet, and update the DB using heuristics to determine priorities/changes/conflicts.
-        Then the DB should be the source of truth. A new overview sheet is created, which is basically a snapshot of the DB at that moment.
-
-        Users can also change the same fields as in the weekly sheets in this sheet:
-        - Manual classification
-        - Scope
-        - Remarks
-        - Workflow status
-
-        In case of conflicts between weekly sheets and overview sheets, we need to determine priorities. This needs some more thought / work.
-
-    4. SQLite DB
-
-        This is used as the source of truth for the current state of the copyright data.
-        I believe all details on how to store/update the data are already mentioned above.
-
-    5. User input from webapp
-
-        The (experimental) web frontend for this app can be used to add or change Workflow status, manual classification, and remarks.
-        Any changes made using this webapp should directly update the DB, and probably also update the overview sheets -- but we'll need to think about the best way to do this, so for now we'll just ignore this and only update the DB.
-
-    # Order of operations
-
-    Let's walk through the order of operations for each script run when using batch mode (only way to run the script currently):
-
-    A. Read in data from the various source into memory
-        1. New items from Qlik: Latest raw copyright data excel file from Qlik or, if given, the 'other_sheet' file
-        2. Weekly sheets: Read in all weekly sheets from the faculty_sheets dir (one sheet per week per faculty)
-        3. Overview sheets: Read in all overview sheets from the faculty_sheets dir (one sheet per faculty)
-        4. DB: Read in all data from the sqlite db
-
-    B. Standardize, normalize, cleanup, verify the ingested data
-        - this is done separately for each source, no comparisons yet
-        - Required, otherwise we cannot compare the data or might be reading in invalid data, etc
-        - NEW: keep track of errors in the weekly + overview sheets per faculty, write these to a separate error sheet per faculty to let the users know what to fix
-
-    C. Use priorities / heuristics to compare the data to determine the current absolute state
-        - This is the most important step, and needs to be done carefully to avoid data loss or errors
-        - Currently partly done in main.py, partly in db/update.py, and partly in db/ingest.py -- this needs to be cleaned up and made more consistent
-
-        - Let's use this order of operations:
-
-        1. As the overview sheets are remade every week as a direct copy of the DB, start by comparing the DB with the overview sheets row-by-row using material_id as pk.
-            - item in overview sheet but not in db: should not happen, mark as error
-            - difference in any of the fields below: update the db with the overview sheet data:
-                - workflow status
-                - manual classification
-                - remarks
-
-        Then delete the overview sheets - we've ingested that data and will remake them at the end.
-        Next step:
-
-        2. Compare DB with the raw copyright data - pk is material_id
-            - item not in db: create new item in db based on the raw copyright data
-            - item in db: overwrite the db data with the raw copyright data for the following fields:
-                - status (published/unpublished/deleted)
-                - last change
-                - students registered, pages * students
-
-        Done with raw copyright data. Now on to the weekly sheets:
-
-        3. Compare DB with the weekly sheets - pk is material_id
-            - item in sheet but not in db: should not happen, mark as error
-            - if there is a difference in any of the fields below, use a detailed heuristic to determine which data to keep, see below.
-                - workflow status
-                - manual classification
-                - remarks
-
-        heuristic for determining which data to keep:
-        1. If the current db value is empty, use the value from the weekly sheet
-        2. If the current db value is not empty:
-            - If available, compare the change date of the db value (using the itemupdate log) with the change date of the weekly sheet. Keep the most recent value.
-            - Else, if the workflow status of the weekly sheet is 'higher' than the db value, keep all weekly sheet values; and vice versa. Priority order: Done > InProgress > ToDo
-            - Else, if the workflow status is equal but manual classification is different, use priority order for manual classification:
-                Open Access, [korte/middel/lange] overname, eigen materiaal [powerpoint/titelindicatie/overig], onbekend, licentie beschikbaar, niet geanalyseerd, in onderzoek, verwijderverzoek verstuurd
-            - If all are the same except remarks, merge the strings in both remark fields (if there is overlap in the text, don't add it twice, e.g. "hello this is a remark" + "this is a remark, but better" = "hello this is a remark, but better")
-
-
-
-"""
 
 
 class EasyAccessTool:
@@ -203,14 +76,106 @@ class EasyAccessTool:
         if export:
             self.functions.extend([self.create_export_sheet])
 
+    def _load_data(self):
+        """
+        Loads all relevant data sources: Qlik export, DB, overview sheets, weekly sheets.
+        Populates self.raw_qlik_df, self.initial_db_df, self.weekly_dfs, self.overview_dfs, self.sheet_errors.
+        """
+        from easy_access.sheets.sheet import (
+            read_copyright_export,
+            read_overview_sheets,
+            read_weekly_sheets,
+        )
+
+        self.latest_file_date, self.raw_qlik_df = read_copyright_export()
+        self.initial_db_df = retrieve_copyright_items()
+        self.weekly_dfs: dict[str, pl.DataFrame] = {}
+        self.overview_dfs: dict[str, pl.DataFrame] = {}
+
+        self.sheet_errors = defaultdict(list)
+        # Faculties may be set by settings or from Qlik data
+        if self.settings.faculty:
+            self.faculties = [self.settings.faculty]
+        else:
+            self.faculties = (
+                self.raw_qlik_df.select(pl.col("faculty").unique())
+                .to_series()
+                .sort()
+                .to_list()
+            )
+        for faculty in self.faculties:
+            try:
+                self.overview_dfs[faculty] = read_overview_sheets(faculty)
+            except Exception as e:
+                self.sheet_errors[faculty].append(f"Error reading overview sheets: {e}")
+            try:
+                self.weekly_dfs[faculty] = read_weekly_sheets(faculty)
+            except Exception as e:
+                self.sheet_errors[faculty].append(f"Error reading weekly sheets: {e}")
+        # Write errors to files
+        for faculty, errors in self.sheet_errors.items():
+            if errors:
+                error_log_path = (
+                    self.dirs[DirSetting.FACULTIES_DIR].full
+                    / faculty
+                    / "sheet_errors.txt"
+                )
+                with open(error_log_path, "w", encoding="utf-8") as f:
+                    for err in errors:
+                        f.write(err + "\n")
+
+    def _synchronize_data(self):
+        """
+        Central synchronization step: applies updates in the correct order and with correct priorities.
+        """
+        # Step 1: Overview sheets
+        for _, overview_df in self.overview_dfs.items():
+            if not overview_df.is_empty():
+                asyncio.get_event_loop().run_until_complete(
+                    update_copyright_items(overview_df, DataSource.OVERVIEW_SHEET)
+                )
+        # Step 2: Qlik (raw export)
+        if not self.raw_qlik_df.is_empty():
+            asyncio.get_event_loop().run_until_complete(
+                update_copyright_items(self.raw_qlik_df, DataSource.RAW_QLIK_DATA)
+            )
+        # Step 3: Weekly sheets
+        for _, weekly_df in self.weekly_dfs.items():
+            if not weekly_df.is_empty():
+                asyncio.get_event_loop().run_until_complete(
+                    update_copyright_items(weekly_df, DataSource.WEEKLY_SHEET)
+                )
+
+    def _generate_output_sheets(self):
+        """
+        Generates all output sheets (overviews, faculty sheets, all items sheet) from the final DB state.
+        """
+        self.remove_current_overviews()
+        # Use the final DB state for all outputs
+        from easy_access.sheets.analysis import create_faculty_overviews
+
+        faculty_dict = {}
+        for faculty in self.faculties:
+            data = retrieve_full_data(selected_faculties=faculty)
+            if not data.is_empty():
+                faculty_dict[faculty] = data
+        self.style_iter = create_faculty_overviews(
+            faculty_dict, self.style_iter, self.disable_writes
+        )
+        self.create_faculty_sheets()
+        self.create_all_items_sheet()
+
     def run(self) -> None:
         """
-        Runs the functions as specified in the settings dict.
+        Centralized run: load all data, synchronize, then generate outputs.
         """
-
-        for func in self.functions:
-            info(f"running {func.__name__}")
-            func()
+        info("Starting EasyAccessTool run (centralized sync mode)")
+        self._load_data()
+        self._synchronize_data()
+        self.copyright_data = retrieve_full_data()
+        self._generate_output_sheets()
+        if self.settings.export:
+            self.create_export_sheet()
 
     def process_raw_copyright_data(self) -> None:
         """
@@ -281,177 +246,6 @@ class EasyAccessTool:
         cool(
             f"process copyright export done. {self.copyright_data.shape[0]} rows in self.copyright_data."
         )
-
-    async def update_db_from_faculty_sheets(self) -> tuple[bool, set[str]]:
-        """
-        Retrieves data from all faculty sheets, and sends items with changes to the database for updating.
-        This function is async because it calls the async function update_copyright_items(update_df).
-
-        returns a tuple with:
-        bool: True if items to update were selected, False if no items were selected.
-        set[str]: a list of all distinct material_ids present in all faculty sheets.
-
-        Bit more details:
-        For -all- faculties sheets, retrieve items from the 'data entry' sheet.
-        Compare [selected cols] of each item (by matching on material_id) to self.copyright_data.
-        perform a comparison to decide which items might need updating. Concat all those to update_df.
-        Then send the update_df to the db to update using update_copyright_items(update_df), which will handle the actual db update and detailed comparisons.
-
-        """
-
-        def compare(
-            primary: pl.DataFrame, other: pl.DataFrame, select_cols: list[str]
-        ) -> pl.DataFrame:
-            """
-            compare rows based on material_id -- so match up rows from primary to rows in other
-            then decide what to do with the primary row:
-
-            if a row is in primary but not in other, KEEP the row
-            else compare the cols in select_cols
-            if there is no difference (so the cell vals in all cols in select_cols are equal), DROP the row
-            else, if any of the vals in other is empty but filled in primary, KEEP the row
-            if both have equal amount of missing values, KEEP the row
-            all other cases, DROP the row
-
-            Ensure both dataframes have required columns
-            """
-
-            cols_in_primary = primary.columns
-            cols_in_other = other.columns
-            primary_selected = [col for col in select_cols if col in cols_in_primary]
-            other_selected = [col for col in select_cols if col in cols_in_other]
-            initial_select_cols = select_cols
-            # now only select the cols that are in both dataframes
-            select_cols = [
-                col
-                for col in select_cols
-                if col in primary_selected and col in other_selected
-            ]
-
-            if not select_cols:
-                warn(
-                    "No columns to compare between dataframes. Skipping comparison; returning primary dataframe."
-                )
-                return primary
-            if len(select_cols) == 1:
-                warn(
-                    f"Only one column to compare: {select_cols}. Skipping comparison; returning primary dataframe."
-                )
-                return primary
-            if len(select_cols) != len(initial_select_cols):
-                warn(
-                    f"Not all selected columns are present in both dataframes. Selecting only the common columns: {select_cols}"
-                )
-
-            # Get rows in primary but not in other
-            not_in_other = primary.join(
-                other.select(select_cols), on="material_id", how="anti"
-            )
-
-            # Get matching rows to compare
-            matching = primary.join(
-                other.select(select_cols),
-                on="material_id",
-                how="inner",
-                suffix="_other",
-            )
-
-            # Keep rows if:
-            # 1. Any values are null in other, but filled in primary
-            # 2. Values are different, primary value is non-null and non-empty
-            cols_to_compare = [c for c in select_cols if c != "material_id"]
-
-            conditions = []
-            for col in cols_to_compare:
-                other_col = f"{col}_other"
-                # Keep if other is null but primary has value
-                conditions.append(
-                    (pl.col(other_col).is_null())
-                    & (pl.col(col).is_not_null())
-                    & (pl.col(col) != "")
-                    & (pl.col(col) != "-")
-                )
-                # Keep if values are different and primary is not null/empty
-                conditions.append(
-                    (pl.col(col) != pl.col(other_col))
-                    & (pl.col(col).is_not_null())
-                    & (pl.col(col) != "")
-                    & (pl.col(col) != "-")
-                )
-
-            different_vals = matching.filter(pl.any_horizontal(conditions)).select(
-                cols_in_primary
-            )
-
-            return pl.concat([not_in_other, different_vals], how="diagonal_relaxed")
-
-        select_cols = [
-            "material_id",
-            "workflow_status",
-            "remarks",
-            "manual_classification",
-        ]
-        material_ids = set()
-        update_df: pl.DataFrame = pl.DataFrame()
-        for faculty in self.faculties:
-            # get all .xlsx files except llm_classification files
-            fac_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
-            files = fac_dir.files_r
-            files = [
-                f
-                for f in files
-                if f.extension == ".xlsx" and "llm_classification" not in f.name
-            ]
-            if not files:
-                warn(f"No files found for faculty {faculty}.")
-                continue
-            for file in files:
-                # load data entry sheet for file and process
-                try:
-                    data_entry = pl.read_excel(
-                        file.path, sheet_name=SETTINGS.data_settings.data_entry_name
-                    )
-                except Exception as e:
-                    warn(f"Error reading {file.path}: {e}")
-                    continue
-                data_entry = self.clean_and_validate_df(data_entry)
-                if data_entry.is_empty():
-                    warn(f"No data found in {file.path}.")
-                    continue
-                material_ids.update(
-                    data_entry.select(pl.col("material_id"))
-                    .to_series()
-                    .unique()
-                    .to_list()
-                )
-
-                # compare primary df (data_entry) to other (self.copyright_data, update_df)
-                # If no rows remaining: continue
-                # Else, do the same comparison as above but now compare data_entry to update_df
-                # finally concat any remaining rows to update_df and continue to the next file
-                if not self.copyright_data.is_empty():
-                    data_entry = compare(data_entry, self.copyright_data, select_cols)
-                if not data_entry.is_empty():
-                    data_entry = compare(data_entry, update_df, select_cols)
-
-                    if not data_entry.is_empty():
-                        info(
-                            f"retrieved {data_entry.shape[0]} probable updated items from {file.path} ."
-                        )
-                        update_df = pl.concat(
-                            [update_df, data_entry], how="diagonal_relaxed"
-                        )
-
-        if not update_df.is_empty():
-            info(
-                f"Sending {update_df.shape[0]} items from faculty sheets to the database for updating."
-            )
-            await update_copyright_items(update_df)
-            info(f"Returning {len(material_ids)} material_ids from faculty sheets.")
-
-            return (True, material_ids)
-        info("No items to update based on faculty sheet contents.")
-        return (False, material_ids)
 
     def create_faculty_sheets(self) -> None:
         """

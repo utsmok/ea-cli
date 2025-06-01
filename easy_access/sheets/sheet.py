@@ -13,12 +13,106 @@ from openpyxl.styles import Alignment, NamedStyle
 from openpyxl.worksheet.table import Table as ExcelTable
 from openpyxl.worksheet.table import TableStyleInfo
 
+from easy_access.db.base import standardize_dataframe
 from easy_access.db.retrieve import (
     retrieve_copyright_items,
-    retrieve_llm_classifications,
 )
 from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting
 from easy_access.utils import Directory, File, info, warn
+
+
+def read_weekly_sheets(faculty: str) -> pl.DataFrame:
+    """
+    Reads all weekly .xlsx files for a faculty, standardizes, validates, and returns a concatenated DataFrame.
+    Adds source file path and modification time columns. Logs errors to a faculty-specific error log.
+    """
+    weekly_dir = Directory(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty)
+    files = [
+        f
+        for f in weekly_dir.files
+        if f.extension == ".xlsx" and "overview" not in f.name and "llm" not in f.name
+    ]
+    dfs = []
+    errors = []
+    for file in files:
+        try:
+            df = pl.read_excel(
+                file.path, sheet_name=SETTINGS.data_settings.data_entry_name
+            )
+            df = standardize_dataframe(df)
+            if "material_id" not in df.columns:
+                errors.append(f"Missing material_id in {file.path}")
+                continue
+            df = df.with_columns(
+                [
+                    pl.lit(str(file.path)).alias("source_file"),
+                    pl.lit(file.modified.strftime("%Y-%m-%d %H:%M:%S")).alias(
+                        "source_modified"
+                    ),
+                ]
+            )
+            dfs.append(df)
+        except Exception as e:
+            errors.append(f"Error reading {file.path}: {e}")
+    if errors:
+        error_log_path = (
+            SETTINGS.dirs[DirSetting.FACULTIES_DIR].full
+            / faculty
+            / "weekly_sheet_errors.txt"
+        )
+        with open(error_log_path, "w", encoding="utf-8") as f:
+            for err in errors:
+                f.write(err + "\n")
+    if dfs:
+        return pl.concat(dfs, how="diagonal_relaxed")
+    return pl.DataFrame()
+
+
+def read_overview_sheets(faculty: str) -> pl.DataFrame:
+    """
+    Reads all overview .xlsx files for a faculty, standardizes, validates, and returns a concatenated DataFrame.
+    Adds source file path and modification time columns. Logs errors to a faculty-specific error log.
+    """
+    overview_dir = Directory(SETTINGS.dirs[DirSetting.FACULTIES_DIR].full / faculty)
+    files = [
+        f
+        for f in overview_dir.files
+        if f.extension == ".xlsx" and "total_overview" in f.name and "llm" not in f.name
+    ]
+    dfs = []
+    errors = []
+    for file in files:
+        try:
+            df = pl.read_excel(
+                file.path, sheet_name=SETTINGS.data_settings.data_entry_name
+            )
+            df = standardize_dataframe(df)
+            if "material_id" not in df.columns:
+                errors.append(f"Missing material_id in {file.path}")
+                continue
+            df = df.with_columns(
+                [
+                    pl.lit(str(file.path)).alias("source_file"),
+                    pl.lit(file.modified.strftime("%Y-%m-%d %H:%M:%S")).alias(
+                        "source_modified"
+                    ),
+                ]
+            )
+            dfs.append(df)
+        except Exception as e:
+            errors.append(f"Error reading {file.path}: {e}")
+    if errors:
+        error_log_path = (
+            SETTINGS.dirs[DirSetting.FACULTIES_DIR].full
+            / faculty
+            / "overview_sheet_errors.txt"
+        )
+        with open(error_log_path, "w", encoding="utf-8") as f:
+            for err in errors:
+                f.write(err + "\n")
+    if dfs:
+        return pl.concat(dfs, how="diagonal_relaxed")
+    return pl.DataFrame()
 
 
 def read_copyright_export(file: File | None = None) -> tuple[str, pl.DataFrame]:
@@ -242,23 +336,6 @@ def finalize_sheet(file: File, data: pl.DataFrame, style_iter: int) -> None:
     data = data.unique("material_id")
     sheet.add_data(data)
     info(f"Added data entry sheet to {file.name}")
-    llm_classification_data = enrich_with_llm_classifications(data)
-    if "overview" in file.path.stem:
-        # only add the llm classification data if the file is an overview file
-        llm_classification_data = enrich_with_llm_classifications(data)
-        if llm_classification_data.is_empty():
-            return style_iter
-        llm_sheet_path = (
-            file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
-        )
-        llm_classification_data.write_excel(
-            workbook=llm_sheet_path,
-            worksheet="llm_classification_data",
-            table_name="llm_classification_data",
-            table_style="TableStyleMedium3",
-            autofit=True,
-        )
-        info(f"Stored llm_classification_data sheet to {llm_sheet_path.name}")
 
     return style_iter
 
@@ -367,68 +444,6 @@ def create_export_sheet(
     # store formatted / styled export file with all details
     full_export_file = File(full_details_file_path)
     store_complete_data(file=full_export_file, data=data)
-
-
-def enrich_with_llm_classifications(data: pl.DataFrame) -> pl.DataFrame:
-    """
-    Create a dataframe with llm classification data for a set of material ids(see classifier_api or classifier_local for more details).
-    call retrieve_all_classifications first
-    join data with that dataframe on material_id
-    select only the relevant columns
-    return the joined dataframe
-    """
-    warn("Enriching data with llm classification data currently disabled")
-    return pl.DataFrame()
-    llm_data = retrieve_llm_classifications(
-        selected_material_ids=data.select("material_id")
-        .unique("material_id")
-        .to_series()
-        .to_list()
-    )
-    if not isinstance(llm_data, pl.DataFrame):
-        warn("No llm classification data found.")
-        return None
-    else:
-        joined_data = data.join(llm_data, on="material_id", how="left")
-    # set col_order
-    col_order = [
-        "material_id",
-        "url",
-        "filename",
-        "manual_classification",
-        "remarks",
-        "ml_prediction",
-        "allowed_usage_llm",
-        "allowed_usage_reasoning_llm",
-        "copyright_status_llm",
-        "copyright_classification_reason_llm",
-        "item_type_llm",
-        "item_type_classification_reason_llm",
-        "remarks_llm",
-        "author",
-        "author_names_llm",
-        "title",
-        "item_title_llm",
-        "publisher",
-        "publisher_name_llm",
-        "copyright_holder_llm",
-        "doi",
-        "doi_llm",
-        "isbn",
-        "isbn_llm",
-        "source_url_llm",
-        "license_llm",
-        "course_name",
-        "topic_llm",
-        "pagecount",
-        "pdf_page_count_llm",
-    ]
-    col_order = [col for col in col_order if col in joined_data.columns]
-    # print missing expected columns
-    missing_cols = [col for col in col_order if col not in joined_data.columns]
-    if missing_cols:
-        warn(f"Missing expected columns in llm classification data: {missing_cols}")
-    return joined_data.select(col_order)
 
 
 def retrieve_all_classifications() -> pl.DataFrame:

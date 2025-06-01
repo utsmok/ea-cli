@@ -1,4 +1,3 @@
-import asyncio
 from collections import defaultdict
 from datetime import datetime
 
@@ -143,7 +142,7 @@ def create_faculty_overviews(
 
         data_to_update.append(all_faculty_data)
 
-    asyncio.get_event_loop().run_until_complete(update_db(data_to_update))
+    # No DB update here; all DB updates are handled centrally in main.py
     return style_iter
 
 

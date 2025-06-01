@@ -29,7 +29,6 @@ from easy_access.db.models import (
 )
 from easy_access.db.update import (
     link_llm_classifications_to_copyright_items,
-    update_copyright_items,
     update_copyright_relations,
 )
 from easy_access.settings import (
@@ -525,9 +524,7 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
             await Tortoise.close_connections()
             raise error
 
-    if update_list:
-        info(f"comparing {len(update_list)} items with items in db for updates.")
-        await update_copyright_items(update_list)
+    # No longer update copyright items here; handled centrally in main.py
 
     await Tortoise.close_connections()
 
@@ -535,7 +532,13 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
 async def load_llm_classifications() -> None:
     """
     load llm classifications from .json files in the classifications dir
+    CURRENTLY DEPRECATED
+    reimplement this from scratch
     """
+    warn(
+        "load_llm_classifications() is deprecated until complete reimplementation of llm classification."
+    )
+    return None
     await init()
     existing_classifications = await LLMClassification.all().values("used_material_id")
     existing_classifications = {
@@ -667,7 +670,8 @@ async def load_pdfs() -> None:
     """
     Load pdfs from the pdfs dir into the db.
     """
-
+    warn("load_pdfs() is deprecated until complete reimplementation of pdf loading.")
+    return None
     await init()
     pdf_file_list: list[File] = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
     try:

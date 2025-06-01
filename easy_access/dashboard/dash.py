@@ -34,7 +34,6 @@ from easy_access.dashboard.constants import (
     INIT_HEADERS,
     MODAL_INTERACTION,
     MODAL_TRIGGER,
-    PORT,
     ROOT_URL,
 )
 from easy_access.dashboard.data import (
@@ -917,15 +916,16 @@ URLS = {
 global_urls.update(URLS)
 
 
-def start():
+def start(host: str = "http://localhost", port: int = 8000):
     """
     Start the FastHTML server with the defined routes.
     """
 
-    print("Starting the FastHTML server...")
+    print(f"Starting the FastHTML server on {host}:{port}...")
     serve(
         app=app,
-        port=PORT,
+        host=host,
+        port=port,
         reload=True,
     )
 

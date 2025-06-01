@@ -39,6 +39,42 @@ class Classification(Enum):
     IN_ONDERZOEK = "in onderzoek"
     VERWIJDERVERZOEK_VERSTUURD = "verwijderverzoek verstuurd"
     LICENTIE_BESCHIKBAAR = "licentie beschikbaar"
+    ANDERS = "anders"
+
+
+def str_to_classification(classification_str: str) -> Classification | None:
+    """
+    helper function to convert a string to a Classification enum.
+    """
+
+    if classification_str in Classification.__members__:
+        return Classification[classification_str]
+
+    if "eigen" in classification_str.lower():
+        if "powerpoint" in classification_str.lower():
+            return Classification.EIGEN_MATERIAAL_POWERPOINT
+        if "titelindicatie" in classification_str.lower():
+            return Classification.EIGEN_MATERIAAL_TITELINDICATIE
+        if "overig" in classification_str.lower():
+            return Classification.EIGEN_MATERIAAL_OVERIG
+    if "overname" in classification_str.lower():
+        if "korte" in classification_str.lower():
+            return Classification.KORTE_OVERNAME
+        if "middel" in classification_str.lower():
+            return Classification.MIDDELLANGE_OVERNAME
+        if "lange" in classification_str.lower():
+            return Classification.LANGE_OVERNAME
+        return (
+            Classification.LANGE_OVERNAME
+        )  # default to lange overname if no specific type is found
+
+    if "anders" in classification_str.lower():
+        return Classification.ANDERS
+    if "overig" in classification_str.lower():
+        return Classification.ANDERS
+
+    # fallback case
+    return None
 
 
 class Filetype(Enum):
