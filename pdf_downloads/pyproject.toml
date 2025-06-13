@@ -1,0 +1,8 @@
+[project]
+name = "pdf-downloads"
+version = "0.1.0"
+requires-python = "==3.12.2"
+dependencies = [
+    "marimo>=0.13.11",
+    "moondream>=0.1.0",
+]

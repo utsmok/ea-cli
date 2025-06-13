@@ -107,9 +107,11 @@ async def classify_pdf(
             with pikepdf.open(pdf.path) as opened_pdf:
                 # Create a new PDF to hold the first 'max_pages' pages
                 new_pdf = pikepdf.Pdf.new()
-                for i in range(min(max_pages, len(opened_pdf.pages))):
-                    new_pdf.pages.append(opened_pdf.pages[i])
-
+                num_to_copy = min(max_pages, len(opened_pdf.pages))
+                if num_to_copy > 0:
+                    # opened_pdf.pages is a PageList, which supports slicing.
+                    # The slice itself is iterable and can be used with extend.
+                    new_pdf.pages.extend(opened_pdf.pages[0:num_to_copy])
                 # Store the new PDF in memory as bytes
                 temp_stream = io.BytesIO()
                 new_pdf.save(temp_stream)
@@ -123,16 +125,18 @@ async def classify_pdf(
         mat_id = pdf.material_id
         if pdf.parsing_failed:
             full_pdf = True
-        if not full_pdf:
-            if not pdf.extracted_text:
-                warn("pdf has no extracted text. Trying to extract.")
-                await extract_pdf_text(pdf)
-                pdf = await PDF.get(material_id=mat_id)
-            if not pdf.extracted_text:
+
+        # Combined SIM102: if not full_pdf and not pdf.extracted_text
+        if not full_pdf and not pdf.extracted_text:
+            warn("pdf has no extracted text. Trying to extract.")
+            await extract_pdf_text(pdf)
+            pdf = await PDF.get(material_id=mat_id) # Re-fetch pdf after potential modification
+            if not pdf.extracted_text: # Check again after trying to extract
                 warn(
-                    f"pdf has no extracted text. Sending full pdf instead for {pdf.current_file_name}"
+                    f"pdf still has no extracted text. Sending full pdf instead for {pdf.current_file_name}"
                 )
                 full_pdf = True
+
         if pdf.extracted_text and not full_pdf:
             pdf_text = pdf.extracted_text
             if len(pdf_text) > 10_000:
@@ -198,12 +202,11 @@ async def classify_pdf(
 
             if reason:
                 print(f"No result for {mat_id}, reason: {reason}")
-                return pdf, None
             else:
                 print(
                     f"No response for {mat_id},\n\n parsed: {parsed}.\n\n response:{response}"
                 )
-                return pdf, None
+            return pdf, None
     except Exception as e:
         print(f"Error while classifying {pdf.current_file_name}: {e}")
         console.print(e)
@@ -259,12 +262,12 @@ async def classify_items(files: list[PDF]) -> int:
 
 
 async def main(subset: list[int] | list[str] | None = None):
-    PAGE_COUNT_REGEX = re.compile(rb"/Type\s*/Page([^s]|$)", re.MULTILINE | re.DOTALL)
+    # PAGE_COUNT_REGEX = re.compile(rb"/Type\s*/Page([^s]|$)", re.MULTILINE | re.DOTALL) # Unused
 
-    def get_page_count(file: File, regex=PAGE_COUNT_REGEX):
-        """Count number of pages in a pdf"""
-        with open(file.path, "rb") as f:
-            return len(regex.findall(f.read()))
+    # def get_page_count(file: File, regex=PAGE_COUNT_REGEX): # Unused function
+    #     """Count number of pages in a pdf"""
+    #     with open(file.path, "rb") as f:
+    #         return len(regex.findall(f.read()))
 
     await init()
     activate_client()
@@ -299,10 +302,8 @@ async def main(subset: list[int] | list[str] | None = None):
 
     pdf_batch = []
     batch_start_time = time.time()
-    total = 0
-    for pdf in pdfs:
+    for total, pdf in enumerate(pdfs, 1): # Start enumeration from 1
         pdf_batch.append(pdf)
-        total += 1
         if len(pdf_batch) == 10:  # rate limit to 10 requests per minute
             print("awaiting results for a batch of 10 files...")
             await classify_items(pdf_batch)

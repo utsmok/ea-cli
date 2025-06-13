@@ -14,13 +14,15 @@ from tortoise import Tortoise
 
 from easy_access.db.base import init, init_engine
 from easy_access.db.models import ItemUpdate
-from easy_access.settings import SETTINGS
+from easy_access.settings import Settings  # Import Settings for type hint
+
+# from easy_access.settings import SETTINGS # Will be passed as an argument
 from easy_access.utils import warn
 
 engine: Engine | None = None
 
 
-def retrieve_copyright_items() -> pl.DataFrame:
+def retrieve_copyright_items(settings: Settings) -> pl.DataFrame: # Added settings
     """
     Retrieve all copyright items currently in db
     returns a flat dataframe with the core fields
@@ -28,9 +30,9 @@ def retrieve_copyright_items() -> pl.DataFrame:
     full_start = time()
     global engine
     if not engine:
-        engine = init_engine()
+        engine = init_engine(settings=settings) # Pass settings
 
-    col_order: set[str] = set(SETTINGS.data_settings.raw_data_col_order)
+    col_order: set[str] = set(settings.data_settings.raw_data_col_order) # Use passed settings
 
     if "google_search_file" in col_order:
         col_order.remove("google_search_file")
@@ -54,14 +56,14 @@ def retrieve_copyright_items() -> pl.DataFrame:
     return df
 
 
-def retrieve_duplicate_copyright_items() -> pl.DataFrame:
+def retrieve_duplicate_copyright_items(settings: Settings) -> pl.DataFrame: # Added settings
     """
     for copyright_items with duplicates, find the replacing material id
     returns a dataframe with 'material_id', 'is_duplicate', and 'replacement_id' columns
     """
     global engine
     if not engine:
-        engine = init_engine()
+        engine = init_engine(settings=settings) # Pass settings
 
     query: str = """
         SELECT material_id, is_duplicate, replacement_id
@@ -74,11 +76,11 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     return df
 
 
-def get_valid_faculties() -> set[str]:
+def get_valid_faculties(settings: Settings) -> set[str]: # Added settings
     """Retrieves the set of valid faculty abbreviations from the database."""
     global engine
     if not engine:
-        engine = init_engine()
+        engine = init_engine(settings=settings) # Pass settings
     with engine.connect() as conn:
         result = conn.execute(text("SELECT abbreviation FROM faculty"))
         return {row[0] for row in result.fetchall()}
@@ -88,6 +90,7 @@ def retrieve_full_data(
     selected_material_ids: Iterable[int] | None = None,
     selected_faculties: Iterable[str] | str | None = None,
     excluded_material_ids: Iterable[int] | None = None,
+    settings: Settings | None = None, # Added settings, optional for now if not always available
 ) -> pl.DataFrame:
     """
     Retrieves copyright items, enriched with related data, with optional filtering.
@@ -96,14 +99,22 @@ def retrieve_full_data(
         selected_material_ids: Optional iterable of material IDs to select (ONLY these, drop rest).
         selected_faculties: Optional string or list of strings (faculty abbreviations). ONLY return items with these faculties.
         excluded_material_ids: Optional iterable of material IDs to exclude. Excluded_material_ids take precedence over selected_material_ids.
+        settings: The application settings.
 
     Returns:
         A Polars DataFrame.
     """
     global engine
+    if not settings:
+        # This case should ideally be handled by ensuring settings are always passed.
+        # For now, let's assume a global SETTINGS might be fallback, or raise error.
+        # from easy_access.settings import SETTINGS as global_settings # Avoid if possible
+        # settings = global_settings
+        raise ValueError("Settings must be provided to retrieve_full_data")
+
     if not engine:
-        engine = init_engine()
-    valid_faculties = get_valid_faculties()
+        engine = init_engine(settings=settings) # Pass settings
+    valid_faculties = get_valid_faculties(settings=settings) # Pass settings
     material_join_clause = ""
     faculty_where_clause = ""
     material_exclusion_clause = ""
@@ -279,8 +290,8 @@ def retrieve_full_data(
 
     # add droplist cols back in with empty values
     if droplist:
-        for col in droplist:
-            df = df.with_columns(col=pl.lit(None))
+        for _col in droplist: # Renamed col to _col as it's not used in the loop body directly
+            df = df.with_columns(pl.lit(None).alias(_col)) # Use _col in alias
 
     return df
 
@@ -311,10 +322,13 @@ def get_llm_classification_schema() -> dict[str, type]:
 
 def retrieve_llm_classifications(
     selected_material_ids: Iterable[int] | None = None,
+    settings: Settings | None = None, # Added settings
 ) -> pl.DataFrame:
     global engine
+    if not settings:
+        raise ValueError("Settings must be provided to retrieve_llm_classifications")
     if not engine:
-        engine = init_engine()
+        engine = init_engine(settings=settings) # Pass settings
     material_join_clause: Literal[""] = ""
     with engine.connect() as conn:
         # print all table names
@@ -390,13 +404,14 @@ def retrieve_llm_classifications(
         )
 
 
-def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
+def retrieve_osiris_data(material_ids: list[int], settings: Settings | None = None) -> list[dict[str, Any]]: # Added settings
     """
     Retrieves copyright data and richly nested related data (faculty, courses,
     persons, organizations) for the given material IDs using SQL JSON functions.
 
     Args:
         material_ids: A list of material IDs to retrieve data for.
+        settings: The application settings.
 
     Returns:
         A list of nested dictionaries, where each dictionary represents one
@@ -404,8 +419,10 @@ def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
         material_ids is empty or no data is found.
     """
     global engine
+    if not settings:
+        raise ValueError("Settings must be provided to retrieve_osiris_data")
     if not engine:
-        engine = init_engine()
+        engine = init_engine(settings=settings) # Pass settings
     if not material_ids:
         warn("No material IDs provided. Returning empty list.")
         return []
@@ -591,17 +608,20 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
     return results
 
 
-async def retrieve_item_history(material_ids: list[int]) -> list[ItemUpdate]:
+async def retrieve_item_history(material_ids: list[int], settings: Settings | None = None) -> list[ItemUpdate]: # Added settings
     """
     Retrieves the history of changes for the given material IDs.
 
     Args:
         material_ids: A list of material IDs to retrieve history for.
+        settings: The application settings.
 
     Returns:
         A list of dictionaries, where each dictionary represents one history entry.
     """
-    await init()
+    if not settings:
+        raise ValueError("Settings must be provided to retrieve_item_history")
+    await init(settings=settings) # Pass settings
 
     if not material_ids:
         warn("No material IDs provided. Returning empty list.")

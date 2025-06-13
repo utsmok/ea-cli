@@ -21,13 +21,12 @@ from typing import Annotated
 import typer
 import uvicorn
 
-# from easy_access.classification.classifier_api import main
-# from easy_access.classification.downloader import Downloader
-# from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.main import EasyAccessTool
-from easy_access.settings import SETTINGS, EasyAccessSettings
+from easy_access.settings import (  # Import the main Settings class
+    SETTINGS,
+    EasyAccessSettings,
+)
 from easy_access.sheets.backup import (
-    BackupFlag,
     Backupper,
     RestoreOptions,
     RestoreStrategy,
@@ -35,201 +34,249 @@ from easy_access.sheets.backup import (
 from easy_access.sheets.sheet import create_export_sheet
 from easy_access.utils import cool, info, warn
 
-cli_app = typer.Typer()
+app = typer.Typer(
+    name="ea-cli",
+    help="Easy Access toolkit for managing faculty sheet data.",
+    add_completion=False,
+)
+
+# To be populated with subcommands
+preprocess_app = typer.Typer(
+    name="preprocess",
+    help="Pre-processing: PDF download, classification, deduplication.",
+)
+app.add_typer(preprocess_app)
+
+backup_app = typer.Typer(name="backup", help="Backup and restore operations.")
+app.add_typer(backup_app)
 
 
-@cli_app.command()
-def cli(
-    dashboard: Annotated[
-        bool,
-        typer.Option(
-            help="Serves the easy_access dashboard. Ignores all other parameters.",
-            rich_help_panel="Frontend",
-        ),
-    ] = False,
-    export: Annotated[
-        bool,
-        typer.Option(
-            case_sensitive=False,
-            help="Also create export sheets?",
-            rich_help_panel="Functions",
-        ),
-    ] = False,
+@app.command(name="process")
+def process_data(
     changes: Annotated[
         bool,
         typer.Option(
             help="Only add items that have been changed to new faculty sheets.",
-            rich_help_panel="Functions",
+            rich_help_panel="Processing Options",
         ),
     ] = True,
     osiris_update: Annotated[
         bool,
         typer.Option(
             help="If enabled, will retrieve fresh osiris data for all course + people page data.",
-            rich_help_panel="Enrichment",
+            rich_help_panel="Enrichment Options",
         ),
     ] = False,
     osiris_full_refresh: Annotated[
         bool,
         typer.Option(
             help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
-            rich_help_panel="Enrichment",
+            rich_help_panel="Enrichment Options",
         ),
     ] = True,
     other_sheet: Annotated[
         Path | None,
         typer.Option(
             help="Path to a xlsx sheet to read instead of CopyRight Data.",
-            rich_help_panel="Read in data from alternate source",
+            rich_help_panel="Input Options",
             exists=True,
             file_okay=True,
             dir_okay=False,
         ),
     ] = None,
-    backup: Annotated[
-        BackupFlag,
-        typer.Option(
-            help="Backup/restore data before starting, neither, or based on settings.yaml (default).",
-            rich_help_panel="Backup/Restore",
-        ),
-    ] = BackupFlag.DEFAULT.value,
     disable_writes: Annotated[
         bool,
         typer.Option(
             help="Disable all write operations.",
-            rich_help_panel="Functions",
-        ),
-    ] = False,
-    restore_dir: Annotated[
-        RestoreOptions,
-        typer.Option(
-            help="Set which backup to restore.",
-            rich_help_panel="Backup/Restore",
-        ),
-    ] = RestoreOptions.LATEST.value,
-    restore_strategy: Annotated[
-        RestoreStrategy,
-        typer.Option(
-            help="Set the strategy for restoring the backup. 'replace' will fully replace the faculties dir, 'merge' will only overwrite conflicts (with the prioritized source file) and keep the rest",
-            rich_help_panel="Backup/Restore",
-        ),
-    ] = RestoreStrategy.REPLACE.value,
-    download: Annotated[
-        bool,
-        typer.Option(
-            help="Download pdfs from canvas.",
-            rich_help_panel="Functions",
-        ),
-    ] = False,
-    classify: Annotated[
-        bool,
-        typer.Option(
-            help="Classify the pdfs by LLM.",
-            rich_help_panel="Enrichment",
-        ),
-    ] = False,
-    deduplicate: Annotated[
-        bool,
-        typer.Option(
-            help="Deduplicate the pdfs.",
-            rich_help_panel="Enrichment",
+            rich_help_panel="Processing Options",
         ),
     ] = False,
     single_faculty: Annotated[
         str | None,
         typer.Option(
             help="Only run the tool for a single faculty. use the faculty abbreviation as the parameter (e.g. 'BMS').",
-            rich_help_panel="Functions",
+            rich_help_panel="Processing Options",
         ),
     ] = None,
+    # Backup related flags are moved to the 'backup' subcommand
+    # Export related flags are moved to the 'export' subcommand
+    # Preprocessing flags (download, classify, deduplicate) moved to 'preprocess' subcommand
 ) -> None:
-    """Easy Access toolkit for managing faculty sheet data."""
+    """Runs the main Easy Access data processing workflow."""
 
-    if dashboard:
-        info("Serving the easy_access dashboard.")
-        info("Once launched, it will be available at http://localhost:8000.")
-        info("Press Ctrl+C or close this terminal window to stop the server.")
-        uvicorn.run(
-            "easy_access.dashboard.dash:app",
-            host="0.0.0.0",
-            port=8000,
-            reload=True,
-        )
-
-        cool("Done serving the dashboard. Exiting tool!")
-        raise typer.Exit(code=0)
-
-    if export:
-        if single_faculty:
-            info(f"Exporting data for faculty: {single_faculty}")
-            create_export_sheet(faculty=single_faculty)
-        else:
-            info("Creating export sheets.")
-            create_export_sheet()
-        cool("Done creating export sheets. Exiting tool!")
-        raise typer.Exit(code=0)
-    backupper = Backupper()
-    backup = BackupFlag(backup)
-    match backup:
-        case BackupFlag.BACKUP:
-            backupper.backup_files()
-        case BackupFlag.RESTORE:
-            backupper.restore_backup(
-                strategy=RestoreStrategy(restore_strategy),
-                select=RestoreOptions(restore_dir),
-            )
-        case BackupFlag.DEFAULT:
-            if SETTINGS.backup_settings.backup_all:
-                backupper.backup_files()
-        case BackupFlag.NONE:
-            pass
-        case _:
-            warn("Unrecognized backup flag. Skipping backup/restore.")
+    # Logic from the original cli function related to main processing
+    # Backup handling will be done by the 'backup' subcommand called separately by user if needed.
+    # Export handling will be done by the 'export' subcommand.
+    # Dashboard is its own subcommand.
+    # Preprocessing is its own subcommand.
 
     if other_sheet:
         try:
-            other_sheet = Path(other_sheet)
+            other_sheet = Path(other_sheet)  # Ensure it's a Path object
             info(f"Reading in data from other sheet: {other_sheet.absolute()}")
         except Exception as e:
             warn(f"Failed to parse path to other sheet: {e}")
             other_sheet = None
 
-    if any([download, deduplicate, classify]):
-        info("Running the tool without writes to update db data")
-        temp_tool = EasyAccessTool(
-            settings=EasyAccessSettings.from_env(
-                functions="read",
-                only_changes=True,
-                refresh_osiris_data=osiris_update,
-                other_sheet=None,
-                only_retrieve_missing_osiris_data=not osiris_full_refresh,
-                disable_writes=True,
-            )
-        )
-        temp_tool.run()
-        cool("Done updating data without writes to excels. ")
-
-        info(
-            "Doing the rest of the preprocessing steps: download files, deduplication, and classification."
-        )
-        warn("currently not implemented")
-
-    # Load settings from env and CLI params
-    ea_settings = EasyAccessSettings.from_env(
-        export=export,
+    # Load settings from CLI params, using main SETTINGS for base dir config
+    ea_settings = EasyAccessSettings.create_for_runtime(  # Renamed method
+        main_settings=SETTINGS,  # Pass the main SETTINGS object
+        export=False,  # 'export' is now a separate command
         only_changes=changes,
         refresh_osiris_data=osiris_update,
         other_sheet=other_sheet,
-        only_retrieve_missing_osiris_data=not osiris_full_refresh,
+        only_retrieve_missing_osiris_data=not osiris_full_refresh,  # Corrected logic
         disable_writes=disable_writes,
         faculty=single_faculty,
     )
 
-    tool = EasyAccessTool(ea_settings)
+    # The main SETTINGS object is loaded globally in easy_access.settings
+    tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)
     tool.run()
 
-    cool("All done! Thank you for using the Easy Access tool!")
+    cool("Main processing done!")
+
+
+@app.command(name="dashboard")
+def run_dashboard() -> None:
+    """Serves the easy_access dashboard."""
+    info("Serving the easy_access dashboard.")
+    info("Once launched, it will be available at http://localhost:8000.")
+    info("Press Ctrl+C or close this terminal window to stop the server.")
+    uvicorn.run(
+        "easy_access.dashboard.dash:app",
+        host="0.0.0.0",  # Consider making this configurable
+        port=8000,  # Consider making this configurable
+        reload=SETTINGS.dashboard_reload,
+    )
+    cool("Dashboard server stopped.")
+
+
+@app.command(name="export")
+def run_export(
+    single_faculty: Annotated[
+        str | None,
+        typer.Option(
+            help="Only export data for a single faculty. Use the faculty abbreviation (e.g. 'BMS').",
+        ),
+    ] = None,
+) -> None:
+    """Creates export sheets."""
+    if single_faculty:
+        info(f"Exporting data for faculty: {single_faculty}")
+        create_export_sheet(settings=SETTINGS, faculty=single_faculty)
+    else:
+        info("Creating export sheets for all faculties.")
+        create_export_sheet(
+            settings=SETTINGS
+        )  # Assumes create_export_sheet handles all faculties if None
+    cool("Done creating export sheets.")
+
+
+@backup_app.command(name="create")
+def create_backup_command() -> None:
+    """Creates a backup of the current data based on settings.yaml."""
+    backupper = Backupper()
+    if SETTINGS.backup_settings.backup_all:  # Check main settings
+        info("Creating backup as per settings.yaml (backup_all: true).")
+        backupper.backup_files()
+    else:
+        info("Backup not created as per settings.yaml (backup_all: false or not set).")
+
+
+@backup_app.command(name="restore")
+def restore_backup_command(
+    restore_dir: Annotated[
+        RestoreOptions,
+        typer.Option(help="Set which backup to restore."),
+    ] = RestoreOptions.LATEST,
+    restore_strategy: Annotated[
+        RestoreStrategy,
+        typer.Option(help="Set the strategy for restoring the backup."),
+    ] = RestoreStrategy.REPLACE,
+) -> None:
+    """Restores data from a backup."""
+    backupper = Backupper()
+    info(
+        f"Restoring backup from '{restore_dir.value}' with strategy '{restore_strategy.value}'."
+    )
+    backupper.restore_backup(
+        strategy=restore_strategy,
+        select=restore_dir,
+    )
+    cool("Backup restoration process finished.")
+
+
+@preprocess_app.command(name="run_all")
+def run_all_preprocess(
+    osiris_update: Annotated[
+        bool,
+        typer.Option(
+            help="If enabled, will retrieve fresh osiris data for all course + people page data.",
+        ),
+    ] = False,
+    osiris_full_refresh: Annotated[
+        bool,
+        typer.Option(
+            help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
+        ),
+    ] = True,
+    single_faculty: Annotated[
+        str | None,
+        typer.Option(
+            help="Only run the tool for a single faculty. use the faculty abbreviation as the parameter (e.g. 'BMS').",
+        ),
+    ] = None,
+    # download: Annotated[
+    #     bool,
+    #     typer.Option(help="Download pdfs from canvas."),
+    # ] = False,
+    # classify: Annotated[
+    #     bool,
+    #     typer.Option(help="Classify the pdfs by LLM."),
+    # ] = False,
+    # deduplicate: Annotated[
+    #     bool,
+    #     typer.Option(help="Deduplicate the pdfs."),
+    # ] = False,
+) -> None:
+    """(Currently Stubs) Runs all pre-processing steps: PDF download, classification, deduplication."""
+    # This combines the logic that was previously under `if any([download, deduplicate, classify]):`
+    info("Running pre-processing steps (download, deduplicate, classify)...")
+    info("First, running the tool in read-only mode to update DB data if needed.")
+
+    ea_temp_settings = EasyAccessSettings.create_for_runtime(  # Renamed method
+        main_settings=SETTINGS,  # Pass the main SETTINGS object
+        export=False,
+        only_changes=True,  # Assuming this is a sensible default for pre-processing
+        refresh_osiris_data=osiris_update,
+        other_sheet=None,  # Pre-processing typically works on existing DB data
+        only_retrieve_missing_osiris_data=not osiris_full_refresh,
+        disable_writes=True,
+        faculty=single_faculty,
+    )
+    temp_tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_temp_settings)
+    temp_tool.run()
+    cool("Done updating data in read-only mode for pre-processing.")
+
+    info("Actual pre-processing steps (download, deduplicate, classify) follow.")
+    warn(
+        "Download, deduplication, and classification steps are currently stubs and not implemented."
+    )
+    # if download:
+    #     info("Downloading PDFs...")
+    #     # ... downloader logic ...
+    # if deduplicate:
+    #     info("Deduplicating PDFs...")
+    #     # ... deduplicator logic ...
+    # if classify:
+    #     info("Classifying PDFs...")
+    #     # ... classifier logic ...
+    cool("Pre-processing steps finished (stubs).")
+
+
+cool("Pre-processing steps finished (stubs).")
 
 
 if __name__ == "__main__":
-    cli_app()
+    app()  # Use the new main app

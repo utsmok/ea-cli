@@ -5,6 +5,7 @@
 unsorted:
 # values that don't (yet) fit anywhere else
   fine_amount: 0.3 # fine amount per page per item per student
+  dashboard_reload: true # Auto-reload dashboard on code changes (dev setting)
   classification_options:
     - open access
     - eigen materiaal - powerpoint
@@ -212,6 +213,8 @@ data_settings:
       default:
         - Unmapped
 
+  url_truncation_marker: "..." # Marker indicating a truncated URL
+  url_default_base: "https://utwente.instructure.com/files" # Default base to prepend if marker is found
 
 
 # University settings
@@ -232,6 +235,14 @@ university:
     name: People pages
     url: https://people.utwente.nl/
     query_url: https://people.utwente.nl/overview?query=
+  manual_department_mappings: # New section for manual overrides
+    "Master Risicomanagement": "BMS"
+    "Master Public Management": "BMS"
+    "BMS: Behavioural, Management and Social Sciences": "BMS"
+    "EEMCS: Electrical Engineering, Mathematics and Computer Science": "EEMCS"
+    "ET: Engineering Technology": "ET"
+    # Add other manual mappings here if needed, e.g.:
+    # "Some Other Specific Programme Name": "FacultyAbbreviation"
   faculties: # this is a hierarchical structure of faculties and programmes. This is used to split the copyright data per faculty (and optionally per programme).
     - name: Faculty of Behavioural, Management and Social Sciences
       abbreviation: BMS
@@ -440,7 +451,7 @@ university:
         - abbreviation: M-SE
           name: Spatial Engineering
           programme_type: m
-    - name: Unmapped
+    - name: Unmapped # This is the correct placement for the Unmapped faculty
       abbreviation: UNM
       programmes:
         - abbreviation: O-TEST

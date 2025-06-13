@@ -7,50 +7,53 @@ from datetime import datetime
 from pathlib import Path
 
 import polars as pl
-from sqlalchemy import create_engine
+import polars as pl
+from sqlalchemy import Engine, create_engine # Added Engine
 from tortoise import Tortoise
 
 from easy_access.db.models import CopyrightItem, Faculty
+from easy_access.settings import Settings # Added Settings import
 from easy_access.utils import File, warn
 
-db_path: Path = Path("db.sqlite3")
+# db_path: Path = Path("db.sqlite3") # Removed global db_path
 
 
-def init_engine(path: str | None = None) -> None:
-    if not path:
-        path = "db.sqlite3"
-    return create_engine(f"sqlite:///{str(path)}")
+def init_engine(settings: Settings) -> Engine: # Added settings, changed return type to Engine
+    # if not path: # Removed path argument
+    #     path = "db.sqlite3"
+    db_file_path = settings.db_settings.db_path # Use settings for path
+    return create_engine(f"sqlite:///{str(db_file_path)}")
 
 
-def set_db_path(path: str | Path | File) -> None:
-    global db_path
-    if isinstance(path, File):
-        path = path.path
-    if isinstance(path, str):
-        path = Path(path)
-    if not isinstance(path, Path):
-        raise ValueError("path must be a Path, str, or File object")
-    db_path = path
-    init_engine(str(db_path))
+# def set_db_path(path: str | Path | File) -> None: # Removed set_db_path function
+#     global db_path
+#     if isinstance(path, File):
+#         path = path.path
+#     if isinstance(path, str):
+#         path = Path(path)
+#     if not isinstance(path, Path):
+#         raise ValueError("path must be a Path, str, or File object")
+#     db_path = path
+#     init_engine(str(db_path))
 
 
-async def init() -> None:
+async def init(settings: Settings) -> bool | None: # Added settings, changed return type
+    db_file_path = settings.db_settings.db_path # Use settings for path
     create_tables = False
-    if not db_path.exists():
+    if not db_file_path.exists(): # Use db_file_path
         create_tables = True
 
     # check if models.py file has been modified since last db modification
     models_py_path = Path("easy_access/db/models.py")
-    if models_py_path.exists() and db_path.exists():
+    if models_py_path.exists() and db_file_path.exists(): # Use db_file_path
         models_py_mod_time = models_py_path.stat().st_mtime
-        db_mod_time = db_path.stat().st_mtime
+        db_mod_time = db_file_path.stat().st_mtime # Use db_file_path
         if models_py_mod_time > db_mod_time:
             create_tables = True
     await Tortoise.init(
-        db_url=f"sqlite://{str(db_path)}", modules={"models": ["easy_access.db.models"]}
+        db_url=f"sqlite://{str(db_file_path)}", modules={"models": ["easy_access.db.models"]} # Use db_file_path
     )
     await Tortoise.generate_schemas(safe=True)
-
     if create_tables:
         await Tortoise.generate_schemas(safe=True)
         return True

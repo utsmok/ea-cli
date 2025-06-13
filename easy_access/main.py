@@ -1,5 +1,16 @@
+"""
+Main orchestrator for the Easy Access tool.
+
+This module defines the `EasyAccessTool` class, which is responsible for
+coordinating the various data processing workflows, including:
+- Ingesting raw copyright data.
+- Synchronizing data between Excel sheets and the SQLite database.
+- Generating weekly faculty sheets and overview reports.
+- Enriching data with external sources like Osiris.
+"""
 import asyncio
-import os
+from collections.abc import Callable
+from pathlib import Path
 
 import polars as pl
 
@@ -8,10 +19,9 @@ from easy_access.db.ingest import load_base_data, load_raw_copyright_data
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_full_data
 from easy_access.db.update import update_copyright_items
 from easy_access.settings import (
-    COURSE_MAPPING,
-    SETTINGS,
     DirSetting,
     EasyAccessSettings,
+    Settings,
 )
 from easy_access.sheets.analysis import create_faculty_overviews
 from easy_access.sheets.enrichment import update_osiris_data
@@ -23,6 +33,7 @@ from easy_access.sheets.sheet import (
 )
 from easy_access.utils import Directory, File, cool, info, print, warn
 
+# Existing TODO block remains as it's a design/task list, not a module docstring.
 """
     TODO: Make changes to the logic of importing data / syncing up sheets and DB.
 
@@ -146,51 +157,72 @@ from easy_access.utils import Directory, File, cool, info, print, warn
             - Else, if the workflow status is equal but manual classification is different, use priority order for manual classification:
                 Open Access, [korte/middel/lange] overname, eigen materiaal [powerpoint/titelindicatie/overig], onbekend, licentie beschikbaar, niet geanalyseerd, in onderzoek, verwijderverzoek verstuurd
             - If all are the same except remarks, merge the strings in both remark fields (if there is overlap in the text, don't add it twice, e.g. "hello this is a remark" + "this is a remark, but better" = "hello this is a remark, but better")
-
-
-
 """
 
 
 class EasyAccessTool:
     """
-    This class contains all the actual functionality of the script.
-    For an overview see the comments & docstrings per function, plus readme.md.
+    Orchestrates the Easy Access tool's data processing workflows.
+
+    This class handles the main sequence of operations, such as ingesting
+    copyright data, updating the database from various sheet sources,
+    and generating output sheets for faculties and programs.
     """
 
     faculties: list[str] = []
-    # latest copyright export file & when it was created
-    latest_file_date: str
+    latest_file_date: str  # Date of the latest copyright export file processed
+    settings: Settings
+    ea_settings: EasyAccessSettings
+    functions: list[Callable[[], None]]
+    dirs: dict[DirSetting, Directory]
+    disable_writes: bool
+    copyright_data: pl.DataFrame
+    mat_ids_on_disk: set[str]
+    only_changes: bool
+    refresh_osiris_data: bool
+    enrich_with_osiris_data: bool
+    only_retrieve_missing_osiris_data: bool
+    style_iter: int
 
-    def __init__(self, settings: EasyAccessSettings) -> None:
+    def __init__(self, settings_obj: Settings, ea_settings: EasyAccessSettings) -> None:
         """
-        Parameter:
-            settings: EasyAccessSettings object containing all the settings for the script.
-        """
+        Initializes the EasyAccessTool.
 
-        self.settings = settings
-        self.functions: list[callable] = []
-        self.dirs = settings.dirs
-        self.disable_writes = settings.disable_writes
+        Args:
+            settings_obj: The main Settings object for the application.
+            ea_settings: EasyAccessSettings object containing runtime/CLI settings.
+        """
+        self.settings = settings_obj
+        self.ea_settings = ea_settings
+
+        self.functions = []
+        self.dirs = self.settings.dirs
+        self.disable_writes = self.ea_settings.disable_writes
         self.copyright_data = pl.DataFrame()
         self.mat_ids_on_disk = set()
 
-        self.only_changes = settings.only_changes
-        self.refresh_osiris_data = settings.refresh_osiris_data
-        self.enrich_with_osiris_data = settings.enrich_with_osiris_data
+        self.only_changes = self.ea_settings.only_changes
+        self.refresh_osiris_data = self.ea_settings.refresh_osiris_data
+        self.enrich_with_osiris_data = (
+            self.ea_settings.enrich_with_osiris_data
+        )  # This might need to come from main settings or be resolved
         self.only_retrieve_missing_osiris_data = (
-            settings.only_retrieve_missing_osiris_data
+            self.ea_settings.only_retrieve_missing_osiris_data
         )
         self.style_iter = 2
+        self.latest_file_date = "" # Initialize to empty string
 
-        self.set_functions(settings.export)
+        self.set_functions(self.ea_settings.export)
 
     def set_functions(self, export: bool) -> None:
         """
-        Sets the functions to run based on the input parameter 'export'.
-        stores it in self.settings as a list of functions to run.
-        """
+        Sets the sequence of processing functions to be run.
 
+        The function list is stored in `self.functions`.
+
+        Args:
+            export: If True, includes the export sheet creation function.
+        """
         self.functions.extend(
             [
                 self.process_raw_copyright_data,
@@ -205,65 +237,81 @@ class EasyAccessTool:
 
     def run(self) -> None:
         """
-        Runs the functions as specified in the settings dict.
-        """
+        Executes the configured sequence of processing functions.
 
+        Functions are run in the order they appear in `self.functions`.
+        """
         for func in self.functions:
             info(f"running {func.__name__}")
             func()
 
     def process_raw_copyright_data(self) -> None:
         """
-        Reads in the latest copyright export (using read_copyright_export).
+        Processes the raw copyright data export.
 
+        Reads the latest copyright export file (or a specified override file),
+        loads data into the database, retrieves the full dataset,
+        optionally enriches with Osiris data, and identifies material IDs
+        already present in faculty sheets.
         """
-        file = None
-        try:
-            if not isinstance(self.settings.other_sheet, File):
-                file = File(self.settings.other_sheet)
-        except Exception:
-            pass
+        input_file_override: File | None = None
+        if self.ea_settings.other_sheet is not None:
+            try:
+                # Ensure it's a File object if it's a Path
+                if isinstance(self.ea_settings.other_sheet, Path):
+                    input_file_override = File(self.ea_settings.other_sheet)
+                elif isinstance(
+                    self.ea_settings.other_sheet, File
+                ):  # Should not happen based on EasyAccessSettings.other_sheet type (Path | None)
+                    input_file_override = self.ea_settings.other_sheet
+            except Exception as e:
+                warn(
+                    f"Could not process other_sheet {self.ea_settings.other_sheet}: {e}"
+                )
+                # Proceed with default behavior (None for input_file_override)
 
-        self.latest_file_date, self.copyright_data = read_copyright_export(file)
+        self.latest_file_date, self.copyright_data = read_copyright_export(
+            settings=self.settings, file=input_file_override
+        )
         if self.copyright_data.is_empty():
             warn(
                 "No new Copyright data found to process! No new items will be added. Checking if there are other changes..."
             )
         else:
-            # make sure base data is loaded
-
-            fresh_db = asyncio.get_event_loop().run_until_complete(init())
+            fresh_db: bool | None = asyncio.get_event_loop().run_until_complete(init(settings=self.settings))
             if fresh_db:
-                asyncio.get_event_loop().run_until_complete(load_base_data())
-            # load new data into db
+                asyncio.get_event_loop().run_until_complete(
+                    load_base_data(settings=self.settings)
+                )
             asyncio.get_event_loop().run_until_complete(
-                load_raw_copyright_data(self.copyright_data)
-            )
-
-        # retrieve full data from db
-        self.copyright_data = self.clean_and_validate_df(retrieve_copyright_items())
-
-        # get osiris data for the new items (or refresh all depending on settings)
-        if self.refresh_osiris_data:
-            asyncio.get_event_loop().run_until_complete(
-                update_osiris_data(
-                    self.copyright_data, self.only_retrieve_missing_osiris_data
+                load_raw_copyright_data(
+                    settings=self.settings, file=self.copyright_data
                 )
             )
 
-        # set faculty names
+        self.copyright_data = self.clean_and_validate_df(
+            retrieve_copyright_items(settings=self.settings)
+        )
+
+        if self.refresh_osiris_data:
+            asyncio.get_event_loop().run_until_complete(
+                update_osiris_data(
+                    settings=self.settings,
+                    df=self.copyright_data,
+                    only_retrieve_missing=self.only_retrieve_missing_osiris_data,
+                )
+            )
+
         self.faculties = (
             self.copyright_data.select(pl.col("faculty").unique())
             .to_series()
             .sort()
             .to_list()
         )
-        if self.settings.faculty:
-            # only include data for the given selected faculty
-            info(f"Selected single faculty: {self.settings.faculty}")
-            self.faculties = [self.settings.faculty]
+        if self.ea_settings.faculty:
+            info(f"Selected single faculty: {self.ea_settings.faculty}")
+            self.faculties = [self.ea_settings.faculty]
 
-        # determine which material_ids are already on stored in the faculty sheets
         updated_items, mat_ids = asyncio.get_event_loop().run_until_complete(
             self.update_db_from_faculty_sheets()
         )
@@ -274,8 +322,9 @@ class EasyAccessTool:
         if mat_ids:
             self.mat_ids_on_disk = mat_ids
         if updated_items:
-            # if items were updated, refresh the data for the final time
-            self.copyright_data = retrieve_copyright_items()
+            self.copyright_data = retrieve_copyright_items(
+                settings=self.settings
+            )
             self.copyright_data = self.clean_and_validate_df(self.copyright_data)
 
         cool(
@@ -284,43 +333,46 @@ class EasyAccessTool:
 
     async def update_db_from_faculty_sheets(self) -> tuple[bool, set[str]]:
         """
-        Retrieves data from all faculty sheets, and sends items with changes to the database for updating.
-        This function is async because it calls the async function update_copyright_items(update_df).
+        Updates the database from data found in faculty sheets.
 
-        returns a tuple with:
-        bool: True if items to update were selected, False if no items were selected.
-        set[str]: a list of all distinct material_ids present in all faculty sheets.
+        Retrieves data from all faculty sheets ('data entry' tab), compares items
+        with the current `self.copyright_data` and `update_df` (accumulated changes),
+        and sends items with detected changes to the database for updating.
 
-        Bit more details:
-        For -all- faculties sheets, retrieve items from the 'data entry' sheet.
-        Compare [selected cols] of each item (by matching on material_id) to self.copyright_data.
-        perform a comparison to decide which items might need updating. Concat all those to update_df.
-        Then send the update_df to the db to update using update_copyright_items(update_df), which will handle the actual db update and detailed comparisons.
+        Args:
+            None
 
+        Returns:
+            A tuple containing:
+                - bool: True if items were selected for update, False otherwise.
+                - set[str]: A set of all distinct material_ids present in all faculty sheets.
         """
 
         def compare(
             primary: pl.DataFrame, other: pl.DataFrame, select_cols: list[str]
         ) -> pl.DataFrame:
             """
-            compare rows based on material_id -- so match up rows from primary to rows in other
-            then decide what to do with the primary row:
+            Compares two DataFrames based on 'material_id' and selected columns.
 
-            if a row is in primary but not in other, KEEP the row
-            else compare the cols in select_cols
-            if there is no difference (so the cell vals in all cols in select_cols are equal), DROP the row
-            else, if any of the vals in other is empty but filled in primary, KEEP the row
-            if both have equal amount of missing values, KEEP the row
-            all other cases, DROP the row
+            Keeps rows from `primary` if:
+            - The row is in `primary` but not in `other`.
+            - Values in `select_cols` differ, and `primary` has a non-empty value where `other` is null.
+            - Values in `select_cols` differ, and `primary` has a non-null, non-empty value.
 
-            Ensure both dataframes have required columns
+            Args:
+                primary: The primary DataFrame.
+                other: The DataFrame to compare against.
+                select_cols: List of column names to use for comparison (must include 'material_id').
+
+            Returns:
+                A DataFrame containing rows from `primary` that meet the keep criteria.
             """
-
             cols_in_primary = primary.columns
-            cols_in_other = other.columns
+            # cols_in_other = other.columns # Not directly used after this
             primary_selected = [col for col in select_cols if col in cols_in_primary]
-            other_selected = [col for col in select_cols if col in cols_in_other]
-            initial_select_cols = select_cols
+            other_selected = [col for col in select_cols if col in other.columns] # Corrected to use other.columns
+            initial_select_cols = list(select_cols) # Make a copy
+
             # now only select the cols that are in both dataframes
             select_cols = [
                 col
@@ -328,40 +380,42 @@ class EasyAccessTool:
                 if col in primary_selected and col in other_selected
             ]
 
-            if not select_cols:
+            if not select_cols or "material_id" not in select_cols: # Ensure material_id is present
                 warn(
-                    "No columns to compare between dataframes. Skipping comparison; returning primary dataframe."
+                    "Not enough common columns (or 'material_id' missing) to compare. Skipping comparison; returning primary dataframe."
                 )
                 return primary
-            if len(select_cols) == 1:
-                warn(
-                    f"Only one column to compare: {select_cols}. Skipping comparison; returning primary dataframe."
+            if len(select_cols) == 1 and "material_id" in select_cols: # Only material_id
+                 warn(
+                    "Only 'material_id' column to compare. Skipping detailed comparison; returning primary dataframe."
                 )
-                return primary
+                 return primary # Or handle as per logic, this implies no data columns to compare
             if len(select_cols) != len(initial_select_cols):
                 warn(
-                    f"Not all selected columns are present in both dataframes. Selecting only the common columns: {select_cols}"
+                    f"Not all originally selected columns are present in both dataframes. Using common columns: {select_cols}"
                 )
 
             # Get rows in primary but not in other
-            not_in_other = primary.join(
-                other.select(select_cols), on="material_id", how="anti"
+            not_in_other: pl.DataFrame = primary.join(
+                other.select("material_id"), on="material_id", how="anti" # Simpler anti join
             )
 
             # Get matching rows to compare
-            matching = primary.join(
-                other.select(select_cols),
+            matching: pl.DataFrame = primary.join(
+                other.select(select_cols), # Use the filtered select_cols
                 on="material_id",
                 how="inner",
                 suffix="_other",
             )
 
-            # Keep rows if:
-            # 1. Any values are null in other, but filled in primary
-            # 2. Values are different, primary value is non-null and non-empty
-            cols_to_compare = [c for c in select_cols if c != "material_id"]
+            if matching.is_empty():
+                return not_in_other
 
-            conditions = []
+            cols_to_compare = [c for c in select_cols if c != "material_id"]
+            if not cols_to_compare: # No data columns left to compare
+                return not_in_other # Or decide if matching rows with no diff should be dropped
+
+            conditions: list[pl.Expr] = []
             for col in cols_to_compare:
                 other_col = f"{col}_other"
                 # Keep if other is null but primary has value
@@ -379,90 +433,120 @@ class EasyAccessTool:
                     & (pl.col(col) != "-")
                 )
 
-            different_vals = matching.filter(pl.any_horizontal(conditions)).select(
-                cols_in_primary
-            )
+            if not conditions: # Should not happen if cols_to_compare is not empty
+                different_vals = pl.DataFrame(schema=primary.schema)
+            else:
+                different_vals = matching.filter(pl.any_horizontal(conditions)).select(
+                    cols_in_primary # Select original columns from primary
+                )
 
             return pl.concat([not_in_other, different_vals], how="diagonal_relaxed")
 
-        select_cols = [
+        select_cols: list[str] = [
             "material_id",
             "workflow_status",
             "remarks",
             "manual_classification",
         ]
-        material_ids = set()
-        update_df: pl.DataFrame = pl.DataFrame()
+        material_ids_found: set[str] = set()
+        update_df: pl.DataFrame = pl.DataFrame(schema={col: pl.Utf8 for col in select_cols}) # Initialize with schema
+
         for faculty in self.faculties:
-            # get all .xlsx files except llm_classification files
             fac_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
-            files = fac_dir.files_r
-            files = [
+            excel_files: list[File] = [
                 f
-                for f in files
+                for f in fac_dir.files_r
                 if f.extension == ".xlsx" and "llm_classification" not in f.name
             ]
-            if not files:
-                warn(f"No files found for faculty {faculty}.")
+            if not excel_files:
+                warn(f"No Excel files found for faculty {faculty}.")
                 continue
-            for file in files:
-                # load data entry sheet for file and process
+            for file_obj in excel_files:
                 try:
-                    data_entry = pl.read_excel(
-                        file.path, sheet_name=SETTINGS.data_settings.data_entry_name
+                    data_entry_df = pl.read_excel(
+                        file_obj.path,
+                        sheet_name=self.settings.data_settings.data_entry_name,
                     )
                 except Exception as e:
-                    warn(f"Error reading {file.path}: {e}")
+                    warn(f"Error reading {file_obj.path}: {e}")
                     continue
-                data_entry = self.clean_and_validate_df(data_entry)
-                if data_entry.is_empty():
-                    warn(f"No data found in {file.path}.")
-                    continue
-                material_ids.update(
-                    data_entry.select(pl.col("material_id"))
-                    .to_series()
-                    .unique()
-                    .to_list()
-                )
 
-                # compare primary df (data_entry) to other (self.copyright_data, update_df)
-                # If no rows remaining: continue
-                # Else, do the same comparison as above but now compare data_entry to update_df
-                # finally concat any remaining rows to update_df and continue to the next file
+                data_entry_df = self.clean_and_validate_df(data_entry_df)
+                if data_entry_df.is_empty():
+                    warn(f"No data found in data entry sheet of {file_obj.path}.")
+                    continue
+
+                current_file_mat_ids = data_entry_df.select(pl.col("material_id").cast(pl.Utf8)).to_series().unique().to_list()
+                material_ids_found.update(current_file_mat_ids)
+
+                # Ensure data_entry_df has all columns from select_cols for comparison
+                for col_name in select_cols:
+                    if col_name not in data_entry_df.columns:
+                        data_entry_df = data_entry_df.with_columns(pl.lit(None).alias(col_name).cast(pl.Utf8))
+                data_entry_df = data_entry_df.select(select_cols) # Ensure correct column order and selection
+
+
+                changes_vs_db: pl.DataFrame = pl.DataFrame(schema=update_df.schema)
                 if not self.copyright_data.is_empty():
-                    data_entry = compare(data_entry, self.copyright_data, select_cols)
-                if not data_entry.is_empty():
-                    data_entry = compare(data_entry, update_df, select_cols)
+                    # Ensure self.copyright_data has all select_cols for comparison
+                    temp_copyright_data = self.copyright_data.clone()
+                    for col_name in select_cols:
+                        if col_name not in temp_copyright_data.columns:
+                             temp_copyright_data = temp_copyright_data.with_columns(pl.lit(None).alias(col_name).cast(pl.Utf8))
+                    changes_vs_db = compare(data_entry_df, temp_copyright_data.select(select_cols), select_cols)
 
-                    if not data_entry.is_empty():
-                        info(
-                            f"retrieved {data_entry.shape[0]} probable updated items from {file.path} ."
-                        )
-                        update_df = pl.concat(
-                            [update_df, data_entry], how="diagonal_relaxed"
-                        )
+                changes_vs_update_df: pl.DataFrame = pl.DataFrame(schema=update_df.schema)
+                if not changes_vs_db.is_empty():
+                    if not update_df.is_empty():
+                         changes_vs_update_df = compare(changes_vs_db, update_df, select_cols)
+                    else:
+                         changes_vs_update_df = changes_vs_db
+
+                if not changes_vs_update_df.is_empty():
+                    info(
+                        f"Retrieved {changes_vs_update_df.shape[0]} probable updated items from {file_obj.path}."
+                    )
+                    update_df = pl.concat(
+                        [update_df, changes_vs_update_df], how="diagonal_relaxed"
+                    ).unique(subset=["material_id"], keep="last", maintain_order=True)
+
 
         if not update_df.is_empty():
             info(
                 f"Sending {update_df.shape[0]} items from faculty sheets to the database for updating."
             )
-            await update_copyright_items(update_df)
-            info(f"Returning {len(material_ids)} material_ids from faculty sheets.")
+            await update_copyright_items(update_df) # Assuming update_copyright_items handles potential missing columns gracefully or expects specific ones
+            info(f"Returning {len(material_ids_found)} material_ids from faculty sheets.")
+            return True, material_ids_found
 
-            return (True, material_ids)
         info("No items to update based on faculty sheet contents.")
-        return (False, material_ids)
+        return False, material_ids_found
 
     def create_faculty_sheets(self) -> None:
         """
-        Splits the processed copyright data into one sheet per faculty
-        and exports the result to excel sheets.
+        Creates individual Excel sheets for each faculty.
+
+        Splits the processed copyright data by faculty and exports new items
+        (not already on disk if `only_changes` is True) to separate Excel files.
+        Also triggers programme sheet creation if applicable for the faculty.
         """
         if self.disable_writes:
             warn("Writes are disabled. Skipping programme & faculty sheet creation.")
             return
+
+        if not hasattr(self, 'latest_file_date') or not self.latest_file_date:
+            warn("`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping faculty sheet creation.")
+            return
+
         info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
-        int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x]
+
+        int_mat_ids: list[int] = []
+        if self.mat_ids_on_disk: # Ensure it's not empty before list comprehension
+            try:
+                int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x and x.isdigit()]
+            except ValueError as e:
+                warn(f"Could not convert all material_ids to int: {e}. Proceeding with valid ones.")
+
 
         filtered_data: pl.DataFrame = retrieve_full_data(
             excluded_material_ids=int_mat_ids
@@ -470,9 +554,9 @@ class EasyAccessTool:
         if filtered_data.is_empty() and self.only_changes:
             warn("No new items found to export to faculty sheets.")
             return
-        if self.faculties:
-            self.faculties.sort()
-        for faculty in self.faculties:
+
+        sorted_faculties = sorted(self.faculties) if self.faculties else []
+        for faculty in sorted_faculties:
             gap = " " * (15 - len(faculty))
             faculty_data: pl.DataFrame = filtered_data.filter(
                 pl.col("faculty") == faculty
@@ -481,185 +565,335 @@ class EasyAccessTool:
                 warn(f"{faculty}:{gap}{faculty_data.shape[0]} (no new items, skipping)")
                 continue
 
-            if faculty in COURSE_MAPPING:
+            if faculty in self.settings.university_settings.course_mapping:
                 self.create_programme_sheets(faculty, input_data=faculty_data)
 
             faculty_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
-            if faculty is None or faculty == "":
-                faculty = "no_faculty_found"
-            filename = f"{faculty}_{self.latest_file_date}.xlsx"
+            current_faculty_name = faculty if faculty else "no_faculty_found"
+
+            filename_base = f"{current_faculty_name}_{self.latest_file_date}"
+            filename = f"{filename_base}.xlsx"
             i = 1
-            while os.path.exists(faculty_dir.full / filename):
-                filename = f"{faculty}_{self.latest_file_date}_{i}.xlsx"
+            # Check for existing file and append counter if necessary
+            while (faculty_dir.full / filename).exists():
+                filename = f"{filename_base}_{i}.xlsx"
                 i += 1
-            else:
-                info(f"{faculty}:{gap}{faculty_data.shape[0]}")
-            store_complete_data(faculty_dir.full / filename, faculty_data)
-            self.style_iter = finalize_sheet(
-                File(str(faculty_dir.full / filename)), faculty_data, self.style_iter
+
+            output_file_path = faculty_dir.full / filename
+            info(f"{current_faculty_name}:{gap}{faculty_data.shape[0]} -> {output_file_path.name}")
+            store_complete_data(
+                settings=self.settings,
+                file=output_file_path,
+                data=faculty_data,
             )
+            style_iter_result: int = finalize_sheet(
+                settings=self.settings,
+                file=File(str(output_file_path)),
+                data=faculty_data,
+                style_iter=self.style_iter,
+            )
+            if style_iter_result is not None:
+                self.style_iter = style_iter_result
 
     def create_programme_sheets(
         self, faculty: str, input_data: pl.DataFrame | None = None
     ) -> None:
         """
-        For a given faculty, split processed copyright data into one sheet per programme.
-        Export to faculty_dir / per_programme / programme_name}_{date}.xlsx
-        """
+        Creates individual Excel sheets for each programme within a faculty.
 
+        Splits the provided `input_data` (or `self.copyright_data` if None)
+        by programme based on course mappings in settings. Exports data for
+        each programme to a separate Excel file.
+
+        Args:
+            faculty: The faculty for which to create programme sheets.
+            input_data: The DataFrame to process. If None, uses `self.copyright_data`.
+        """
         if self.disable_writes:
-            warn("Writes are disabled. Skipping programme & faculty sheet creation.")
+            warn("Writes are disabled. Skipping programme sheet creation.")
+            return
+
+        if not hasattr(self, 'latest_file_date') or not self.latest_file_date:
+            warn("`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping programme sheet creation.")
             return
 
         programme_dir = Directory(
             self.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme"
         )
-        course_to_sheet: dict[str, str] = COURSE_MAPPING[faculty]
-        data: list[dict[str, pl.DataFrame]] = []
-        if not isinstance(input_data, pl.DataFrame):
-            input_data = self.copyright_data
-        if input_data.is_empty():
-            warn(f"No data for {faculty} -- skipping programme sheet creation.")
+        course_to_sheet_mapping: dict[str, str] | None = (
+            self.settings.university_settings.course_mapping.get(faculty)
+        )
+        if not course_to_sheet_mapping:
+            warn(
+                f"No course mapping found in settings for faculty {faculty}. Skipping programme sheet creation."
+            )
             return
-        info(f"creating programme sheets for {faculty}")
-        for course, group in course_to_sheet.items():
-            course_data = input_data.filter(pl.col("department") == course)
+
+        current_data: pl.DataFrame
+        if input_data is not None:
+            current_data = input_data
+        else:
+            current_data = self.copyright_data
+
+        if current_data.is_empty():
+            warn(f"No data provided for {faculty} -- skipping programme sheet creation.")
+            return
+
+        info(f"Creating programme sheets for {faculty}")
+
+        # data_for_groups stores tuples of (group_name_str, course_data_df)
+        data_for_groups: list[tuple[str, pl.DataFrame]] = []
+        for course, group_name_str in course_to_sheet_mapping.items():
+            if "department" not in current_data.columns:
+                warn(f"'department' column not found in data for faculty {faculty}. Cannot create programme sheets.")
+                return # Or continue to next course if appropriate
+
+            course_data = current_data.filter(pl.col("department") == course)
             gap = " " * (40 - len(course))
             if course_data.is_empty():
                 warn(f"{course}:{gap}{course_data.shape[0]} (no new items, skipping)")
                 continue
-            else:
-                info(f"retrieved programme sheet data for {course}")
-                info(f"{course}:{gap}{course_data.shape[0]}")
-                data.append({"sheet": group, "data": course_data})
-        final_data: dict[str, pl.DataFrame] = {}
-        for item in data:
-            if item.get("sheet") in final_data:
-                final_data[item.get("sheet")] = pl.concat(
-                    [final_data[item.get("sheet")], item["data"]]
+
+            info(f"Retrieved programme sheet data for {course}")
+            info(f"{course}:{gap}{course_data.shape[0]}")
+            data_for_groups.append((group_name_str, course_data))
+
+        final_grouped_data: dict[str, pl.DataFrame] = {}
+        for group_name, df_data in data_for_groups:
+            if group_name in final_grouped_data:
+                final_grouped_data[group_name] = pl.concat(
+                    [final_grouped_data[group_name], df_data]
                 )
             else:
-                final_data[item.get("sheet")] = item["data"]
+                final_grouped_data[group_name] = df_data
 
-        for groupname, df in final_data.items():
-            filename = programme_dir.full / f"{groupname}_{self.latest_file_date}.xlsx"
+        for group_name_str, df_for_group in final_grouped_data.items():
+            filename_base = f"{group_name_str}_{self.latest_file_date}"
+            output_filename = f"{filename_base}.xlsx"
+            i = 1
+            # Check for existing file and append counter
+            while (programme_dir.full / output_filename).exists():
+                output_filename = f"{filename_base}_{i}.xlsx"
+                i += 1
 
-            store_complete_data(filename, df)
-            self.style_iter = finalize_sheet(File(str(filename)), df, self.style_iter)
-            info(f"created programme sheet {groupname}_{self.latest_file_date}.xlsx")
+            output_file_path: Path = programme_dir.full / output_filename
+            store_complete_data(
+                settings=self.settings, file=output_file_path, data=df_for_group
+            )
+            style_iter_result: int = finalize_sheet(
+                settings=self.settings,
+                file=File(str(output_file_path)),
+                data=df_for_group,
+                style_iter=self.style_iter,
+            )
+            if style_iter_result is not None:
+                self.style_iter = style_iter_result
+            info(f"Created programme sheet {output_filename}")
 
     def create_all_items_sheet(self) -> None:
         """
-        Add all filtered items in the current Copyright data to a single sheet.
+        Creates a single Excel sheet containing all new copyright items.
+
+        Filters `self.copyright_data` to include only items not already
+        present on disk (if `only_changes` is True) and exports them.
         """
         if self.disable_writes:
             warn("Writes are disabled. Skipping create_all_items_sheet.")
             return
 
-        filtered_data = self.copyright_data.filter(
-            ~pl.col("material_id").is_in(self.mat_ids_on_disk)
-        )
-        if filtered_data.is_empty() and self.only_changes:
+        if not hasattr(self, 'latest_file_date') or not self.latest_file_date:
+            warn("`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping all_items sheet creation.")
+            return
+
+        filtered_data: pl.DataFrame
+        if self.only_changes:
+            valid_mat_ids_on_disk = {item for item in self.mat_ids_on_disk if item} # Filter out None or empty strings
+            if "material_id" not in self.copyright_data.columns:
+                 warn("'material_id' column not in copyright_data. Cannot filter for all_items_sheet.")
+                 filtered_data = self.copyright_data.clone() # Or handle error
+            else:
+                filtered_data = self.copyright_data.filter(
+                    ~pl.col("material_id").cast(pl.Utf8).is_in(list(valid_mat_ids_on_disk))
+                )
+        else:
+            filtered_data = self.copyright_data.clone()
+
+
+        if filtered_data.is_empty(): # Check after potential filtering
             warn("No new items found to export to all items sheet.")
             return
 
-        filename = f"all_items_{self.latest_file_date}.xlsx"
+        filename_base = f"all_items_{self.latest_file_date}"
+        output_filename = f"{filename_base}.xlsx"
         i = 1
-        while os.path.exists(self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename):
-            filename = f"all_items_{self.latest_file_date}_{i}.xlsx"
+        output_dir = self.dirs[DirSetting.ALL_ITEMS_DIR].full
+        # Check for existing file and append counter
+        while (output_dir / output_filename).exists():
+            output_filename = f"{filename_base}_{i}.xlsx"
             i += 1
+
+        output_file_path: Path = output_dir / output_filename
         store_complete_data(
-            self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename, filtered_data
+            settings=self.settings,
+            file=output_file_path,
+            data=filtered_data,
         )
-        info(f"Created sheet: {self.dirs[DirSetting.ALL_ITEMS_DIR].full / filename}")
+        info(f"Created sheet: {output_file_path}")
 
     def clean_and_validate_df(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Current implementation is bare:
-        - if sheet is not empty:
-            - set all columns to type str
-            - replace truncated url values
+        Cleans and validates a DataFrame.
 
-        TODO: Implement this function fully.
+        Current implementation:
+        - Casts all non-Utf8 columns to Utf8 (string).
+        - Replaces URL truncation markers with a default base URL.
+        - Converts 'is_duplicate' column from "0"/"1" to "FALSE"/"TRUE".
+
+        Args:
+            df: The input DataFrame.
+
+        Returns:
+            The cleaned and validated DataFrame.
+
+        TODO:
+            Implement more comprehensive validation and cleaning logic.
         """
+        if df.is_empty():
+            return df
 
-        if not df.is_empty():
-            # set all columns to type str
-            df = df.with_columns(pl.exclude(pl.Utf8).cast(str))
+        df_cleaned = df.clone()
 
-            # replace truncated url values
-            if "url" in df.columns:
-                df = df.with_columns(
-                    pl.col("url").str.replace(
-                        r"\.{3}", "https://utwente.instructure.com/files"
-                    )
-                )
-            if "osiris_catalogue_url" in df.columns:
-                df = df.with_columns(
-                    pl.col("osiris_catalogue_url").str.replace(
-                        r"\.{3}", "https://utwente.instructure.com/files"
-                    )
-                )
-            if "is_duplicate" in df.columns:
-                df = df.with_columns(
-                    pl.col("is_duplicate")
-                    .str.replace("0", "FALSE")
-                    .str.replace("1", "TRUE")
-                )
-        return df
+        # set all columns to type str (Utf8 in Polars)
+        for col_name in df_cleaned.columns: # Iterate over column names
+            if df_cleaned[col_name].dtype != pl.Utf8:
+                df_cleaned = df_cleaned.with_columns(pl.col(col_name).cast(pl.Utf8, strict=False))
+
+
+        marker = self.settings.data_settings.url_truncation_marker
+        base_url = self.settings.data_settings.url_default_base
+
+        if "url" in df_cleaned.columns:
+            df_cleaned = df_cleaned.with_columns(
+                pl.col("url").str.replace_all(marker, base_url) # Use replace_all for global replacement
+            )
+        if "osiris_catalogue_url" in df_cleaned.columns:
+            df_cleaned = df_cleaned.with_columns(
+                pl.col("osiris_catalogue_url").str.replace_all(marker, base_url) # Use replace_all
+            )
+        if "is_duplicate" in df_cleaned.columns:
+            df_cleaned = df_cleaned.with_columns(
+                pl.when(pl.col("is_duplicate") == "1").then(pl.lit("TRUE"))
+                .when(pl.col("is_duplicate") == "0").then(pl.lit("FALSE"))
+                .otherwise(pl.col("is_duplicate")) # Keep original if not "0" or "1"
+                .alias("is_duplicate")
+            )
+        return df_cleaned
 
     def remove_current_overviews(self) -> None:
+        """
+        Removes or backs up existing overview sheets for all faculties.
+
+        Iterates through faculty directories, identifies 'total_overview' files,
+        and either moves them to a backup location (if configured) or deletes them.
+        """
         if self.disable_writes:
             warn("Writes are disabled. Skipping remove_current_overviews.")
             return
 
         for faculty in self.faculties:
+            if not faculty: # Skip if faculty name is empty
+                continue
             overview_fac_dir = Directory(
                 self.dirs[DirSetting.FACULTIES_DIR].full / faculty
             )
+            if not overview_fac_dir.exists:
+                warn(f"Faculty directory not found: {overview_fac_dir.full}. Skipping overview removal for {faculty}.")
+                continue
+
             movedir = Directory(self.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty)
-            for file in overview_fac_dir.files_r:
-                if "total_overview" in file.name and faculty in file.name:
+
+            files_to_process: list[File] = []
+            try:
+                files_to_process = overview_fac_dir.files_r # Can raise if dir doesn't exist, handled above
+            except Exception as e: # Catch any other unexpected errors during file listing
+                warn(f"Error listing files in {overview_fac_dir.full}: {e}")
+                continue
+
+            for file_obj in files_to_process:
+                if "total_overview" in file_obj.name and faculty in file_obj.name:
                     if (
-                        SETTINGS.backup_settings.backup_overviews
-                        and "llm" not in file.name
+                        self.settings.backup_settings.backup_overviews
+                        and "llm" not in file_obj.name # Do not backup llm specific overviews by default
                     ):
-                        file.move(movedir.full / file.name)
+                        try:
+                            if not movedir.exists:
+                                movedir.create()
+                            file_obj.move(movedir.full / file_obj.name)
+                            info(f"Moved overview: {file_obj.name} to {movedir.full}")
+                        except Exception as e:
+                            warn(f"Could not move file {file_obj.name} to backup: {e}")
                     else:
-                        file.delete()
+                        try:
+                            file_obj.delete()
+                            info(f"Deleted overview: {file_obj.name}")
+                        except Exception as e:
+                            warn(f"Could not delete file {file_obj.name}: {e}")
+
 
     def create_overviews(self) -> None:
         """
-        1. Creates overview sheets with data per faculty (and per programme if found in COURSE_MAPPING)
-        2. Creates tables with summary data and prints them to the console + stores them as .html files
-        3. couples data with llm classification data if found and creates llm overview sheets
-        No parameters, will pull the data from disk for each faculty in self.faculties.
-        """
+        Generates overview sheets for each faculty.
 
+        Retrieves full data for each faculty, removes/backs up existing
+        overviews, and then calls `create_faculty_overviews` to generate
+        new overview sheets.
+        """
         faculty_dict: dict[str, pl.DataFrame] = {}
         if not self.faculties:
-            self.process_raw_copyright_data()
+            # Attempt to populate faculties if empty
+            warn("Faculties list is empty. Attempting to process raw copyright data to populate it.")
+            self.process_raw_copyright_data() # This will set self.faculties
             if not self.faculties:
-                warn("No faculties detected in current data. Cannot produce overviews.")
+                warn("No faculties detected after processing data. Cannot produce overviews.")
                 return
 
-        # retrieve full data from db -- all items
+        self.remove_current_overviews() # Remove or backup existing overviews first
 
-        self.remove_current_overviews()
         for faculty in self.faculties:
-            if not faculty or faculty == "" or faculty == "Unmapped":
+            if not faculty or faculty == "Unmapped": # Skip empty or "Unmapped"
                 continue
             data = retrieve_full_data(selected_faculties=faculty)
             if data.is_empty():
+                warn(f"No data retrieved for faculty '{faculty}'. Skipping overview creation for this faculty.")
                 continue
             faculty_dict[faculty] = data
-        self.style_iter = create_faculty_overviews(
-            faculty_dict, self.style_iter, self.disable_writes
+
+        if not faculty_dict:
+            warn("No data collected for any faculty. Skipping faculty overview creation.")
+            return
+
+        style_iter_result: int = create_faculty_overviews(
+            settings=self.settings,
+            faculty_data=faculty_dict,
+            style_iter=self.style_iter,
+            disable_writes=self.disable_writes,
         )
+        if style_iter_result is not None:
+            self.style_iter = style_iter_result
 
     def create_export_sheet(self) -> None:
+        """
+        Creates export sheets for each faculty.
+
+        Iterates through configured faculties and calls `create_export_sheet`
+        from the `sheets.sheet` module for each one.
+        """
+        if not self.faculties:
+            warn("No faculties configured or detected. Skipping export sheet creation.")
+            return
+
         for faculty in self.faculties:
-            if not faculty or faculty == "" or faculty == "Unmapped":
+            if not faculty or faculty == "Unmapped": # Skip empty or "Unmapped"
                 continue
-            info(f"creating export sheet for {faculty}")
-            create_export_sheet(faculty=faculty)
+            info(f"Creating export sheet for {faculty}")
+            create_export_sheet(settings=self.settings, faculty=faculty)

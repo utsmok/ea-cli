@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import json
 import re
+from typing import Literal
 
 import bs4
 import httpx
@@ -9,12 +11,16 @@ import polars as pl
 from loguru import logger
 
 from easy_access.db.ingest import load_base_data
-from easy_access.settings import SETTINGS, FileSetting
+
+# from easy_access.settings import SETTINGS, FileSetting # Will be passed
+from easy_access.settings import FileSetting, Settings  # Keep for type hinting
 from easy_access.utils import determine_course_code, info, print, warn
 
 
 async def update_osiris_data(
-    df: pl.DataFrame, only_retrieve_missing: bool = False
+    settings: Settings, # Added settings
+    df: pl.DataFrame,
+    only_retrieve_missing: bool = False
 ) -> None:
     """
     For a given df with copyright items, retrieve all OSIRIS course data + person data from people pages.
@@ -26,7 +32,7 @@ async def update_osiris_data(
         input_number: int,
         httpx_client: httpx.AsyncClient,
         semaphore: asyncio.Semaphore,
-        jaar: int = 2024,
+        jaar: int | Literal[""] = 2024,
     ) -> dict[str, dict[str, str | list | set]]:
         print_details = False
         startstring: str = '{"from":0,"size":25,"sort":[{"cursus_lange_naam.raw":{"order":"asc"}},{"cursus":{"order":"asc"}},{"collegejaar":{"order":"desc"}}],"aggs":{"agg_terms_collegejaar":{"filter":{"bool":{"must":[]}},"aggs":{"agg_collegejaar_buckets":{"terms":{"field":"collegejaar","size":2500,"order":{"_term":"desc"}}}}},"agg_terms_blokken_nested.periode_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_blokken_nested.periode_omschrijving":{"terms":{"field":"blokken_nested.periode_omschrijving","size":2500,"order":{"_term":"asc"},"exclude":"Periode: [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]"}},"nested_aggs":{"nested":{"path":"blokken_nested"},"aggs":{"nested_aggs":{"filter":{"bool":{"must":[]}},"aggs":{"agg_blokken_nested.periode_omschrijving_buckets":{"terms":{"field":"blokken_nested.periode_omschrijving","size":2500,"order":{"_term":"asc"},"exclude":"Periode: [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]"},"aggs":{"items":{"reverse_nested":{}}}}}}}}}},"agg_terms_faculteit_naam":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_faculteit_naam_buckets":{"terms":{"field":"faculteit_naam","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_coordinerend_onderdeel_oms":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_coordinerend_onderdeel_oms_buckets":{"terms":{"field":"coordinerend_onderdeel_oms","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_categorie_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_categorie_omschrijving_buckets":{"terms":{"field":"categorie_omschrijving","size":2500,"order":{"_term":"asc"}}}}},"agg_terms_voertalen.voertaal_omschrijving":{"filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"aggs":{"agg_voertalen.voertaal_omschrijving_buckets":{"terms":{"field":"voertalen.voertaal_omschrijving","size":2500,"order":{"_term":"asc"}}}}}},"post_filter":{"bool":{"must":[{"terms":{"collegejaar":["2024-2025"]}}]}},"query":{"bool":{"must":[{"multi_match":{"query":'
@@ -70,14 +76,14 @@ async def update_osiris_data(
         retry = False
         try:
             async with semaphore:
-                x = await httpx_client.post(url=url, headers=headers, data=body)
+                x = await httpx_client.post(url=url, headers=headers, content=body)
                 results = x.json().get("hits", {}).get("hits")
                 datadict = dict()
                 if not results:
-                    if not jaar:
-                        warn(f"No data found for code {input_number}.")
-                        return
-                    elif str(jaar) == "2018":
+                    if not jaar: # jaar can be "" or 0 if decremented
+                        warn(f"No data found for code {input_number} with no specific year after retries.")
+                        return {}
+                    elif isinstance(jaar, int) and jaar == 2018:
                         jaar = ""
                         retry = True
                     else:
@@ -87,7 +93,7 @@ async def update_osiris_data(
                     if len(results) != 1:
                         info(
                             str(len(results))
-                            + f" hit(s) for code {input_number} for year {jaar} - {jaar + 1}."
+                            + f" hit(s) for code {input_number} for year {jaar} - {jaar + 1 if isinstance(jaar, int) else 'next'}."
                         )
                         print_details = True
 
@@ -131,10 +137,14 @@ async def update_osiris_data(
                             "faculty_long": rawdata.get("faculteit_naam"),
                             "programme": rawdata.get("coordinerend_onderdeel_oms"),
                             "ec": rawdata.get("punten"),
-                            "language": [
-                                x.get("voertaal_omschrijving")
-                                for x in rawdata.get("voertalen")
-                            ],
+                            "language": (
+                                [
+                                    x.get("voertaal_omschrijving")
+                                    for x in voertalen_data
+                                ]
+                                if isinstance(voertalen_data := rawdata.get("voertalen"), list)
+                                else []
+                            ),
                             "notes": rawdata.get("opmerking_cursus"),
                             "category": rawdata.get("categorie_omschrijving"),
                             "teachers": teachers,
@@ -181,9 +191,9 @@ async def update_osiris_data(
                             course_data = course_details.json()
                             for datapoint in course_data.get("items"):
                                 if datapoint.get("rubriek") == "rubriek-docenten":
-                                    docentdata = datapoint.get("velden")
-                            if docentdata:
-                                for docentitem in docentdata:
+                                    _docentdata = datapoint.get("velden") # Prefixed with underscore
+                            if _docentdata: # Use the prefixed variable
+                                for docentitem in _docentdata: # Use the prefixed variable
                                     if docentitem.get("waarde"):
                                         for docenttype in docentitem.get("waarde"):
                                             for persoon in docenttype.get("velden"):
@@ -251,11 +261,12 @@ async def update_osiris_data(
         except Exception as e:
             print("exception when getting course details")
             logger.exception(e)
-            return
+            return {} # Ensure a dict is returned on error path
         if retry:
             return await get_data_from_osiris(
                 input_number, httpx_client, semaphore, jaar
             )
+        return {} # Ensure a dict is returned if no other path is taken
 
     async def get_data_from_people_page(
         name: str, httpx_client: httpx.AsyncClient, semaphore: asyncio.Semaphore
@@ -335,7 +346,7 @@ async def update_osiris_data(
                     new_url: str = "https://people.utwente.nl/" + best_match
                     try:
                         r = await httpx_client.get(new_url, headers=headers)
-                        page_data = None
+                        _page_data = None # Prefixed with underscore
                         if r.status_code in [500, 502]:
                             return await get_data_from_people_page(
                                 name, httpx_client, semaphore
@@ -347,33 +358,34 @@ async def update_osiris_data(
                         email = ""
                         if not page_data:
                             warn(f"No page data found for {name} at {new_url}")
-                            return
-                        found_name = page_data.find("h1", class_="pageheader__title")
-                        if found_name:
-                            for possible_name in found_name.strings:
+                            return {}
+                        found_name_tag = page_data.find("h1", class_="pageheader__title")
+                        if isinstance(found_name_tag, bs4.Tag):
+                            for possible_name in found_name_tag.strings:
                                 if not main_name:
-                                    main_name = possible_name
+                                    main_name = str(possible_name).strip() if possible_name else ""
                                 else:
                                     other_names.append(
-                                        str(possible_name)
-                                        .strip()
-                                        .replace("(", "")
-                                        .replace(")", "")
+                                        str(possible_name).strip().replace("(", "").replace(")", "") if possible_name else ""
                                     )
-                            final_ratio = Levenshtein.ratio(
-                                name_parsed_str, strip_name(main_name)
-                            )
-
-                            if final_ratio < 0.7:
-                                print(
-                                    f"found name {main_name} differs from input name: {name} with ratio {final_ratio}. Actually compared strings: found: {strip_name(main_name)} | input: {strip_name(name)}"
+                            if main_name: # Ensure main_name was found before calculating ratio
+                                final_ratio = Levenshtein.ratio(
+                                    name_parsed_str, strip_name(main_name)
                                 )
-                                print("still processing...")
+                                if final_ratio < 0.7:
+                                    print(
+                                        f"found name {main_name} differs from input name: {name} with ratio {final_ratio}. Actually compared strings: found: {strip_name(main_name)} | input: {strip_name(name)}"
+                                    )
+                                    print("still processing...")
+                            else: # main_name was not found
+                                final_ratio = 0.0 # or some other default indicating no match
 
                         try:
-                            for link in page_data.find_all("a"):
-                                if "mailto:" in link.get("href"):
-                                    email = link.get("href").replace("mailto:", "")
+                            for link_tag in page_data.find_all("a"):
+                                if isinstance(link_tag, bs4.Tag):
+                                    href = link_tag.get("href")
+                                    if isinstance(href, str) and "mailto:" in href:
+                                        email = href.replace("mailto:", "")
                         except Exception as e:
                             logger.exception(e)
                             email = ""
@@ -385,37 +397,27 @@ async def update_osiris_data(
                         org_data = page_data.find_all(
                             class_="widget-linklist--smallicons"
                         )
-                        if not org_data:
-                            org_data = []
-                        if len(org_data) >= 1:
-                            org_data = org_data[0].find_all(
-                                class_="widget-linklist__text"
-                            )
-                        else:
-                            org_data = []
-                        for org in org_data:
-                            text = org.string
-                            if "(" in text:
-                                try:
-                                    orgname = text.split("(")[0]
-                                    orgabbr = text.split("(")[1].split(")")[0]
-                                    if orgabbr in [
-                                        "BMS",
-                                        "ET",
-                                        "EEMCS",
-                                        "ITC",
-                                        "TNW",
-                                    ]:
-                                        faculty = orgname
-                                        facultyabbr = orgabbr
-                                    else:
-                                        found_orgs.append(
-                                            {"name": orgname, "abbr": orgabbr}
-                                        )
-                                except Exception as e:
-                                    logger.exception(
-                                        f"error while processing org {text}: {e}"
-                                    )
+                        # org_data is from page_data.find_all(class_="widget-linklist--smallicons")
+                        processed_org_data_tags = []
+                        if org_data: # Check if the list of 'widget-linklist--smallicons' tags is not empty
+                            first_container_tag = org_data[0]
+                            if isinstance(first_container_tag, bs4.Tag):
+                                processed_org_data_tags = first_container_tag.find_all(class_="widget-linklist__text")
+
+                        for org_tag_item in processed_org_data_tags: # Iterate over the 'widget-linklist__text' tags
+                            if isinstance(org_tag_item, bs4.Tag):
+                                text_content = org_tag_item.string
+                                if isinstance(text_content, str) and "(" in text_content:
+                                    try:
+                                        orgname = text_content.split("(")[0].strip()
+                                        orgabbr = text_content.split("(")[1].split(")")[0].strip()
+                                        if orgabbr in ["BMS", "ET", "EEMCS", "ITC", "TNW"]:
+                                            faculty = orgname
+                                            facultyabbr = orgabbr
+                                        else:
+                                            found_orgs.append({"name": orgname, "abbr": orgabbr})
+                                    except Exception as e:
+                                        logger.exception(f"error while processing org {text_content}: {e}")
 
                         if faculty and facultyabbr and found_orgs:
                             orgs.append({"name": faculty, "abbr": facultyabbr})
@@ -438,32 +440,33 @@ async def update_osiris_data(
                                     }
                                 )
 
-                        education_tab = page_data.find("div", id="tabpanel-education")
+                        education_tab_tag = page_data.find("div", id="tabpanel-education")
                         courses = []
                         programmes = []
-                        if education_tab:
-                            for link in education_tab.find_all("a"):
-                                if "https://utwente.osiris-student.nl" in link.get(
-                                    "href"
-                                ):
-                                    # course
-                                    linktext = link.string if link.string else ""
-                                    if " - " in linktext:
-                                        code, coursename = linktext.split(" - ", 1)
-                                        courses.append(
-                                            {
-                                                "course_code": code,
-                                                "course_name": coursename,
-                                            }
-                                        )
-                                if "https://www.utwente.nl/" in link.get("href"):
-                                    # programme
-                                    url = link.get("href")
-                                    programme = link.string
-                                    if url and programme:
-                                        programmes.append(
-                                            {"name": programme, "url": url}
-                                        )
+                        if isinstance(education_tab_tag, bs4.Tag):
+                            for link_tag in education_tab_tag.find_all("a"):
+                                if isinstance(link_tag, bs4.Tag):
+                                    href = link_tag.get("href")
+                                    link_text_val = link_tag.string
+
+                                    if isinstance(href, str) and "https://utwente.osiris-student.nl" in href:
+                                        # course
+                                        linktext_str = str(link_text_val).strip() if link_text_val else ""
+                                        if " - " in linktext_str:
+                                            code, coursename = linktext_str.split(" - ", 1)
+                                            courses.append(
+                                                {
+                                                    "course_code": code.strip(),
+                                                    "course_name": coursename.strip(),
+                                                }
+                                            )
+                                    elif isinstance(href, str) and "https://www.utwente.nl/" in href:
+                                        # programme
+                                        programme_name_str = str(link_text_val).strip() if link_text_val else ""
+                                        if href and programme_name_str: # Ensure both URL and name exist
+                                            programmes.append(
+                                                {"name": programme_name_str, "url": href}
+                                            )
 
                         person_data = {
                             "input_name": name,
@@ -484,7 +487,10 @@ async def update_osiris_data(
                             f"error while retrieving / processing {new_url} for person {name}"
                         )
                         logger.exception(e)
-                        raise e
+                        # raise e # Decide if re-raising is appropriate or if returning {} is better
+                        return {} # Return empty dict on exception after logging
+
+            return {} # Ensure a dict is returned if 'matches' is empty or other paths don't return
 
     """
     each row in the df should have 1 or multiple osiris course codes attached to it.
@@ -492,9 +498,9 @@ async def update_osiris_data(
         code: canvas code from column course_code
         name: canvas course name from column course_name
     """
-    course_data_dict = df.select(pl.col("course_code"), pl.col("course_name")).to_dict()
-    course_code_list = course_data_dict.get("course_code").to_list()
-    course_name_list = course_data_dict.get("course_name").to_list()
+    course_data_dict_from_df = df.select(pl.col("course_code"), pl.col("course_name")).to_dict() # Returns Dict[str, list]
+    course_code_list = course_data_dict_from_df.get("course_code", [])
+    course_name_list = course_data_dict_from_df.get("course_name", [])
     lookup_values = set()
     for code, name in zip(course_code_list, course_name_list, strict=False):
         result = determine_course_code(code, name)
@@ -507,24 +513,18 @@ async def update_osiris_data(
         info(f"Found {len(lookup_values)} course codes to look up in OSIRIS")
 
     osiris_data_w_contacts_file = {}
-    try:
-        osiris_data_w_contacts_file = json.load(
-            open(
-                SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
+    with contextlib.suppress(Exception):
+        with open(
+                settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, # Use passed settings
                 encoding="utf-8",
-            )
-        )
-    except Exception as e:
-        warn(f"couldnt load {SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path}")
-        print(e)
-        pass
+            ) as f:
+            osiris_data_w_contacts_file = json.load(f)
 
     course_codes_already_retrieved = set(osiris_data_w_contacts_file.keys())
     retrieve_course_data = True
     if only_retrieve_missing:
-        cur_osiris_data = json.load(
-            open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8")
-        )
+        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f: # Use passed settings
+            cur_osiris_data = json.load(f)
         cur_osiris_data = {k: v for k, v in cur_osiris_data.items() if v}
         lookup_values = lookup_values - course_codes_already_retrieved
         info(
@@ -579,7 +579,7 @@ async def update_osiris_data(
         # store course_data_dict as a json file
         if only_retrieve_missing:
             course_data_dict.update(cur_osiris_data)
-        with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, "w") as f:
+        with open(settings.files[FileSetting.OSIRIS_DATA].path, "w") as f: # Use passed settings
             json.dump(course_data_dict, f, indent=4)
         if len(not_found) > 0:
             info(f"{len(not_found)} course codes not found: ")
@@ -599,9 +599,8 @@ async def update_osiris_data(
 
     if only_retrieve_missing:
         try:
-            cur_person_data = json.load(
-                open(SETTINGS.files[FileSetting.PERSON_DATA].path, encoding="utf-8")
-            )
+            with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
+                cur_person_data = json.load(f)
             cur_persons = {x.get("input_name") for x in cur_person_data}
             persons_to_retrieve = persons_to_retrieve - set(cur_persons)
             extended_persons_to_retrieve = extended_persons_to_retrieve - set(
@@ -612,7 +611,7 @@ async def update_osiris_data(
             )
         except Exception as e:
             warn(
-                f"error while loading {SETTINGS.files[FileSetting.PERSON_DATA].path}: {e}"
+                f"error while loading {settings.files[FileSetting.PERSON_DATA].path}: {e}" # Use passed settings
             )
             ...
     if len(persons_to_retrieve) > 0:
@@ -640,29 +639,28 @@ async def update_osiris_data(
         info(f"got data for {len(person_data)} persons")
         try:
             if only_retrieve_missing:
-                current_person_data = json.load(
-                    open(SETTINGS.files[FileSetting.PERSON_DATA].path, encoding="utf-8")
-                )
+                with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
+                    current_person_data = json.load(f)
                 person_data.extend(current_person_data)
 
-            json.dump(
-                person_data,
-                open(
-                    SETTINGS.files[FileSetting.PERSON_DATA].path, "w", encoding="utf-8"
-                ),
-                indent=4,
-            )
+            with open(
+                    settings.files[FileSetting.PERSON_DATA].path, "w", encoding="utf-8" # Use passed settings
+            ) as f:
+                json.dump(
+                    person_data,
+                    f,
+                    indent=4,
+                )
         except Exception as e:
             print("error while dumping person data")
             print(e)
             pass
     if len(person_data) == 0:
         try:
-            person_data = json.load(
-                open(SETTINGS.files[FileSetting.PERSON_DATA].path, encoding="utf-8")
-            )
+            with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
+                person_data = json.load(f)
         except Exception as e:
-            warn(f"couldnt load {SETTINGS.files[FileSetting.PERSON_DATA].path}: {e}")
+            warn(f"couldnt load {settings.files[FileSetting.PERSON_DATA].path}: {e}") # Use passed settings
             person_dict = {}
 
     person_dict = {a.get("input_name"): a for a in person_data}
@@ -702,32 +700,29 @@ async def update_osiris_data(
             print("osiris course data:")
             print(entry)
 
-    try:
+    with contextlib.suppress(Exception):
         if only_retrieve_missing:
-            current_osiris_data_w_contacts = json.load(
-                open(
-                    SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
+            with open(
+                    settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, # Use passed settings
                     encoding="utf-8",
-                )
-            )
+            ) as f:
+                current_osiris_data_w_contacts = json.load(f)
             osiris_data_w_contacts.update(current_osiris_data_w_contacts)
-        json.dump(
-            osiris_data_w_contacts,
-            open(
-                SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
+        with open(
+                settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, # Use passed settings
                 "w",
                 encoding="utf-8",
-            ),
-            indent=4,
-        )
-    except Exception as e:
-        print(e)
-        pass
+        ) as f:
+            json.dump(
+                osiris_data_w_contacts,
+                f,
+                indent=4,
+            )
 
     info(
-        f"Done. Stored data in json files:\n    {SETTINGS.files[FileSetting.OSIRIS_DATA]}\n    {SETTINGS.files[FileSetting.PERSON_DATA]}\n    {SETTINGS.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}"
+        f"Done. Stored data in json files:\n    {settings.files[FileSetting.OSIRIS_DATA]}\n    {settings.files[FileSetting.PERSON_DATA]}\n    {settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}" # Use passed settings
     )
 
     # now update the database with the new data
 
-    await load_base_data()
+    await load_base_data(settings=settings) # Pass settings

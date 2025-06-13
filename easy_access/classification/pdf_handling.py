@@ -205,12 +205,11 @@ async def extract_pdf_text(
     if str_limit and len(pdf_text) > str_limit:
         pdf_text = pdf_text[:str_limit]
 
-    if pdf_text and cur_len:
-        if len(str(pdf_text)) <= int(cur_len):
-            warn(
-                f"Extracted text is shorter or equal to current text: {len(str(pdf_text))} <= {cur_len}. Not updating."
-            )
-            return pdf
+    if pdf_text and cur_len and len(str(pdf_text)) <= int(cur_len):
+        warn(
+            f"Extracted text is shorter or equal to current text: {len(str(pdf_text))} <= {cur_len}. Not updating."
+        )
+        return pdf
 
     update_dict = {
         "extracted_text": pdf_text,
@@ -583,12 +582,11 @@ async def deduplicate_pdfs(pdfs: list[PDF], compare_with_db=True) -> list[PDF]:
     # if len(ids_per_hash[hash]) > 1, we have duplicates for that hash!
 
     [ids_per_hash[get_hash(pdf.path)].append(pdf.material_id) for pdf in pdfs]
-    for file_hash, ids in ids_per_hash.items():
+    for _file_hash, ids in ids_per_hash.items():
         if len(ids) > 1:
             new_mapping.update({id_to_replace: ids[0] for id_to_replace in ids[1:]})
             replaced_ids.union(set(ids[1:]))
     info(f"Found {len(new_mapping)} duplicates by hash.")
-    by_hash = len(new_mapping)
     replaced = 0
     already_replaced = 0
     for old_id, new_id in new_mapping.items():

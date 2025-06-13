@@ -32,28 +32,29 @@ from easy_access.db.update import (
     update_copyright_items,
     update_copyright_relations,
 )
-from easy_access.settings import (
-    DEPARTMENT_MAPPING,
-    SETTINGS,
+from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFaculty for type hints
     DirSetting,
     FileSetting,
+    Settings,  # Add Settings for type hint
     SettingsFaculty,
+    # DEPARTMENT_MAPPING, # Will be accessed via settings
+    # SETTINGS, # Will be passed as an argument
 )
 from easy_access.utils import File, cool, info, warn
 
 
-async def load_osiris_data() -> None:
+async def load_osiris_data(settings: Settings) -> None: # Added settings
     """
     Creates Courses from the osiris_data.json file.
     Staff data is added later once people data has been loaded.
     """
-    await init()
-    if not SETTINGS.files[FileSetting.OSIRIS_DATA].exists:
+    await init() # init itself doesn't use global SETTINGS for db_path
+    if not settings.files[FileSetting.OSIRIS_DATA].exists: # Use passed settings
         warn("No osiris_data.json file found; data not loaded to DB.")
         return
 
     try:
-        with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f:
+        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f: # Use passed settings
             osiris_data: dict[str, dict[str, str | list[str]]] = json.load(f)
     except Exception as e:
         warn(f"Error reading osiris_data.json: {e}")
@@ -94,11 +95,11 @@ async def load_osiris_data() -> None:
     await Course.bulk_create(objects=[Course(**c) for c in course_dicts])
 
 
-async def load_org_data_from_settings() -> None:
+async def load_org_data_from_settings(settings: Settings) -> None: # Added settings
     """
-    From SETTINGS.university_settings.faculties, create Faculty and Programme objects.
+    From settings.university_settings.faculties, create Faculty and Programme objects.
     """
-    faculties: list[SettingsFaculty] = SETTINGS.university_settings.faculties
+    faculties: list[SettingsFaculty] = settings.university_settings.faculties # Use passed settings
     # first retrieve or create the university org
     university, _ = await Organization.get_or_create(
         defaults={
@@ -168,18 +169,18 @@ async def load_org_data_from_settings() -> None:
         await Programme.bulk_create(objects=[Programme(**p) for p in progamme_list])
 
 
-async def load_person_data() -> None:
+async def load_person_data(settings: Settings) -> None: # Added settings
     """
     Load data from the person_data.json file into the db.
     Adds Persons and Orgs, creates MissingCourses where necessary.
     """
 
     await init()
-    if not SETTINGS.files[FileSetting.PERSON_DATA].exists:
+    if not settings.files[FileSetting.PERSON_DATA].exists: # Use passed settings
         warn("No person_data.json file found; data not loaded to DB.")
         return
     try:
-        with open(SETTINGS.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f:
+        with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
             person_data: list[dict[str, str | float | list[str]]] = json.load(f)
     except Exception as e:
         warn(f"Error reading person_data.json: {e}")
@@ -220,7 +221,7 @@ async def load_person_data() -> None:
                     "hierarchy_level": hierarchy_level,
                 }
                 org_obj, _ = await Organization.get_or_create(
-                    defaults=org_dict, full_abbreviation=org_full_abbr
+                    defaults=org_dict, full_abbreviation=org_full_abbr # Removed unnecessary dict() call
                 )
                 if hierarchy_level == 1:
                     org_obj.parent_organization, _ = await Organization.get_or_create(
@@ -254,18 +255,18 @@ async def load_person_data() -> None:
             await person.orgs.add(*orglist)
 
 
-async def load_linked_persons_for_courses() -> Counter:
+async def load_linked_persons_for_courses(settings: Settings) -> Counter: # Added settings
     """
     Link the Persons to the Courses they are involved in.
     """
     await init()
     # load osiris data
-    if not SETTINGS.files[FileSetting.OSIRIS_DATA].exists:
+    if not settings.files[FileSetting.OSIRIS_DATA].exists: # Use passed settings
         warn("No osiris_data.json file found; data not loaded to DB.")
         return
 
     try:
-        with open(SETTINGS.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f:
+        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f: # Use passed settings
             osiris_data: dict[str, dict[str, str | list[str]]] = json.load(f)
     except Exception as e:
         warn(f"Error reading osiris_data.json: {e}")
@@ -335,7 +336,7 @@ async def load_linked_persons_for_courses() -> Counter:
     return counter
 
 
-async def load_base_data() -> None:
+async def load_base_data(settings: Settings) -> None: # Added settings
     """
     Load the base data into the db: orgs, courses, persons.
     """
@@ -347,7 +348,7 @@ async def load_base_data() -> None:
         info(f"# of Faculties present in DB before load_org_data: {faculty_count}")
         info(f"# of Programmes present in DB before load_org_data: {programme_count}")
 
-        await load_org_data_from_settings()
+        await load_org_data_from_settings(settings=settings) # Pass settings
 
         faculty_count = await Faculty.all().count()
         programme_count = await Programme.all().count()
@@ -357,7 +358,7 @@ async def load_base_data() -> None:
         course_count = await Course.all().count()
         info(f"# of Courses present in DB before load_osiris_data: {course_count}")
 
-        await load_osiris_data()
+        await load_osiris_data(settings=settings) # Pass settings
 
         course_count = await Course.all().count()
         cool(f"# of Courses present in DB after load_osiris_data: {course_count}")
@@ -371,7 +372,7 @@ async def load_base_data() -> None:
             f"# of MissingCourses present in DB before load_person_data: {missing_orgs}"
         )
 
-        await load_person_data()
+        await load_person_data(settings=settings) # Pass settings
 
         org_count = await Organization.all().count()
         person_count = await Person.all().count()
@@ -382,7 +383,7 @@ async def load_base_data() -> None:
             f"# of MissingCourses present in DB after load_person_data: {missing_orgs}"
         )
 
-        results = await load_linked_persons_for_courses()
+        results = await load_linked_persons_for_courses(settings=settings) # Pass settings
         cool(f"Overview of new relations added to Courses: {results}")
     except Exception as e:
         warn(f"Error loading base data: {e}")
@@ -390,26 +391,26 @@ async def load_base_data() -> None:
     await Tortoise.close_connections()
 
 
-async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> None:
-    def read_copyright_export(file: File | None = None) -> pl.DataFrame:
+async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame | None = None) -> None: # Added settings
+    def read_copyright_export(settings_param: Settings, file_param: File | None = None) -> pl.DataFrame: # Added settings_param, renamed file to file_param
         """
         Reads in data from the latest copyright export file in the copyright dir;
         or if a file is given, reads in that file.
         Input should be a direct export from the CopyRight tool without any changes.
         """
         try:
-            if not file:
+            if not file_param: # Use file_param
                 info(
-                    f"Reading in newest Copyright Data from directory: {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
+                    f"Reading in newest Copyright Data from directory: {settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA]}" # Use settings_param
                 )
-                file = max(
-                    SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA].files,
+                file_param = max( # Use file_param
+                    settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA].files, # Use settings_param
                     key=lambda x: x.created,
                 )
 
-            info(f"Reading in data from:\n            {file.name}\n")
-            latest_file_date = file.created.strftime("%Y-%m-%d")
-            raw_copyright_data = pl.read_excel(file.path)
+            info(f"Reading in data from:\n            {file_param.name}\n") # Use file_param
+            latest_file_date = file_param.created.strftime("%Y-%m-%d") # Use file_param
+            raw_copyright_data = pl.read_excel(file_param.path) # Use file_param
             copyright_data = (
                 raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
                 .rename(
@@ -431,7 +432,7 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
                     .dt.strftime("%Y-%m-%d"),
                     pl.col("classification").str.to_lowercase(),
                     faculty=pl.col("department").replace_strict(
-                        DEPARTMENT_MAPPING, default="Unmapped"
+                        settings_param.university_settings.department_mapping, default="Unmapped" # Use settings_param
                     ),
                 )
             )
@@ -439,7 +440,7 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
             # now drop rows we definitely do not want.
             # - drop row if material_id is null, None, blank, or '-'
             # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
-            info(f"Retrieved {len(copyright_data)} items from {file.name}.")
+            info(f"Retrieved {len(copyright_data)} items from {file_param.name}.") # Use file_param
 
             copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
             copyright_data = copyright_data.filter(
@@ -448,17 +449,17 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
             )
 
             info(
-                f"{len(copyright_data)} items remaining from {file.name} after filtering out missing material_ids and specific filetypes."
+                f"{len(copyright_data)} items remaining from {file_param.name} after filtering out missing material_ids and specific filetypes." # Use file_param
             )
             return copyright_data
         except FileNotFoundError as e:
-            warn(f"No files found in {SETTINGS.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
+            warn(f"No files found in {settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA]}") # Use settings_param
             raise e
         except PermissionError as e:
-            warn(f"Permission denied to read {file.name}")
+            warn(f"Permission denied to read {file_param.name}") # Use file_param
             raise e
         except ValueError as e:
-            warn(f"No file found: {file=}.")
+            warn(f"No file found: {file_param=}.") # Use file_param
             raise e
 
     """
@@ -478,9 +479,9 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
             info(text=f"loading raw items from {file}")
     try:
         if not isinstance(file, pl.DataFrame):
-            if file is None:
+            if file is None: # file here is the parameter of load_raw_copyright_data
                 info(text="loading raw items from most recent raw copyright export")
-            df = read_copyright_export(file)
+            df = read_copyright_export(settings_param=settings, file_param=file) # Pass settings and file
 
         items = standardize_dataframe(df).to_dicts()
 
@@ -516,8 +517,8 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
     finally:
         if item_list:
             await CopyrightItem.bulk_create(objects=item_list)
-            await load_llm_classifications()
-            await update_copyright_relations()
+            await load_llm_classifications(settings=settings) # Pass settings
+            await update_copyright_relations() # This function does not use global SETTINGS
         cool(
             f"# of items in db after loading raw items: {await CopyrightItem.all().count()}"
         )
@@ -532,7 +533,7 @@ async def load_raw_copyright_data(file: File | pl.DataFrame | None = None) -> No
     await Tortoise.close_connections()
 
 
-async def load_llm_classifications() -> None:
+async def load_llm_classifications(settings: Settings) -> None: # Added settings
     """
     load llm classifications from .json files in the classifications dir
     """
@@ -547,7 +548,7 @@ async def load_llm_classifications() -> None:
     try:
         all_files = [
             f
-            for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files
+            for f in settings.dirs[DirSetting.CLASSIFICATIONS].files # Use passed settings
             if f.name.endswith(".json")
         ]
         old_files = [f for f in all_files if "_old" in f.name]
@@ -558,7 +559,7 @@ async def load_llm_classifications() -> None:
 
         all_files = [
             f
-            for f in SETTINGS.dirs[DirSetting.CLASSIFICATIONS].files
+            for f in settings.dirs[DirSetting.CLASSIFICATIONS].files # Use passed settings
             if f.name.endswith(".json")
         ]
         json_mat_ids = {int(f.name.replace(".json", "").strip()): f for f in all_files}
@@ -663,13 +664,13 @@ async def load_llm_classifications() -> None:
     await Tortoise.close_connections()
 
 
-async def load_pdfs() -> None:
+async def load_pdfs(settings: Settings) -> None: # Added settings
     """
     Load pdfs from the pdfs dir into the db.
     """
 
     await init()
-    pdf_file_list: list[File] = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].files
+    pdf_file_list: list[File] = settings.dirs[DirSetting.PDF_DOWNLOADS].files # Use passed settings
     try:
         pdf_files: dict[str, File] = {
             file.name.split("_")[0]: file

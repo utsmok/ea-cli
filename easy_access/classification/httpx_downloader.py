@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -160,10 +161,8 @@ class HttpxDownloader:
             print(f"[ERROR] {error_msg}")
             # Clean up potentially incomplete file
             if "filepath" in locals() and filepath.exists():
-                try:
-                    filepath.unlink()
-                except OSError:
-                    pass  # Ignore error during cleanup
+                with contextlib.suppress(OSError):
+                    filepath.unlink()  # Ignore error during cleanup
             return False, None, error_msg
 
 
