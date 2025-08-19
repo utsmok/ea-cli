@@ -5,7 +5,6 @@ This module uses an api-based service to classify documents.
 import asyncio
 import io
 import os
-import re
 import time
 from functools import partial
 
@@ -20,7 +19,7 @@ from easy_access.db.base import init
 from easy_access.db.ingest import load_llm_classifications
 from easy_access.db.models import PDF, CopyrightItem
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import File, warn
+from loguru import logger
 
 console = Console(emoji=True, markup=True)
 
@@ -128,11 +127,11 @@ async def classify_pdf(
 
         # Combined SIM102: if not full_pdf and not pdf.extracted_text
         if not full_pdf and not pdf.extracted_text:
-            warn("pdf has no extracted text. Trying to extract.")
+            logger.warning("pdf has no extracted text. Trying to extract.")
             await extract_pdf_text(pdf)
             pdf = await PDF.get(material_id=mat_id) # Re-fetch pdf after potential modification
             if not pdf.extracted_text: # Check again after trying to extract
-                warn(
+                logger.warning(
                     f"pdf still has no extracted text. Sending full pdf instead for {pdf.current_file_name}"
                 )
                 full_pdf = True
@@ -142,7 +141,7 @@ async def classify_pdf(
             if len(pdf_text) > 10_000:
                 pdf_text = pdf_text[:10_000]
             if len(pdf_text) < 100:
-                warn(f"pdf text is too short for {pdf.current_file_name}")
+                logger.warning(f"pdf text is too short for {pdf.current_file_name}")
                 full_pdf = True
             if not full_pdf:
                 contents = f"\n | text content of pdf file {pdf.current_file_name} is as follows: |\n".join(
@@ -154,7 +153,7 @@ async def classify_pdf(
                 # select only the first 20 pages
                 pdf_bytes = await send_pdf_to_gemini(pdf, max_pages=20)
                 if not pdf_bytes:
-                    warn("Could not send pdf to gemini storage.")
+                    logger.warning("Could not send pdf to gemini storage.")
                     return pdf, None
 
                 pdf_file = client.files.upload(

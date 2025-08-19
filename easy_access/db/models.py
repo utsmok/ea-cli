@@ -435,6 +435,17 @@ class PDF(Model, TimestampMixin):
         null=True, default=False
     )  # if the file could not be parsed, set to True
 
+    # Download-related fields
+    # -> Has an download been attempted?
+    # defaults to false for new items. Use to create a list of items to download.
+    # Set to True once an initial attempt has been made, then never change again.
+    # -> Did the download succeed?
+    # The function that downloads the file sets this to True if the files is downloaded and is >0kb. Else it sets it to False.
+    # Defaults to None (if no download attempts have been made yet).
+
+    download_attempted = fields.BooleanField(null=True, default=False)
+    download_succeeded = fields.BooleanField(null=True, default=None)
+
     class Meta:
         table = "pdf_data"
 

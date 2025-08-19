@@ -525,7 +525,7 @@ MODAL_INTERACTION = Script("""
                     pillElement.classList.replace(currentStyle, newStyle);
                     console.log(`  Replaced style ${currentStyle} with ${newStyle}`);
                 } else {
-                    console.warn(`  Current style ${currentStyle} not found on element. Attempting to remove old and add new.`);
+                    console.logger.warning(`  Current style ${currentStyle} not found on element. Attempting to remove old and add new.`);
                     const existingStyle = Array.from(pillElement.classList).find(cls => cls.startsWith('uk-label-') || cls.startsWith('badge-'))
                     if(existingStyle && existingStyle !== 'badge-sm') {
                         pillElement.classList.remove(existingStyle);
@@ -546,7 +546,7 @@ MODAL_INTERACTION = Script("""
                 drop.hide(false);
                 console.log("  Closed dropdown.");
             } else {
-                console.warn("  Could not find dropdown to close.");
+                console.logger.warning("  Could not find dropdown to close.");
             }
         } else {
             // --- Log error if element not found ---

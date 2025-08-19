@@ -32,7 +32,9 @@ from easy_access.sheets.backup import (
     RestoreStrategy,
 )
 from easy_access.sheets.sheet import create_export_sheet
-from easy_access.utils import cool, info, warn
+from loguru import logger
+
+# INIT typer apps
 
 app = typer.Typer(
     name="ea-cli",
@@ -40,7 +42,6 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# To be populated with subcommands
 preprocess_app = typer.Typer(
     name="preprocess",
     help="Pre-processing: PDF download, classification, deduplication.",
@@ -50,6 +51,7 @@ app.add_typer(preprocess_app)
 backup_app = typer.Typer(name="backup", help="Backup and restore operations.")
 app.add_typer(backup_app)
 
+# Commands for main app
 
 @app.command(name="process")
 def process_data(
@@ -98,24 +100,16 @@ def process_data(
             rich_help_panel="Processing Options",
         ),
     ] = None,
-    # Backup related flags are moved to the 'backup' subcommand
-    # Export related flags are moved to the 'export' subcommand
-    # Preprocessing flags (download, classify, deduplicate) moved to 'preprocess' subcommand
 ) -> None:
     """Runs the main Easy Access data processing workflow."""
 
-    # Logic from the original cli function related to main processing
-    # Backup handling will be done by the 'backup' subcommand called separately by user if needed.
-    # Export handling will be done by the 'export' subcommand.
-    # Dashboard is its own subcommand.
-    # Preprocessing is its own subcommand.
 
     if other_sheet:
         try:
             other_sheet = Path(other_sheet)  # Ensure it's a Path object
-            info(f"Reading in data from other sheet: {other_sheet.absolute()}")
+            logger.info(f"Reading in data from other sheet: {other_sheet.absolute()}")
         except Exception as e:
-            warn(f"Failed to parse path to other sheet: {e}")
+            logger.warning(f"Failed to parse path to other sheet: {e}")
             other_sheet = None
 
     # Load settings from CLI params, using main SETTINGS for base dir config
@@ -134,22 +128,23 @@ def process_data(
     tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)
     tool.run()
 
-    cool("Main processing done!")
+    logger.success("Main processing done!")
 
 
 @app.command(name="dashboard")
-def run_dashboard() -> None:
-    """Serves the easy_access dashboard."""
-    info("Serving the easy_access dashboard.")
-    info("Once launched, it will be available at http://localhost:8000.")
-    info("Press Ctrl+C or close this terminal window to stop the server.")
+def run_dashboard(port: Annotated[int, typer.Option(help="Port to serve the dashboard on.")] = 8000, host: Annotated[str, typer.Option(help="Host to serve the dashboard on.")] = "0.0.0.0") -> None:
+    """Serves the easy_access dashboard.
+    """
+    logger.info("Serving the easy_access dashboard.")
+    logger.info(f"Once launched, it will be available at http://{host}:{port}.")
+    logger.info("Press Ctrl+C or close this terminal window to stop the server.")
     uvicorn.run(
         "easy_access.dashboard.dash:app",
-        host="0.0.0.0",  # Consider making this configurable
-        port=8000,  # Consider making this configurable
+        host=host,
+        port=port,
         reload=SETTINGS.dashboard_reload,
     )
-    cool("Dashboard server stopped.")
+    logger.success("Dashboard server stopped.")
 
 
 @app.command(name="export")
@@ -163,25 +158,26 @@ def run_export(
 ) -> None:
     """Creates export sheets."""
     if single_faculty:
-        info(f"Exporting data for faculty: {single_faculty}")
+        logger.info(f"Exporting data for faculty: {single_faculty}")
         create_export_sheet(settings=SETTINGS, faculty=single_faculty)
     else:
-        info("Creating export sheets for all faculties.")
+        logger.info("Creating export sheets for all faculties.")
         create_export_sheet(
             settings=SETTINGS
-        )  # Assumes create_export_sheet handles all faculties if None
-    cool("Done creating export sheets.")
+        )
+    logger.success("Done creating export sheets.")
 
+# Commands for backup app
 
 @backup_app.command(name="create")
 def create_backup_command() -> None:
     """Creates a backup of the current data based on settings.yaml."""
     backupper = Backupper()
     if SETTINGS.backup_settings.backup_all:  # Check main settings
-        info("Creating backup as per settings.yaml (backup_all: true).")
+        logger.info("Creating backup as per settings.yaml (backup_all: true).")
         backupper.backup_files()
     else:
-        info("Backup not created as per settings.yaml (backup_all: false or not set).")
+        logger.info("Backup not created as per settings.yaml (backup_all: false or not set).")
 
 
 @backup_app.command(name="restore")
@@ -197,15 +193,17 @@ def restore_backup_command(
 ) -> None:
     """Restores data from a backup."""
     backupper = Backupper()
-    info(
+    logger.info(
         f"Restoring backup from '{restore_dir.value}' with strategy '{restore_strategy.value}'."
     )
     backupper.restore_backup(
         strategy=restore_strategy,
         select=restore_dir,
     )
-    cool("Backup restoration process finished.")
+    logger.success("Backup restoration process finished.")
 
+
+# Commands for pre-processing app
 
 @preprocess_app.command(name="run_all")
 def run_all_preprocess(
@@ -241,9 +239,8 @@ def run_all_preprocess(
     # ] = False,
 ) -> None:
     """(Currently Stubs) Runs all pre-processing steps: PDF download, classification, deduplication."""
-    # This combines the logic that was previously under `if any([download, deduplicate, classify]):`
-    info("Running pre-processing steps (download, deduplicate, classify)...")
-    info("First, running the tool in read-only mode to update DB data if needed.")
+    logger.info("Running pre-processing steps (download, deduplicate, classify)...")
+    logger.info("First, running the tool in read-only mode to update DB data if needed.")
 
     ea_temp_settings = EasyAccessSettings.create_for_runtime(  # Renamed method
         main_settings=SETTINGS,  # Pass the main SETTINGS object
@@ -257,26 +254,25 @@ def run_all_preprocess(
     )
     temp_tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_temp_settings)
     temp_tool.run()
-    cool("Done updating data in read-only mode for pre-processing.")
+    logger.success("Done updating data in read-only mode for pre-processing.")
 
-    info("Actual pre-processing steps (download, deduplicate, classify) follow.")
-    warn(
+    logger.info("Actual pre-processing steps (download, deduplicate, classify) follow.")
+    logger.warning(
         "Download, deduplication, and classification steps are currently stubs and not implemented."
     )
     # if download:
-    #     info("Downloading PDFs...")
+    #     logger.info("Downloading PDFs...")
     #     # ... downloader logic ...
     # if deduplicate:
-    #     info("Deduplicating PDFs...")
+    #     logger.info("Deduplicating PDFs...")
     #     # ... deduplicator logic ...
     # if classify:
-    #     info("Classifying PDFs...")
+    #     logger.info("Classifying PDFs...")
     #     # ... classifier logic ...
-    cool("Pre-processing steps finished (stubs).")
+    logger.success("Pre-processing steps finished")
 
 
-cool("Pre-processing steps finished (stubs).")
 
 
 if __name__ == "__main__":
-    app()  # Use the new main app
+    app()

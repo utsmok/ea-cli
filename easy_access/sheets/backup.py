@@ -1,8 +1,10 @@
 from datetime import datetime
 from enum import Enum
 
+from loguru import logger
+
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import Directory, cool, info, print, warn
+from easy_access.utils import Directory, print
 
 
 class BackupFlag(Enum):
@@ -47,29 +49,35 @@ class Backupper:
         max_backups = SETTINGS.backup_settings.max_backups
 
         if not dirs_to_backup:
-            warn(
+            logger.warning(
                 "backup_all is set to true in settings.yaml, but no dirs to backup were specified. Skipping."
             )
             return
         if not backup_location:
-            warn(
+            logger.warning(
                 "backup_all is set to true in settings.yaml, but no backup location was specified. Skipping."
             )
             return
         if not max_backups:
-            warn(
+            logger.warning(
                 "backup_all is set to true in settings.yaml, but no max amount of backups was specified. Skipping."
             )
             return
-
-        if len(backup_location.dirs) >= max_backups:
-            info(
-                f"Found {len(backup_location.dirs)} backups, making room by deleting oldest backup(s)."
+        backup_location_dirs = backup_location.dirs()
+        if len(backup_location_dirs) >= max_backups:
+            logger.info(
+                f"Found {len(backup_location_dirs)} backups, making room by deleting oldest backup(s)."
             )
-            while len(backup_location.dirs) >= max_backups:
-                min(backup_location.dirs, key=lambda x: x.created).delete()
+            while len(backup_location_dirs) >= max_backups:
+                dir_by_date = {d.created:d for d in backup_location_dirs if d.created}
+                dates = list(dir_by_date.keys())
+                dates.sort()
+                dir_by_date[dates[0]].delete()
+                backup_location_dirs = backup_location.dirs()
 
-        info(
+
+
+        logger.info(
             f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}"
         )
         for i in range(0, max_backups + 4):
@@ -85,11 +93,11 @@ class Backupper:
         for d in dirs_to_backup:
             d.copy(new_backup_dir)
 
-        cool(f"Backups done, stored in {new_backup_dir.full}")
+        logger.success(f"Backups done, stored in {new_backup_dir.full}")
 
     def restore_backup(
         self,
-        backup_dir: Directory = None,
+        backup_dir: Directory | None = SETTINGS.backup_settings.backup_location,
         strategy: RestoreStrategy = RestoreStrategy.REPLACE,
         select: RestoreOptions = RestoreOptions.LATEST,
     ) -> None:
@@ -111,52 +119,52 @@ class Backupper:
         target_dir = SETTINGS.dirs[DirSetting.FACULTIES_DIR]
 
         if not backup_dir:
-            backup_dir = SETTINGS.backup_settings.backup_location
-        if not isinstance(backup_dir, Directory):
+            backup_dir: Directory = SETTINGS.backup_settings.backup_location
+        if not isinstance(backup_dir, Directory) and backup_dir:
             try:
-                backup_dir = Directory(backup_dir)
+                backup_dir: Directory = Directory(backup_dir)
             except Exception:
-                warn(
+                logger.warning(
                     f"Could not convert {backup_dir} to a Directory object. Cannot restore backup."
                 )
                 return
         if not backup_dir.exists:
-            warn(
+            logger.warning(
                 f"Backup dir {backup_dir.full} does not exist -- cannot restore backup."
             )
             return
 
         selected_backup_dir = None
         if select == RestoreOptions.LATEST:
-            selected_backup_dir = max(backup_dir.dirs, key=lambda x: x.created)
+            selected_backup_dir = max(backup_dir.dirs(), key=lambda x: x.created)
         elif select == RestoreOptions.OLDEST:
-            selected_backup_dir = min(backup_dir.dirs, key=lambda x: x.created)
+            selected_backup_dir = min(backup_dir.dirs(), key=lambda x: x.created)
         elif select == RestoreOptions.MANUAL:
             print(f"  Select backup to restore from {backup_dir.full}:")
             print("------------------------------------------------------\n")
-            for num, dir in enumerate(backup_dir.dirs):
+            for num, dir in enumerate(backup_dir.dirs()):
                 print(f"    {num}: {dir.full}")
             print("\n")
             while not selected_backup_dir:
                 try:
-                    selected_backup_dir = backup_dir.dirs[
+                    selected_backup_dir = backup_dir.dirs()[
                         int(
                             input(
-                                f"  Select backup to restore (0-{len(backup_dir.dirs) - 1}): "
+                                f"  Select backup to restore (0-{len(backup_dir.dirs()) - 1}): "
                             )
                         )
                     ]
                 except Exception as e:
-                    warn(f"Invalid input. Please select a valid backup. ({e})")
+                    logger.warning(f"Invalid input. Please select a valid backup. ({e})")
 
         if not selected_backup_dir:
-            warn("No valid backup selected, cannot restore.")
+            logger.warning("No valid backup selected, cannot restore.")
             return
 
         if strategy == RestoreStrategy.REPLACE:
             target_dir.delete()
-            info(f"Deleted {target_dir.full}")
-            info(
+            logger.info(f"Deleted {target_dir.full}")
+            logger.info(
                 f"Restoring backup from {selected_backup_dir.full} to {target_dir.full} using strategy: {strategy}"
             )
             selected_backup_dir.copy(target_dir)
@@ -165,6 +173,6 @@ class Backupper:
         elif strategy == RestoreStrategy.MERGE_PREFER_EXISTING:
             selected_backup_dir.copy(target_dir, overwrite=False)
         else:
-            warn(f"Unrecognized strategy: {strategy}. Cannot restore backup.")
+            logger.warning(f"Unrecognized strategy: {strategy}. Cannot restore backup.")
             return
-        cool(f"Backup restored to {target_dir.full} using strategy: {strategy}")
+        logger.success(f"Backup restored to {target_dir.full} using strategy: {strategy}")

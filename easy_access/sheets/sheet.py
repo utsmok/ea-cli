@@ -9,6 +9,7 @@ import openpyxl.worksheet.datavalidation
 import openpyxl.worksheet.worksheet
 import polars as pl
 import typer
+from loguru import logger
 from openpyxl.styles import Alignment, NamedStyle
 from openpyxl.worksheet.table import Table as ExcelTable
 from openpyxl.worksheet.table import TableStyleInfo
@@ -19,7 +20,7 @@ from easy_access.db.retrieve import (
 
 # from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting # Will be passed as parameters
 from easy_access.settings import ColInfo, DirSetting, Settings  # Keep for type hinting
-from easy_access.utils import Directory, File, info, warn
+from easy_access.utils import Directory, File
 
 
 def read_copyright_export(settings: Settings, file: File | None = None) -> tuple[str, pl.DataFrame]:
@@ -30,7 +31,7 @@ def read_copyright_export(settings: Settings, file: File | None = None) -> tuple
     """
     try:
         if not file:
-            info(
+            logger.info(
                 f"Reading in newest Copyright Data from directory: {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
             )
             file = max(
@@ -38,7 +39,7 @@ def read_copyright_export(settings: Settings, file: File | None = None) -> tuple
                 key=lambda x: x.created,
             )
 
-        info(f"Reading in data from:\n            {file.name}\n")
+        logger.info(f"Reading in data from:\n            {file.name}\n")
         latest_file_date = file.created.strftime("%Y-%m-%d")
         raw_copyright_data = pl.read_excel(file.path)
         copyright_data = (
@@ -70,7 +71,7 @@ def read_copyright_export(settings: Settings, file: File | None = None) -> tuple
         # now drop rows we definitely do not want.
         # - drop row if material_id is null, None, blank, or '-'
         # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
-        info(f"Retrieved {len(copyright_data)} items from {file.name}.")
+        logger.info(f"Retrieved {len(copyright_data)} items from {file.name}.")
 
         copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
         copyright_data = copyright_data.filter(
@@ -78,18 +79,18 @@ def read_copyright_export(settings: Settings, file: File | None = None) -> tuple
             | (pl.col("filetype").is_null())
         )
 
-        info(
+        logger.info(
             f"{len(copyright_data)} items remaining from {file.name} after filtering out missing material_ids and specific filetypes."
         )
         return latest_file_date, copyright_data
     except FileNotFoundError:
-        warn(f"No files found in {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}") # Use passed settings
+        logger.warning(f"No files found in {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}") # Use passed settings
         raise typer.Exit(code=1)
     except PermissionError:
-        warn(f"Permission denied to read {file.name}")
+        logger.warning(f"Permission denied to read {file}")
         raise typer.Exit(code=1)
     except ValueError:
-        warn("No file found.")
+        logger.warning("No file found.")
         raise typer.Exit(code=1)
 
 
@@ -240,7 +241,7 @@ def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_ite
     )
     data = data.unique("material_id")
     sheet.add_data(data)
-    info(f"Added data entry sheet to {file.name}")
+    logger.info(f"Added data entry sheet to {file.name}")
     # llm_classification_data = enrich_with_llm_classifications(settings=settings, data=data) # enrich_with_llm_classifications is disabled
     if "overview" in file.path.stem:
         # only add the llm classification data if the file is an overview file
@@ -257,7 +258,7 @@ def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_ite
             table_style="TableStyleMedium3",
             autofit=True,
         )
-        info(f"Stored llm_classification_data sheet to {llm_sheet_path.name}")
+        logger.info(f"Stored llm_classification_data sheet to {llm_sheet_path.name}")
 
     return style_iter
 
@@ -283,7 +284,7 @@ def store_complete_data(settings: Settings, file: File | Path, data: pl.DataFram
     data = data.select(selectcols)
     data = data.unique("material_id")
     data.write_excel(file, worksheet=settings.data_settings.complete_data_name) # Use passed settings
-    info(f"Stored {data.shape[0]} rows to {file}")
+    logger.info(f"Stored {data.shape[0]} rows to {file}")
 
 
 def read_export_sheets(settings: Settings) -> pl.DataFrame: # Added settings
@@ -346,7 +347,7 @@ def create_export_sheet( # Added settings
 
     data = data.filter(pl.col(name="workflow_status") == "Done")
     if data.is_empty():
-        warn("No data to export")
+        logger.warning("No data to export")
         return
     if not faculty:
         dir = Directory(settings.dirs[DirSetting.EXPORT_TO_SURF].full) # Use passed settings
@@ -361,7 +362,7 @@ def create_export_sheet( # Added settings
         / f"utwente__{TODAY}_{data.shape[0]}_items_copyright_import_full_details.xlsx"
     )
 
-    info(f"Exporting data to {export_file_path} and {full_details_file_path}")
+    logger.info(f"Exporting data to {export_file_path} and {full_details_file_path}")
     data.select(COL_NAMES).write_excel(export_file_path)
 
     # store formatted / styled export file with all details
@@ -377,14 +378,14 @@ def enrich_with_llm_classifications(settings: Settings, data: pl.DataFrame) -> p
     select only the relevant columns
     return the joined dataframe
     """
-    warn("Enriching data with llm classification data currently disabled")
+    logger.warning("Enriching data with llm classification data currently disabled")
     return pl.DataFrame() # Returns empty DF, so the code below this is currently not executed.
 
     # The code below would be active if the above return was removed.
     llm_data = retrieve_all_classifications(settings=settings) # Corrected call
 
     if not isinstance(llm_data, pl.DataFrame) or llm_data.is_empty():
-        warn("No llm classification data found or llm_data is not a DataFrame.")
+        logger.warning("No llm classification data found or llm_data is not a DataFrame.")
         return data # Return original data if no llm data
 
     joined_data = data.join(llm_data, on="material_id", how="left")
@@ -427,7 +428,7 @@ def enrich_with_llm_classifications(settings: Settings, data: pl.DataFrame) -> p
     # print missing expected columns
     missing_cols = [col for col in col_order if col not in joined_data.columns]
     if missing_cols:
-        warn(f"Missing expected columns in llm classification data: {missing_cols}")
+        logger.warning(f"Missing expected columns in llm classification data: {missing_cols}")
     return joined_data.select(existing_cols_in_order)
 
 
@@ -446,7 +447,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
     # Based on current usage (disabled in finalize_sheet), this might not be an immediate issue.
     # However, for completeness, if it were to be used:
     # all_files = Directory(settings.dirs[DirSetting.CLASSIFICATIONS].full).files
-    # warn("retrieve_all_classifications is called but uses global SETTINGS which should be refactored if this function is enabled.") # Comment out warning as it's now fixed
+    # logger.warning("retrieve_all_classifications is called but uses global SETTINGS which should be refactored if this function is enabled.") # Comment out warning as it's now fixed
     # The following line will error if SETTINGS is not available globally. # Comment out as it's now fixed
     all_files = Directory(settings.dirs[DirSetting.CLASSIFICATIONS].full).files # Use passed settings - This is correct
     all_jsons = [
@@ -465,7 +466,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
         for file in all_files
         if file.extension == ".replace"
     ]
-    info(
+    logger.info(
         f"Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {settings.dirs[DirSetting.CLASSIFICATIONS].full}" # Use passed settings
     )
     # rename all jsons to {material_id}.json --> split filename on _ and take first part
@@ -489,7 +490,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
     final_data_dict = {}
     for mat_id, mat_data in data.items():
         if not str(mat_id).isdigit():
-            warn(f"Skipping llm data for {mat_id} as it is not a valid material_id")
+            logger.warning(f"Skipping llm data for {mat_id} as it is not a valid material_id")
             continue
         mat_id = int(mat_id)
         tmp = {}
@@ -506,7 +507,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
     for replace in all_replacements:
         old, new = replace.split("_")
         if not old.isdigit() or not new.isdigit():
-            warn(
+            logger.warning(
                 f"Skipping replacement file {replace} as it on or both material_ids are not valid: {old}, {new}"
             )
             continue

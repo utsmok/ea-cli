@@ -9,12 +9,12 @@ from typing import Literal
 from flashtext import KeywordProcessor
 from gliner import GLiNER
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from loguru import logger
 from nameparser import HumanName
 from rich import print
 
 from easy_access.db.retrieve import retrieve_osiris_data
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import warn
 
 """
 This module uses GLiNER and regex to identify entities in text files.
@@ -147,7 +147,7 @@ def update_text(original_text: str, entities: list[Entity]) -> str:
             result_parts.append(original_text[current_pos : entity.start])
         elif entity.start < current_pos:
             # This condition should ideally not be met after filtering/merging. Log if it happens.
-            warn(
+            logger.warning(
                 "Skipping entity due to unexpected overlap/order after filtering: {}",
                 entity,
             )
@@ -193,7 +193,7 @@ def store_files(material_id: int, annotated_text: str, entities: list[Entity]) -
         with open(save_path_json, "w", encoding="utf-8") as f:
             json.dump(entities_dict_list, f, indent=2)
     except OSError as e:
-        warn(f"Error saving JSON file {save_path_json}: {e}")
+        logger.warning(f"Error saving JSON file {save_path_json}: {e}")
 
     annotated_text_file = f"{material_id}_annotated.md"
     save_path_md = FILE_DIR.full / annotated_text_file
@@ -201,7 +201,7 @@ def store_files(material_id: int, annotated_text: str, entities: list[Entity]) -
         with open(save_path_md, "w", encoding="utf-8") as f:
             f.write(annotated_text)
     except OSError as e:
-        warn(f"Error saving Markdown file {save_path_md}: {e}")
+        logger.warning(f"Error saving Markdown file {save_path_md}: {e}")
 
     print(
         f"Saved annotated text ([cyan]{save_path_md.name}[/]) and "
@@ -349,10 +349,10 @@ def determine_specific_names_from_db(material_id: int) -> dict[str, list[str]]:
 
     """
 
-    osiris_data = retrieve_osiris_data(material_id)
+    osiris_data = retrieve_osiris_data(material_id, SETTINGS)
 
     if not osiris_data:
-        warn(f"No osiris data found for material_id {material_id}")
+        logger.warning(f"No osiris data found for material_id {material_id}")
         return []
 
     osiris_data = osiris_data[0]
@@ -452,7 +452,7 @@ def process_items(extract_text_type: str = "paddle") -> None:
         else:
             file = all_extracted_text_files[extracted_text_files_ids.index(id)]
         if not file or not file.exists:
-            warn(f"File {file} does not exist.")
+            logger.warning(f"File {file} does not exist.")
             continue
 
         selected_files.append(file)

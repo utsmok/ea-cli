@@ -24,7 +24,8 @@ from easy_access.db.models import (
     LLMClassification,
     WorkflowStatus,
 )
-from easy_access.utils import cool, determine_course_code, info, warn
+from easy_access.settings import Settings
+from easy_access.utils import determine_course_code
 
 
 async def link_llm_classifications_to_copyright_items() -> None:
@@ -43,19 +44,19 @@ async def link_llm_classifications_to_copyright_items() -> None:
                 item.llm_classification = classification
                 await item.save()
         except Exception as e:
-            warn(
+            logger.warning(
                 f"Error while trying to get llm classification for item {item.material_id}: {e}"
             )
             continue
 
-    info(
+    logger.info(
         f"Done linking {len(classifications_to_link)} LLM classifications to CopyrightItems."
     )
 
 
 async def link_courses_to_copyright_items() -> None:
     items_w_prefetch = await CopyrightItem.all()
-    info(f"got {len(items_w_prefetch)} items from db")
+    logger.info(f"got {len(items_w_prefetch)} items from db")
 
     # for each of the items, extract the course code (using determine_course_code)
     # then match with existing course item in db
@@ -66,7 +67,7 @@ async def link_courses_to_copyright_items() -> None:
     for item in items_w_prefetch:
         course_codes = determine_course_code(item.course_code, item.course_name)
         if not course_codes or len(course_codes) == 0:
-            warn(
+            logger.warning(
                 f"Could not determine course code for item {item.material_id} with input course code {item.course_code} and course name {item.course_name}."
             )
         course_codes = list(course_codes)
@@ -83,10 +84,10 @@ async def link_courses_to_copyright_items() -> None:
                     await item.courses.add(course)
                     links_added += 1
             except Exception as e:
-                warn(
+                logger.warning(
                     f"Error while trying to get course {course_code} for item {item.material_id}: {e}"
                 )
-    cool(f"Added {links_added} links to {course_codes_found} found coursecodes.")
+    logger.success(f"Added {links_added} links to {course_codes_found} found coursecodes.")
 
 
 async def update_duplicate_status() -> None:
@@ -110,15 +111,15 @@ async def update_duplicate_status() -> None:
                 item.replacement_id = replaced_item.material_id
                 duplicates += 1
         await item.save(update_fields=["is_duplicate", "replacement_id"])
-    cool(f"Updated {duplicates} duplicate statuses.")
+    logger.success(f"Updated {duplicates} duplicate statuses.")
 
 
-async def update_copyright_relations() -> None:
+async def update_copyright_relations(settings: Settings) -> None:
     """
     Go through the copyright items in the db
     use the values of the item fields to find links to other tables.
     """
-    await init()
+    await init(settings=settings)
     await update_duplicate_status()
 
     await link_llm_classifications_to_copyright_items()
@@ -140,6 +141,7 @@ class DataSource(StrEnum):
 
 
 async def update_copyright_items(
+    settings: Settings,
     data: pl.DataFrame | list[dict],
     update_relations: bool = True,
     overwrite: bool = False,
@@ -312,7 +314,7 @@ async def update_copyright_items(
 
         return changes, db_item
 
-    await init()
+    await init(settings=settings)
     # Fields added by script.
     # dict with field name as key,
     # value are the ordered possible values:in case of conflict, take the earliest value
@@ -358,7 +360,7 @@ async def update_copyright_items(
     # loop over items
     # if item is not in db: add it
     # else compare values in specific fields to determine if we need to update
-    info(f"Received {len(data)} raw copyright items as input for an update.")
+    logger.info(f"Received {len(data)} raw copyright items as input for an update.")
 
     new_items = []
     if isinstance(data, pl.DataFrame):
@@ -379,11 +381,8 @@ async def update_copyright_items(
         if isinstance(data, list):
             update_items = data
 
-    info(f"# of new items: {len(new_items)}")
-    print("new_items:")
-    print(new_items)
-    print("update_items:")
-    print(update_items)
+    logger.info(f"# of new items: {len(new_items)}")
+    logger.info(f"# of items to update: {len(update_items)}")
     new_objects = []
     if new_items:
         new_objects = [await copyright_item_from_dict(item) for item in new_items]
@@ -391,7 +390,7 @@ async def update_copyright_items(
         try:
             await CopyrightItem.bulk_create(objects=new_objects)
         except Exception as e:
-            warn(
+            logger.warning(
                 f"error while trying to bulk save items. Error: {e}. Trying one-by-one."
             )
             for item in new_objects:
@@ -399,12 +398,12 @@ async def update_copyright_items(
                     await item.save()
                 except Exception as e:
                     logger.error(e)
-                    warn(
+                    logger.warning(
                         f"error {e} while trying to save item {item} with material_id {item.material_id}. Skipping for now."
                     )
-        cool(f"Created {len(new_objects)} new copyright items in db.")
+        logger.success(f"Created {len(new_objects)} new copyright items in db.")
 
-    info(f"Updating {len(update_items)} existing items.")
+    logger.info(f"Updating {len(update_items)} existing items.")
     changelist = []
     updates = {}
     for new_item in update_items:
@@ -450,8 +449,8 @@ async def update_copyright_items(
                 else:
                     print(f"No changes for item {new_item.get('material_id')}.")
             except Exception as e:
-                warn(f"Could not update item {new_item.get('material_id')}: {e}")
-                warn(traceback.format_exc())
+                logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
+                logger.warning(traceback.format_exc())
         else:
             try:
                 db_item = await CopyrightItem.get(
@@ -466,7 +465,7 @@ async def update_copyright_items(
                 )
 
             except Exception as e:
-                warn(f"Could not update item {new_item.get('material_id')}: {e}")
+                logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
             finally:
                 if len(list(changes.keys())) >= 3:
                     changes["modified_at"] = datetime.now()
@@ -485,8 +484,8 @@ async def update_copyright_items(
         all_keys.discard("update_time")
         changed_fields = list(all_keys)
         changed_fields.append("modified_at")
-        info(f"Updating {len(changelist)} items in db for fields {changed_fields}.")
-        info(f"Updating {len(updates)} changelog items in db.")
+        logger.info(f"Updating {len(changelist)} items in db for fields {changed_fields}.")
+        logger.info(f"Updating {len(updates)} changelog items in db.")
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)
         if user_info:
             [changes.update({"modified_by": cur_user}) for changes in updates.values()]
@@ -510,8 +509,8 @@ async def update_copyright_items(
             await item.changes.add(update)
 
     if (changelist or new_objects) and update_relations:
-        cool("Updating relations for all CopyrightItems.")
-        await update_copyright_relations()
+        logger.success("Updating relations for all CopyrightItems.")
+        await update_copyright_relations(settings=settings)
 
-    cool("Done updating CopyrightItems!")
+    logger.success("Done updating CopyrightItems!")
     await Tortoise.close_connections()

@@ -1,23 +1,24 @@
 import json
-import logging
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal, Union
+from typing import Any, Literal
 
 import yaml
-from loguru import Record, logger
+from loguru import logger
 from rich.traceback import install
 
-from easy_access.utils import Directory, File, warn
+from easy_access.utils import Directory, File
 
-"""
-This script reads settings from settings.yaml and parses all containg info into a Settings dataclass,
-with nested dataclasses for the different settings.
+"""Manages application settings, loaded from YAML configuration files.
 
-Used throughout the app to access settings (file/dirnames, university data, mappings, etc) in a structured way.
+This module defines dataclasses for structuring settings and provides
+functionality to load and parse them from 'settings.yaml' and 'sample.yaml'.
+It configures logging and establishes global setting constants for use
+throughout the application.
 """
 
 
@@ -25,7 +26,7 @@ def configure_logger() -> None:
     """Configures the Loguru logger for console and file output."""
     log_dir = Directory(path="logs")
 
-    def console_formatter(record: Record) -> str:
+    def console_formatter(record) -> str:
         """Formats log messages for console output.
 
         Args:
@@ -34,10 +35,7 @@ def configure_logger() -> None:
         Returns:
             The formatted log string.
         """
-        level: str = record["level"].name
-        # The original Literal type was very specific; str is generally sufficient here.
-        # Keeping the original format string.
-        return "<level>{level} |> </level>{message}\n"
+        return f"<level>{record['level'].name} | </level>{{message}}\n"
 
     logger.add(
         sink=sys.stderr,
@@ -87,7 +85,7 @@ class ColInfo:
 
     @property
     def has_dropdown(self) -> bool:
-        """bool: True if dropdown_options are specified, False otherwise."""
+        """True if dropdown_options are specified, False otherwise."""
         return len(self.dropdown_options) > 0
 
 
@@ -205,7 +203,7 @@ class DataSettings:
     data_entry_name: str = field(default="Data Entry", init=False)
     raw_data_col_order: list[str] = field(default_factory=list, init=False)
     final_data_col_order: list[str] = field(default_factory=list, init=False)
-    new_fields: dict[str, dict[str, Union[str, list[str]]]] = field(
+    new_fields: dict[str, dict[str, str | list[str]]] = field(
         default_factory=dict, init=False
     )
     url_truncation_marker: str = field(default="...", init=False)
@@ -227,7 +225,7 @@ class BackupSettings:
     """
 
     backup_all: bool = True
-    backup_dirs: set[Directory] = field(default_factory=set)
+    backup_dirs: list[Directory] = field(default_factory=list)
     max_backups: int = 3
     backup_overviews: bool = True
     backup_location: Directory | None = field(default=None)
@@ -291,9 +289,7 @@ class UniversitySettings:
     employee_catalogue: dict[str, str] = field(default_factory=dict, init=False)
     faculties: list[SettingsFaculty] = field(default_factory=list, init=False)
     programmes: set[SettingsProgramme] = field(default_factory=set, init=False)
-    manual_department_mappings: dict[str, str] = field(
-        default_factory=dict, init=False
-    )
+    manual_department_mappings: dict[str, str] = field(default_factory=dict, init=False)
 
     def make_programme_set(self) -> None:
         """Populates the `programmes` set from the list of faculties.
@@ -309,19 +305,21 @@ class UniversitySettings:
                 for programme in programmes:
                     # Use asdict for dataclasses if available and preferred,
                     # otherwise direct attribute access or __dict__ is common.
-                    prog_dict: dict[str, Any] = programme.__dict__.copy() # Make a copy
+                    prog_dict: dict[str, Any] = programme.__dict__.copy()  # Make a copy
                     prog_dict["faculty_name"] = faculty.name
                     prog_dict["faculty_abbreviation"] = faculty.abbreviation
                     self.programmes.add(SettingsProgramme(**prog_dict))
 
     @property
     def faculty_abbreviations(self) -> set[str]:
-        """set[str]: A set of all unique faculty abbreviations."""
-        return {faculty.abbreviation for faculty in self.faculties if faculty.abbreviation}
+        """A set of all unique faculty abbreviations."""
+        return {
+            faculty.abbreviation for faculty in self.faculties if faculty.abbreviation
+        }
 
     @property
     def department_mapping(self) -> dict[str, str]:
-        """dict[str, str]: A mapping of programme names/abbreviations to faculty abbreviations.
+        """A mapping of programme names/abbreviations to faculty abbreviations.
 
         Combines programmatically generated mappings with manual overrides from settings.
         Manual overrides take precedence.
@@ -333,7 +331,8 @@ class UniversitySettings:
             f"{programme.abbreviation + ': ' if programme.abbreviation else ''}{programme.name}": programme.faculty_abbreviation
             if programme.faculty_abbreviation
             else ""
-            for programme in self.programmes if programme.name # Ensure programme name exists
+            for programme in self.programmes
+            if programme.name  # Ensure programme name exists
         }
 
         merged_data = generated_data.copy()
@@ -342,21 +341,26 @@ class UniversitySettings:
 
     @property
     def course_mapping(self) -> dict[str, dict[str, str]]:
-        """dict[str, dict[str, str]]: A mapping of faculty abbreviations to their course cluster mappings.
+        """A mapping of faculty abbreviations to their course cluster mappings.
 
         Each faculty maps to a dictionary where programme names/abbreviations map to their cluster.
         """
-        if not self.programmes: # Ensure programmes are populated
+        if not self.programmes:  # Ensure programmes are populated
             self.make_programme_set()
 
         course_mapping_dict: dict[str, dict[str, str]] = {}
         for faculty in self.faculties:
-            if not faculty.abbreviation: # Skip faculty if no abbreviation
+            if not faculty.abbreviation:  # Skip faculty if no abbreviation
+                logger.warning(
+                    f"Faculty '{faculty.name}' has no abbreviation. Skipping!"
+                )
                 continue
             faculty_key: str = faculty.abbreviation
             data: dict[str, str] = {}
             for programme in faculty.programmes:
-                if programme.cluster and programme.name: # Ensure cluster and name exist
+                if (
+                    programme.cluster and programme.name
+                ):  # Ensure cluster and name exist
                     programme_key = f"{programme.abbreviation + ': ' if programme.abbreviation else ''}{programme.name}"
                     data[programme_key] = programme.cluster
             if data:
@@ -383,6 +387,7 @@ class Settings:
         db_path: Path to the SQLite database file.
         KEY_TO_PARSER_MAPPING: Internal mapping of setting keys to parser methods.
     """
+
     input_file_path: str = "settings.yaml"
     settings_file: File = field(init=False)
     raw_settings: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
@@ -397,15 +402,18 @@ class Settings:
     classification_options: list[str] = field(default_factory=list)
     dashboard_reload: bool = field(default=True, init=False)
     db_path: Path = field(default=Path("db.sqlite3"), init=False)
-    KEY_TO_PARSER_MAPPING: dict[str, Callable[[Any], None]] = field(init=False, repr=False)
-
+    KEY_TO_PARSER_MAPPING: dict[str, Callable[[Any], None]] = field(
+        init=False, repr=False
+    )
 
     def _parse_dict_safely(self, data: Any, key: str) -> dict[str, str]:
         """Safely parses a dictionary from settings, ensuring string keys and values."""
         raw_dict = data.get(key, {})
         if isinstance(raw_dict, dict):
             return {str(k): str(v) for k, v in raw_dict.items()}
-        logger.warning(f"Setting '{key}' is not a valid dictionary. Using empty dictionary.")
+        logger.warning(
+            f"Setting '{key}' is not a valid dictionary. Using empty dictionary."
+        )
         return {}
 
     def parse_university(self, value: dict[str, Any]) -> None:
@@ -417,8 +425,12 @@ class Settings:
         self.university_settings.name = str(value.get("name", ""))
         self.university_settings.abbreviation = str(value.get("abbreviation", ""))
         self.university_settings.lms = self._parse_dict_safely(value, "lms")
-        self.university_settings.course_catalogue = self._parse_dict_safely(value, "course_catalogue")
-        self.university_settings.employee_catalogue = self._parse_dict_safely(value, "employee_catalogue")
+        self.university_settings.course_catalogue = self._parse_dict_safely(
+            value, "course_catalogue"
+        )
+        self.university_settings.employee_catalogue = self._parse_dict_safely(
+            value, "employee_catalogue"
+        )
 
         manual_mappings = value.get("manual_department_mappings", {})
         if isinstance(manual_mappings, dict):
@@ -430,7 +442,6 @@ class Settings:
                 "'manual_department_mappings' in settings.yaml is not a valid dictionary. Skipping."
             )
             self.university_settings.manual_department_mappings = {}
-
 
         faculties_data = value.get("faculties", [])
         parsed_faculties: list[SettingsFaculty] = []
@@ -445,7 +456,9 @@ class Settings:
                         for programme_dict_any in programmes_data:
                             if isinstance(programme_dict_any, dict):
                                 # Ensure all keys are strings for SettingsProgramme
-                                programme_dict: dict[str, Any] = {str(k): v for k,v in programme_dict_any.items()}
+                                programme_dict: dict[str, Any] = {
+                                    str(k): v for k, v in programme_dict_any.items()
+                                }
                                 try:
                                     programmes.append(
                                         SettingsProgramme(**programme_dict)
@@ -510,7 +523,9 @@ class Settings:
                         parsed_cols: list[ColInfo] = []
                         for col_info_dict_any in value_data:
                             if isinstance(col_info_dict_any, dict):
-                                col_info_dict: dict[str, Any] = {str(k): v for k,v in col_info_dict_any.items()}
+                                col_info_dict: dict[str, Any] = {
+                                    str(k): v for k, v in col_info_dict_any.items()
+                                }
                                 try:
                                     parsed_cols.append(ColInfo(**col_info_dict))
                                 except TypeError as e:
@@ -527,9 +542,8 @@ class Settings:
                             f"Expected list for DATA_ENTRY_COLS, got {type(value_data)}"
                         )
                 case SheetSetting.COMPLETE_DATA_COLS:
-                    warn(
-                        text="Parsing for 'complete_data_cols' setting not fully implemented yet."
-                    )
+                    # Parsing for 'complete_data_cols' can be implemented here if needed.
+                    pass
                 case SheetSetting.COMPLETE_DATA_NAME:
                     self.data_settings.complete_data_name = str(value_data)
                 case SheetSetting.DATA_ENTRY_NAME:
@@ -553,17 +567,29 @@ class Settings:
                             f"Expected list for FINAL_DATA_COL_ORDER, got {type(value_data)}"
                         )
                 case SheetSetting.NEW_FIELDS:
-                    parsed_new_fields: dict[str, dict[str, Union[str, list[str]]]] = {}
+                    parsed_new_fields: dict[str, dict[str, str | list[str]]] = {}
                     if isinstance(value_data, dict):
                         for colname, settings_val_any in value_data.items():
                             if isinstance(settings_val_any, dict):
-                                settings_val: dict[str, Any] = {str(k):v for k,v in settings_val_any.items()}
-                                new_field_entry: dict[str, Union[str, list[str]]] = {}
-                                if "values" in settings_val and isinstance(settings_val["values"], list):
-                                    new_field_entry["values"] = [str(v) for v in settings_val["values"]]
-                                if "default" in settings_val and isinstance(settings_val["default"], str):
-                                    new_field_entry["default"] = str(settings_val["default"])
-                                if new_field_entry: # Only add if it has valid 'values' or 'default'
+                                settings_val: dict[str, Any] = {
+                                    str(k): v for k, v in settings_val_any.items()
+                                }
+                                new_field_entry: dict[str, str | list[str]] = {}
+                                if "values" in settings_val and isinstance(
+                                    settings_val["values"], list
+                                ):
+                                    new_field_entry["values"] = [
+                                        str(v) for v in settings_val["values"]
+                                    ]
+                                if "default" in settings_val and isinstance(
+                                    settings_val["default"], str
+                                ):
+                                    new_field_entry["default"] = str(
+                                        settings_val["default"]
+                                    )
+                                if (
+                                    new_field_entry
+                                ):  # Only add if it has valid 'values' or 'default'
                                     parsed_new_fields[str(colname)] = new_field_entry
                             else:
                                 logger.warning(
@@ -575,8 +601,8 @@ class Settings:
                         )
                     self.data_settings.new_fields = parsed_new_fields
                 case _:
-                    warn(
-                        text=f"Unrecognized data setting {key_str} (with value: {value_data}). Skipping."
+                    logger.warning(
+                        f"Unrecognized data setting {key_str} (with value: {value_data}). Skipping."
                     )
 
     def parse_backup(self, backup_settings_yaml: dict[str, Any]) -> None:
@@ -604,21 +630,27 @@ class Settings:
                                 try:
                                     dir_setting_val = DirSetting(value=v_item)
                                     if dir_setting_val in self.dirs:
-                                        backup_dirs_list.append(self.dirs[dir_setting_val])
+                                        backup_dirs_list.append(
+                                            self.dirs[dir_setting_val]
+                                        )
                                 except ValueError:
-                                    logger.warning(f"Invalid DirSetting value '{v_item}' in backup_dirs. Skipping.")
-                    self.backup_settings.backup_dirs = set(backup_dirs_list) # filter(None,...) removed as list contains Directory objects
+                                    logger.warning(
+                                        f"Invalid DirSetting value '{v_item}' in backup_dirs. Skipping."
+                                    )
+                    self.backup_settings.backup_dirs = backup_dirs_list
 
                 case BackupSetting.MAX_BACKUPS:
                     try:
                         self.backup_settings.max_backups = int(value_data)
                     except (ValueError, TypeError):
-                        logger.warning(f"Invalid value for MAX_BACKUPS: {value_data}. Using default {self.backup_settings.max_backups}")
+                        logger.warning(
+                            f"Invalid value for MAX_BACKUPS: {value_data}. Using default {self.backup_settings.max_backups}"
+                        )
                 case BackupSetting.BACKUP_OVERVIEWS:
                     self.backup_settings.backup_overviews = bool(value_data)
                 case _:
-                    warn(
-                        text=f"Unrecognized backup setting {key_str} (with value: {value_data}). Skipping."
+                    logger.warning(
+                        f"Unrecognized backup setting {key_str} (with value: {value_data}). Skipping."
                     )
         self.backup_settings.backup_location = self.dirs.get(DirSetting.FULL_BACKUPS)
 
@@ -628,7 +660,9 @@ class Settings:
         Args:
             raw_dir_strs: Dictionary mapping directory keys to path strings.
         """
-        tmp_raw_copyright_data_full_path: str | None = None # Store path string temporarily
+        tmp_raw_copyright_data_full_path: str | None = (
+            None  # Store path string temporarily
+        )
 
         for key_str, path_str in raw_dir_strs.items():
             try:
@@ -644,13 +678,16 @@ class Settings:
                     tmp_raw_copyright_data_full_path = path_str
                 else:
                     self.dirs[key_enum_val] = Directory(path=path_str)
-            except Exception as e: # Catch more specific exceptions if possible
+            except Exception as e:
                 logger.error(
                     f"Error while creating directory '{key_enum_val.value}' with path '{path_str}': {e}"
                 )
 
         # Handle RAW_COPYRIGHT_DATA_FULL after RAW_COPYRIGHT_DATA is potentially set
-        if tmp_raw_copyright_data_full_path and DirSetting.RAW_COPYRIGHT_DATA in self.dirs:
+        if (
+            tmp_raw_copyright_data_full_path
+            and DirSetting.RAW_COPYRIGHT_DATA in self.dirs
+        ):
             base_path = self.dirs[DirSetting.RAW_COPYRIGHT_DATA].full
             self.dirs[DirSetting.RAW_COPYRIGHT_DATA_FULL] = Directory(
                 path=base_path / tmp_raw_copyright_data_full_path
@@ -658,14 +695,17 @@ class Settings:
         elif tmp_raw_copyright_data_full_path:
             # If RAW_COPYRIGHT_DATA was not in settings, RAW_COPYRIGHT_DATA_FULL might be an absolute path
             # or relative to CWD. For now, assume it's meant to be used as is if base is missing.
-            logger.warning(f"'{DirSetting.RAW_COPYRIGHT_DATA.value}' not found, attempting to use '{tmp_raw_copyright_data_full_path}' directly for '{DirSetting.RAW_COPYRIGHT_DATA_FULL.value}'.")
+            logger.warning(
+                f"'{DirSetting.RAW_COPYRIGHT_DATA.value}' not found, attempting to use '{tmp_raw_copyright_data_full_path}' directly for '{DirSetting.RAW_COPYRIGHT_DATA_FULL.value}'."
+            )
             try:
-                self.dirs[DirSetting.RAW_COPYRIGHT_DATA_FULL] = Directory(path=tmp_raw_copyright_data_full_path)
+                self.dirs[DirSetting.RAW_COPYRIGHT_DATA_FULL] = Directory(
+                    path=tmp_raw_copyright_data_full_path
+                )
             except Exception as e:
-                 logger.error(
+                logger.error(
                     f"Error while creating directory '{DirSetting.RAW_COPYRIGHT_DATA_FULL.value}' with path '{tmp_raw_copyright_data_full_path}': {e}"
                 )
-
 
     def parse_files(self, raw_file_strs: dict[str, Any]) -> None:
         """Parses the 'files' section of settings.yaml.
@@ -686,8 +726,9 @@ class Settings:
             cwd_dir = Directory(path=os.getcwd())
             self.dirs[DirSetting.SCRIPT_DATA] = cwd_dir
             script_data_dir_path = cwd_dir.full
-            logger.info(f"'folder' not specified in 'files' settings, using CWD: {script_data_dir_path}")
-
+            logger.info(
+                f"'folder' not specified in 'files' settings, using CWD: {script_data_dir_path}"
+            )
 
         files_section = raw_file_strs.get("files")
         if isinstance(files_section, dict):
@@ -700,10 +741,12 @@ class Settings:
                 file_name_str: str = file_name_str_any
                 try:
                     file_key_enum = FileSetting(value=file_key_str)
-                    self.files[file_key_enum] = File(path=script_data_dir_path / file_name_str)
+                    self.files[file_key_enum] = File(
+                        path=script_data_dir_path / file_name_str
+                    )
                 except ValueError:
                     logger.error(f"Unrecognized file type '{file_key_str}'. Skipping.")
-                except Exception as e: # Catch more specific exceptions
+                except Exception as e:
                     logger.error(f"Error while adding file '{file_key_str}': {e}")
 
         subfolders_section = raw_file_strs.get("subfolders")
@@ -724,8 +767,10 @@ class Settings:
                     logger.error(
                         f"Unrecognized subfolder type '{subfolder_key_str}'. Skipping."
                     )
-                except Exception as e: # Catch more specific exceptions
-                    logger.error(f"Error while adding subfolder '{subfolder_name_str}': {e}")
+                except Exception as e:
+                    logger.error(
+                        f"Error while adding subfolder '{subfolder_name_str}': {e}"
+                    )
         elif isinstance(subfolders_section, list):
             for subfolder_name_any in subfolders_section:
                 if not isinstance(subfolder_name_any, str):
@@ -743,8 +788,10 @@ class Settings:
                     logger.error(
                         f"Unrecognized subfolder type from list: '{subfolder_name_str}'. Skipping."
                     )
-                except Exception as e: # Catch more specific exceptions
-                    logger.error(f"Error while adding subfolder '{subfolder_name_str}' from list: {e}")
+                except Exception as e:
+                    logger.error(
+                        f"Error while adding subfolder '{subfolder_name_str}' from list: {e}"
+                    )
 
     def parse_unsorted(self, rest_values: dict[str, Any]) -> None:
         """Parses settings from the 'unsorted' key in settings.yaml.
@@ -764,9 +811,15 @@ class Settings:
                         f"Could not parse 'fine_amount': {value} as float. Using default: {self.fine_amount}"
                     )
             elif key == "classification_options":
-                if not self.classification_options: # Only set if not already set by data_settings standardization
+                if (
+                    not self.classification_options
+                ):  # Only set if not already set by data_settings standardization
                     if isinstance(value, list):
-                        self.classification_options = [str(opt) for opt in value if isinstance(opt, (str, int, float))]
+                        self.classification_options = [
+                            str(opt)
+                            for opt in value
+                            if isinstance(opt, str | int | float)
+                        ]
                     else:
                         logger.warning(
                             f"'classification_options' in unsorted settings is not a list: {value}"
@@ -779,10 +832,10 @@ class Settings:
                         f"Could not parse 'dashboard_reload': {value} as bool. Using default: {self.dashboard_reload}"
                     )
             else:
-                # For other keys, set them as attributes directly
-                # This could be risky if keys clash with existing attributes or methods
                 if hasattr(self, key):
-                    logger.warning(f"Unsorted key '{key}' clashes with an existing Settings attribute. Overwriting.")
+                    logger.warning(
+                        f"Unsorted key '{key}' clashes with an existing Settings attribute. Overwriting."
+                    )
                 setattr(self, key, value)
 
     def parse_database_settings(self, db_settings_value: Any) -> None:
@@ -823,22 +876,25 @@ class Settings:
             options_list = [
                 opt.strip()
                 for opt in manual_classification_col.dropdown_options.split(",")
-                if opt.strip() # Ensure non-empty options
+                if opt.strip()  # Ensure non-empty options
             ]
-            if self.classification_options and set(options_list) != set(self.classification_options):
-                logger.info(
-                    "Overriding 'classification_options' with those from "
-                    "'data_settings.data_entry_cols.manual_classification.dropdown_options'."
-                )
-            self.classification_options = options_list
-        elif not self.classification_options: # Only warn if no options were set from 'unsorted' either
+            if self.classification_options and set(options_list) != set(
+                self.classification_options
+            ):
+                #logger.debug(
+                #    "Overriding 'classification_options' with those from "
+                #    "'data_settings.data_entry_cols.manual_classification.dropdown_options'."
+                #    f"Selected options: {options_list}"
+                #)
+                self.classification_options = options_list
+        elif (
+            not self.classification_options
+        ):  # Only warn if no options were set from 'unsorted' either
             logger.warning(
                 "Could not find 'manual_classification' column with dropdown options in data_settings, "
                 "and no 'classification_options' found in 'unsorted' settings. "
                 "Classification options may be incomplete."
             )
-        # If manual_classification_col is not found or has no options,
-        # self.classification_options (potentially from 'unsorted') remains as is.
 
     def __post_init__(self) -> None:
         """Initializes settings after dataclass creation.
@@ -846,10 +902,8 @@ class Settings:
         Loads settings from the YAML file and parses them.
         """
         self.settings_file = File(path=self.input_file_path)
-        self.load() # Populates self.raw_settings
+        self.load()  # Populates self.raw_settings
 
-        # Initialize KEY_TO_PARSER_MAPPING here as an instance attribute
-        # Type hint for the mapping:
         self.KEY_TO_PARSER_MAPPING = {
             "university": self.parse_university,
             "data_settings": self.parse_data_settings,
@@ -860,12 +914,11 @@ class Settings:
             "database_path": self.parse_database_settings,
         }
 
-        if self.raw_settings: # Check if loading was successful
-            self.parse_settings() # Parses based on KEY_TO_PARSER_MAPPING
-            self._standardize_classification_options() # Standardize after all parsing
+        if self.raw_settings:  # Check if loading was successful
+            self.parse_settings()  # Parses based on KEY_TO_PARSER_MAPPING
+            self._standardize_classification_options()  # Standardize after all parsing
         else:
             logger.error("Raw settings are empty. Cannot parse settings.")
-
 
     def load(self) -> None:
         """Loads settings from the YAML file specified by `self.settings_file`.
@@ -879,7 +932,9 @@ class Settings:
                 if isinstance(loaded_yaml, dict):
                     self.raw_settings = loaded_yaml
                 else:
-                    logger.error(f"Settings file {self.settings_file} did not load as a dictionary. Loaded: {type(loaded_yaml)}")
+                    logger.error(
+                        f"Settings file {self.settings_file} did not load as a dictionary. Loaded: {type(loaded_yaml)}"
+                    )
                     self.raw_settings = {}
         except FileNotFoundError:
             logger.error(f"Settings file not found: {self.settings_file.path}")
@@ -888,7 +943,9 @@ class Settings:
             logger.error(f"Error parsing YAML from {self.settings_file.path}: {e}")
             self.raw_settings = {}
         except Exception as e:
-            logger.error(f"Unexpected error loading settings from {self.settings_file.path}: {e}")
+            logger.error(
+                f"Unexpected error loading settings from {self.settings_file.path}: {e}"
+            )
             self.raw_settings = {}
 
     def parse_settings(self) -> None:
@@ -912,15 +969,13 @@ class Settings:
                 try:
                     parser(value)
                 except Exception as e:
-                    logger.error(f"Error parsing setting key '{key}' with value '{value}': {e}")
+                    logger.error(
+                        f"Error parsing setting key '{key}' with value '{value}': {e}"
+                    )
             else:
                 logger.warning(
                     f"Unrecognized setting key: '{key}'. It will be ignored unless handled by 'unsorted'."
                 )
-                # If not in mapping and not 'unsorted', it's effectively ignored
-                # unless 'unsorted' key itself is present and this key is under it.
-                # The current logic sets unknown top-level keys as attributes if 'unsorted' parser is not hit.
-                # This behavior is now more controlled: only mapped keys or those under 'unsorted' are processed.
 
         # Parse 'backup' settings last, ensuring dependencies like 'directories' are parsed
         if "backup" in self.raw_settings:
@@ -928,8 +983,8 @@ class Settings:
                 self.parse_backup(backup_settings_yaml=self.raw_settings["backup"])
             except Exception as e:
                 logger.error(f"Error parsing 'backup' settings: {e}")
+                logger.debug(self.raw_settings["backup"])
 
-# Comment block removed by Ruff was here.
 
 @dataclass
 class SampleSettings:
@@ -943,13 +998,15 @@ class SampleSettings:
         output: Parsed settings for output data generation.
         KEY_TO_PARSER_MAPPING: Internal mapping of setting keys to parser methods.
     """
+
     input_file_path: str = "sample.yaml"
     settings_file: File = field(init=False)
-    raw_settings: dict[str, Any] | None = None # Can be None if loading fails
+    raw_settings: dict[str, Any] | None = None  # Can be None if loading fails
     input: dict[str, Any] = field(default_factory=dict, init=False)
     output: dict[str, Any] = field(default_factory=dict, init=False)
-    KEY_TO_PARSER_MAPPING: dict[str, Callable[[dict[str, Any]], None]] = field(init=False, repr=False)
-
+    KEY_TO_PARSER_MAPPING: dict[str, Callable[[dict[str, Any]], None]] = field(
+        init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         """Initializes sample settings after dataclass creation."""
@@ -964,8 +1021,9 @@ class SampleSettings:
         if self.raw_settings:
             self.parse_settings()
         else:
-            logger.warning(f"Sample settings raw_settings is None for {self.input_file_path}. Skipping parsing.")
-
+            logger.warning(
+                f"Sample settings raw_settings is None for {self.input_file_path}. Skipping parsing."
+            )
 
     def load(self) -> None:
         """Loads sample settings from the YAML file.
@@ -978,22 +1036,30 @@ class SampleSettings:
                 if isinstance(loaded_yaml, dict):
                     self.raw_settings = loaded_yaml
                 else:
-                    logger.error(f"Sample settings file {self.settings_file.path} did not load as a dictionary.")
-                    self.raw_settings = None # Explicitly None on failure
+                    logger.error(
+                        f"Sample settings file {self.settings_file.path} did not load as a dictionary."
+                    )
+                    self.raw_settings = None  # Explicitly None on failure
         except FileNotFoundError:
             logger.error(f"Sample settings file not found: {self.settings_file.path}")
             self.raw_settings = None
         except yaml.YAMLError as e:
-            logger.error(f"Error parsing YAML from sample settings file {self.settings_file.path}: {e}")
+            logger.error(
+                f"Error parsing YAML from sample settings file {self.settings_file.path}: {e}"
+            )
             self.raw_settings = None
         except Exception as e:
-            logger.error(f"Unexpected error loading sample settings from {self.settings_file.path}: {e}")
+            logger.error(
+                f"Unexpected error loading sample settings from {self.settings_file.path}: {e}"
+            )
             self.raw_settings = None
 
     def parse_settings(self) -> None:
         """Parses all sample settings from `self.raw_settings`."""
         if not self.raw_settings:
-            logger.warning("Cannot parse sample settings: raw_settings is empty or None.")
+            logger.warning(
+                "Cannot parse sample settings: raw_settings is empty or None."
+            )
             return
 
         for key, value in self.raw_settings.items():
@@ -1001,20 +1067,25 @@ class SampleSettings:
             if parser:
                 if isinstance(value, dict):
                     try:
-                        parser(value) # Call the bound method with the value dict
+                        parser(value)  # Call the bound method with the value dict
                     except Exception as e:
                         logger.error(f"Error parsing sample setting key '{key}': {e}")
                 else:
-                    logger.warning(f"Expected dictionary for sample setting key '{key}', got {type(value)}. Skipping.")
+                    logger.warning(
+                        f"Expected dictionary for sample setting key '{key}', got {type(value)}. Skipping."
+                    )
             else:
                 logger.warning(
                     f"[SampleSettings] Unrecognized key: '{key}'. Setting as attribute (if new)."
                 )
-                if not hasattr(self, key): # Avoid overwriting existing attributes like 'input', 'output'
+                if not hasattr(
+                    self, key
+                ):  # Avoid overwriting existing attributes like 'input', 'output'
                     setattr(self, key, value)
                 else:
-                    logger.warning(f"[SampleSettings] Key '{key}' conflicts with existing attribute. Not set from top level.")
-
+                    logger.warning(
+                        f"[SampleSettings] Key '{key}' conflicts with existing attribute. Not set from top level."
+                    )
 
     def parse_input(self, data_dict: dict[str, Any]) -> None:
         """Parses the 'input' section of sample.yaml.
@@ -1022,22 +1093,25 @@ class SampleSettings:
         Args:
             data_dict: The dictionary representing the 'input' settings.
         """
-        # Initialize with defaults or clear previous state
-        self.input = {"file": "", "filters": []}
-        warn('Parsing of "input" in sample settings is basic and may need enhancement.')
+        self.input = {"file": "", "filters": []}  # Initialize with defaults
 
         file_val = data_dict.get("file")
         if isinstance(file_val, str):
             self.input["file"] = file_val
         elif file_val is not None:
-            logger.warning(f"Sample settings 'input.file' expected a string, got {type(file_val)}.")
+            logger.warning(
+                f"Sample settings 'input.file' expected a string, got {type(file_val)}."
+            )
 
         filters_val = data_dict.get("filters")
         if isinstance(filters_val, list):
-            self.input["filters"] = filters_val # Assuming filters are correctly structured
+            self.input["filters"] = (
+                filters_val  # Assuming filters are correctly structured
+            )
         elif filters_val is not None:
-            logger.warning(f"Sample settings 'input.filters' expected a list, got {type(filters_val)}.")
-
+            logger.warning(
+                f"Sample settings 'input.filters' expected a list, got {type(filters_val)}."
+            )
 
     def parse_output(self, data_dict: dict[str, Any]) -> None:
         """Parses the 'output' section of sample.yaml.
@@ -1045,7 +1119,7 @@ class SampleSettings:
         Args:
             data_dict: The dictionary representing the 'output' settings.
         """
-        self.output = { # Default structure
+        self.output = {  # Default structure
             "file": "",
             "filters": [],
             "selection": [],
@@ -1053,7 +1127,6 @@ class SampleSettings:
             "max_rows": 0,
             "remove_duplicates": True,
         }
-        warn('Parsing of "output" in sample settings is basic and may need enhancement.')
 
         for key, default_value in self.output.items():
             if key in data_dict:
@@ -1061,14 +1134,14 @@ class SampleSettings:
                 expected_type = type(default_value)
                 if isinstance(val, expected_type):
                     self.output[key] = val
-                # Handle specific case for max_rows (int) and remove_duplicates (bool) if types differ
-                elif key == "max_rows" and isinstance(val, (int, float)): # Allow float then cast
+                elif key == "max_rows" and isinstance(val, int | float):
                     self.output[key] = int(val)
-                elif key == "remove_duplicates" and isinstance(val, (bool, int)): # Allow int 0/1 for bool
+                elif key == "remove_duplicates" and isinstance(val, bool | int):
                     self.output[key] = bool(val)
                 else:
-                    logger.warning(f"Sample settings 'output.{key}' expected type {expected_type}, got {type(val)}. Using default.")
-            # If key not in data_dict, default_value from initialization is used.
+                    logger.warning(
+                        f"Sample settings 'output.{key}' expected type {expected_type}, got {type(val)}. Using default."
+                    )
 
 
 def load_osiris_data() -> dict[str, Any] | None:
@@ -1089,15 +1162,14 @@ def load_osiris_data() -> dict[str, Any] | None:
     osiris_file_path = osiris_file_path_obj.path
 
     try:
-        with open(file=osiris_file_path, mode="r", encoding="utf-8") as f:
-            data: Any = json.load(f) # json.load returns Any
+        with open(file=osiris_file_path, encoding="utf-8") as f:
+            data: Any = json.load(f)
         if not isinstance(data, dict):
             logger.error(
                 f"Osiris data file ({osiris_file_path}) does not contain a valid JSON object (expected dict). "
                 "OSIRIS data enrichment will not be possible."
             )
             return None
-        # Assuming keys are strings, but values can be anything.
         return {str(k): v for k, v in data.items()}
     except FileNotFoundError:
         logger.error(
@@ -1112,29 +1184,25 @@ def load_osiris_data() -> dict[str, Any] | None:
             "OSIRIS data enrichment will not be possible."
         )
         return None
-    except Exception as e: # Catch any other unexpected errors
+    except Exception as e:
         logger.error(
             f"An unexpected error occurred while loading Osiris data from {osiris_file_path}: {e}. "
             "OSIRIS data enrichment will not be possible."
         )
         return None
 
-
-# Global constants for application-wide use
-# These are initialized after SETTINGS and SAMPLESETTINGS
+# Global settings
 
 # Set up logging configuration
 # install rich traceback as default
 install(show_locals=True)
 
-# suppress some annoying warnings when reading excel files
-logging.getLogger(name="fastexcel.types.dtype").setLevel(level=logging.ERROR)
-
 # initialize settings from (default: read from 'settings.yaml')
-SETTINGS = Settings()
-SAMPLESETTINGS = SampleSettings()
 
-# create global variables from certain settings
+SETTINGS: Settings = Settings()
+#SAMPLESETTINGS: SampleSettings = SampleSettings()
+
+# create global variables from certain settings for easier access [NOTE: remove these and replace with SETTINGS.<attr> in the future for consistency/robustness]
 DEPARTMENT_MAPPING: dict[str, str] = SETTINGS.university_settings.department_mapping
 COURSE_MAPPING: dict[str, dict[str, str]] = SETTINGS.university_settings.course_mapping
 FINE_AMOUNT: float = SETTINGS.fine_amount

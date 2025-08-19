@@ -11,7 +11,6 @@
 #     "polars",
 #     "rich",
 #     "typer",
-#     "fastexcel",
 #     "xlsxwriter",
 #     "pyyaml",
 #     "colorama",

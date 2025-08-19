@@ -7,51 +7,37 @@ from datetime import datetime
 from pathlib import Path
 
 import polars as pl
-import polars as pl
-from sqlalchemy import Engine, create_engine # Added Engine
-from tortoise import Tortoise
+from loguru import logger
+from sqlalchemy import Engine, create_engine
+from tortoise import Model, Tortoise
 
 from easy_access.db.models import CopyrightItem, Faculty
-from easy_access.settings import Settings # Added Settings import
-from easy_access.utils import File, warn
-
-# db_path: Path = Path("db.sqlite3") # Removed global db_path
+from easy_access.settings import Settings
 
 
-def init_engine(settings: Settings) -> Engine: # Added settings, changed return type to Engine
-    # if not path: # Removed path argument
-    #     path = "db.sqlite3"
-    db_file_path = settings.db_settings.db_path # Use settings for path
+def init_engine(settings: Settings) -> Engine:
+
+    db_file_path = settings.db_path
     return create_engine(f"sqlite:///{str(db_file_path)}")
 
 
-# def set_db_path(path: str | Path | File) -> None: # Removed set_db_path function
-#     global db_path
-#     if isinstance(path, File):
-#         path = path.path
-#     if isinstance(path, str):
-#         path = Path(path)
-#     if not isinstance(path, Path):
-#         raise ValueError("path must be a Path, str, or File object")
-#     db_path = path
-#     init_engine(str(db_path))
 
 
-async def init(settings: Settings) -> bool | None: # Added settings, changed return type
-    db_file_path = settings.db_settings.db_path # Use settings for path
+async def init(settings: Settings) -> bool | None:
+    db_file_path = settings.db_path
     create_tables = False
-    if not db_file_path.exists(): # Use db_file_path
+    if not db_file_path.exists():
         create_tables = True
 
     # check if models.py file has been modified since last db modification
     models_py_path = Path("easy_access/db/models.py")
-    if models_py_path.exists() and db_file_path.exists(): # Use db_file_path
+    if models_py_path.exists() and db_file_path.exists():
         models_py_mod_time = models_py_path.stat().st_mtime
-        db_mod_time = db_file_path.stat().st_mtime # Use db_file_path
+        db_mod_time = db_file_path.stat().st_mtime
         if models_py_mod_time > db_mod_time:
             create_tables = True
     await Tortoise.init(
-        db_url=f"sqlite://{str(db_file_path)}", modules={"models": ["easy_access.db.models"]} # Use db_file_path
+        db_url=f"sqlite://{str(db_file_path)}", modules={"models": ["easy_access.db.models"]}
     )
     await Tortoise.generate_schemas(safe=True)
     if create_tables:
@@ -98,7 +84,7 @@ def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
+async def copyright_item_from_dict(item: dict[str, str | Model | int | datetime | None]) -> CopyrightItem:
     """
     Turns a dict with data for a CopyrightItem into a CopyrightItem object
     """
@@ -148,7 +134,7 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
                 abbr = "UNM"
         faculty = await Faculty.get(abbreviation=abbr)
     except Exception as e:
-        warn(f"Error getting faculty with {item.get('faculty')}: {e}")
+        logger.warning(f"Error getting faculty with {item.get('faculty')}: {e}")
     try:
         if not faculty:
             faculty = await Faculty.get(abbreviation="UNM")
@@ -204,7 +190,7 @@ async def copyright_item_from_dict(item: dict[str, str]) -> CopyrightItem:
         return final_item
 
     except Exception as e:
-        warn(
+        logger.warning(
             f"Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}"
         )
         print(traceback.format_exc())

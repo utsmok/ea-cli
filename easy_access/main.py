@@ -8,11 +8,13 @@ coordinating the various data processing workflows, including:
 - Generating weekly faculty sheets and overview reports.
 - Enriching data with external sources like Osiris.
 """
+
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
+from loguru import logger
 
 from easy_access.db.base import init
 from easy_access.db.ingest import load_base_data, load_raw_copyright_data
@@ -31,7 +33,7 @@ from easy_access.sheets.sheet import (
     read_copyright_export,
     store_complete_data,
 )
-from easy_access.utils import Directory, File, cool, info, print, warn
+from easy_access.utils import Directory, File, print
 
 # Existing TODO block remains as it's a design/task list, not a module docstring.
 """
@@ -210,7 +212,7 @@ class EasyAccessTool:
             self.ea_settings.only_retrieve_missing_osiris_data
         )
         self.style_iter = 2
-        self.latest_file_date = "" # Initialize to empty string
+        self.latest_file_date = ""  # Initialize to empty string
 
         self.set_functions(self.ea_settings.export)
 
@@ -242,7 +244,7 @@ class EasyAccessTool:
         Functions are run in the order they appear in `self.functions`.
         """
         for func in self.functions:
-            info(f"running {func.__name__}")
+            logger.info(f"running {func.__name__}")
             func()
 
     def process_raw_copyright_data(self) -> None:
@@ -256,17 +258,12 @@ class EasyAccessTool:
         """
         input_file_override: File | None = None
         if self.ea_settings.other_sheet is not None:
+            # self.ea_settings.other_sheet is guaranteed to be a Path here
             try:
-                # Ensure it's a File object if it's a Path
-                if isinstance(self.ea_settings.other_sheet, Path):
-                    input_file_override = File(self.ea_settings.other_sheet)
-                elif isinstance(
-                    self.ea_settings.other_sheet, File
-                ):  # Should not happen based on EasyAccessSettings.other_sheet type (Path | None)
-                    input_file_override = self.ea_settings.other_sheet
+                input_file_override = File(self.ea_settings.other_sheet)
             except Exception as e:
-                warn(
-                    f"Could not process other_sheet {self.ea_settings.other_sheet}: {e}"
+                logger.warning(
+                    f"Failed to create File object from other_sheet path '{self.ea_settings.other_sheet}': {e}"
                 )
                 # Proceed with default behavior (None for input_file_override)
 
@@ -274,11 +271,13 @@ class EasyAccessTool:
             settings=self.settings, file=input_file_override
         )
         if self.copyright_data.is_empty():
-            warn(
+            logger.warning(
                 "No new Copyright data found to process! No new items will be added. Checking if there are other changes..."
             )
         else:
-            fresh_db: bool | None = asyncio.get_event_loop().run_until_complete(init(settings=self.settings))
+            fresh_db: bool | None = asyncio.get_event_loop().run_until_complete(
+                init(settings=self.settings)
+            )
             if fresh_db:
                 asyncio.get_event_loop().run_until_complete(
                     load_base_data(settings=self.settings)
@@ -309,7 +308,7 @@ class EasyAccessTool:
             .to_list()
         )
         if self.ea_settings.faculty:
-            info(f"Selected single faculty: {self.ea_settings.faculty}")
+            logger.info(f"Selected single faculty: {self.ea_settings.faculty}")
             self.faculties = [self.ea_settings.faculty]
 
         updated_items, mat_ids = asyncio.get_event_loop().run_until_complete(
@@ -322,12 +321,10 @@ class EasyAccessTool:
         if mat_ids:
             self.mat_ids_on_disk = mat_ids
         if updated_items:
-            self.copyright_data = retrieve_copyright_items(
-                settings=self.settings
-            )
+            self.copyright_data = retrieve_copyright_items(settings=self.settings)
             self.copyright_data = self.clean_and_validate_df(self.copyright_data)
 
-        cool(
+        logger.success(
             f"process copyright export done. {self.copyright_data.shape[0]} rows in self.copyright_data."
         )
 
@@ -370,8 +367,10 @@ class EasyAccessTool:
             cols_in_primary = primary.columns
             # cols_in_other = other.columns # Not directly used after this
             primary_selected = [col for col in select_cols if col in cols_in_primary]
-            other_selected = [col for col in select_cols if col in other.columns] # Corrected to use other.columns
-            initial_select_cols = list(select_cols) # Make a copy
+            other_selected = [
+                col for col in select_cols if col in other.columns
+            ]  # Corrected to use other.columns
+            initial_select_cols = list(select_cols)  # Make a copy
 
             # now only select the cols that are in both dataframes
             select_cols = [
@@ -380,29 +379,35 @@ class EasyAccessTool:
                 if col in primary_selected and col in other_selected
             ]
 
-            if not select_cols or "material_id" not in select_cols: # Ensure material_id is present
-                warn(
+            if (
+                not select_cols or "material_id" not in select_cols
+            ):  # Ensure material_id is present
+                logger.warning(
                     "Not enough common columns (or 'material_id' missing) to compare. Skipping comparison; returning primary dataframe."
                 )
                 return primary
-            if len(select_cols) == 1 and "material_id" in select_cols: # Only material_id
-                 warn(
+            if (
+                len(select_cols) == 1 and "material_id" in select_cols
+            ):  # Only material_id
+                logger.warning(
                     "Only 'material_id' column to compare. Skipping detailed comparison; returning primary dataframe."
                 )
-                 return primary # Or handle as per logic, this implies no data columns to compare
+                return primary  # Or handle as per logic, this implies no data columns to compare
             if len(select_cols) != len(initial_select_cols):
-                warn(
+                logger.warning(
                     f"Not all originally selected columns are present in both dataframes. Using common columns: {select_cols}"
                 )
 
             # Get rows in primary but not in other
             not_in_other: pl.DataFrame = primary.join(
-                other.select("material_id"), on="material_id", how="anti" # Simpler anti join
+                other.select("material_id"),
+                on="material_id",
+                how="anti",  # Simpler anti join
             )
 
             # Get matching rows to compare
             matching: pl.DataFrame = primary.join(
-                other.select(select_cols), # Use the filtered select_cols
+                other.select(select_cols),  # Use the filtered select_cols
                 on="material_id",
                 how="inner",
                 suffix="_other",
@@ -412,8 +417,8 @@ class EasyAccessTool:
                 return not_in_other
 
             cols_to_compare = [c for c in select_cols if c != "material_id"]
-            if not cols_to_compare: # No data columns left to compare
-                return not_in_other # Or decide if matching rows with no diff should be dropped
+            if not cols_to_compare:  # No data columns left to compare
+                return not_in_other  # Or decide if matching rows with no diff should be dropped
 
             conditions: list[pl.Expr] = []
             for col in cols_to_compare:
@@ -433,11 +438,11 @@ class EasyAccessTool:
                     & (pl.col(col) != "-")
                 )
 
-            if not conditions: # Should not happen if cols_to_compare is not empty
+            if not conditions:  # Should not happen if cols_to_compare is not empty
                 different_vals = pl.DataFrame(schema=primary.schema)
             else:
                 different_vals = matching.filter(pl.any_horizontal(conditions)).select(
-                    cols_in_primary # Select original columns from primary
+                    cols_in_primary  # Select original columns from primary
                 )
 
             return pl.concat([not_in_other, different_vals], how="diagonal_relaxed")
@@ -449,7 +454,9 @@ class EasyAccessTool:
             "manual_classification",
         ]
         material_ids_found: set[str] = set()
-        update_df: pl.DataFrame = pl.DataFrame(schema={col: pl.Utf8 for col in select_cols}) # Initialize with schema
+        update_df: pl.DataFrame = pl.DataFrame(
+            schema={col: pl.Utf8 for col in select_cols}
+        )  # Initialize with schema
 
         for faculty in self.faculties:
             fac_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
@@ -459,7 +466,7 @@ class EasyAccessTool:
                 if f.extension == ".xlsx" and "llm_classification" not in f.name
             ]
             if not excel_files:
-                warn(f"No Excel files found for faculty {faculty}.")
+                logger.warning(f"No Excel files found for faculty {faculty}.")
                 continue
             for file_obj in excel_files:
                 try:
@@ -468,23 +475,31 @@ class EasyAccessTool:
                         sheet_name=self.settings.data_settings.data_entry_name,
                     )
                 except Exception as e:
-                    warn(f"Error reading {file_obj.path}: {e}")
+                    logger.warning(f"Error reading {file_obj.path}: {e}")
                     continue
 
                 data_entry_df = self.clean_and_validate_df(data_entry_df)
                 if data_entry_df.is_empty():
-                    warn(f"No data found in data entry sheet of {file_obj.path}.")
+                    logger.warning(f"No data found in data entry sheet of {file_obj.path}.")
                     continue
 
-                current_file_mat_ids = data_entry_df.select(pl.col("material_id").cast(pl.Utf8)).to_series().unique().to_list()
+                current_file_mat_ids = (
+                    data_entry_df.select(pl.col("material_id").cast(pl.Utf8))
+                    .to_series()
+                    .unique()
+                    .to_list()
+                )
                 material_ids_found.update(current_file_mat_ids)
 
                 # Ensure data_entry_df has all columns from select_cols for comparison
                 for col_name in select_cols:
                     if col_name not in data_entry_df.columns:
-                        data_entry_df = data_entry_df.with_columns(pl.lit(None).alias(col_name).cast(pl.Utf8))
-                data_entry_df = data_entry_df.select(select_cols) # Ensure correct column order and selection
-
+                        data_entry_df = data_entry_df.with_columns(
+                            pl.lit(None).alias(col_name).cast(pl.Utf8)
+                        )
+                data_entry_df = data_entry_df.select(
+                    select_cols
+                )  # Ensure correct column order and selection
 
                 changes_vs_db: pl.DataFrame = pl.DataFrame(schema=update_df.schema)
                 if not self.copyright_data.is_empty():
@@ -492,34 +507,48 @@ class EasyAccessTool:
                     temp_copyright_data = self.copyright_data.clone()
                     for col_name in select_cols:
                         if col_name not in temp_copyright_data.columns:
-                             temp_copyright_data = temp_copyright_data.with_columns(pl.lit(None).alias(col_name).cast(pl.Utf8))
-                    changes_vs_db = compare(data_entry_df, temp_copyright_data.select(select_cols), select_cols)
+                            temp_copyright_data = temp_copyright_data.with_columns(
+                                pl.lit(None).alias(col_name).cast(pl.Utf8)
+                            )
+                    changes_vs_db = compare(
+                        data_entry_df,
+                        temp_copyright_data.select(select_cols),
+                        select_cols,
+                    )
 
-                changes_vs_update_df: pl.DataFrame = pl.DataFrame(schema=update_df.schema)
+                changes_vs_update_df: pl.DataFrame = pl.DataFrame(
+                    schema=update_df.schema
+                )
                 if not changes_vs_db.is_empty():
                     if not update_df.is_empty():
-                         changes_vs_update_df = compare(changes_vs_db, update_df, select_cols)
+                        changes_vs_update_df = compare(
+                            changes_vs_db, update_df, select_cols
+                        )
                     else:
-                         changes_vs_update_df = changes_vs_db
+                        changes_vs_update_df = changes_vs_db
 
                 if not changes_vs_update_df.is_empty():
-                    info(
+                    logger.info(
                         f"Retrieved {changes_vs_update_df.shape[0]} probable updated items from {file_obj.path}."
                     )
                     update_df = pl.concat(
                         [update_df, changes_vs_update_df], how="diagonal_relaxed"
                     ).unique(subset=["material_id"], keep="last", maintain_order=True)
 
-
         if not update_df.is_empty():
-            info(
+            logger.info(
                 f"Sending {update_df.shape[0]} items from faculty sheets to the database for updating."
             )
-            await update_copyright_items(update_df) # Assuming update_copyright_items handles potential missing columns gracefully or expects specific ones
-            info(f"Returning {len(material_ids_found)} material_ids from faculty sheets.")
+            await update_copyright_items(
+                settings=self.settings,
+                data=update_df,
+            )
+            logger.info(
+                f"Returning {len(material_ids_found)} material_ids from faculty sheets."
+            )
             return True, material_ids_found
 
-        info("No items to update based on faculty sheet contents.")
+        logger.info("No items to update based on faculty sheet contents.")
         return False, material_ids_found
 
     def create_faculty_sheets(self) -> None:
@@ -531,28 +560,26 @@ class EasyAccessTool:
         Also triggers programme sheet creation if applicable for the faculty.
         """
         if self.disable_writes:
-            warn("Writes are disabled. Skipping programme & faculty sheet creation.")
+            logger.warning("Writes are disabled. Skipping programme & faculty sheet creation.")
             return
 
-        if not hasattr(self, 'latest_file_date') or not self.latest_file_date:
-            warn("`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping faculty sheet creation.")
+        if not hasattr(self, "latest_file_date") or not self.latest_file_date:
+            logger.warning(
+                "`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping faculty sheet creation."
+            )
             return
 
-        info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
+        logger.info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
 
         int_mat_ids: list[int] = []
-        if self.mat_ids_on_disk: # Ensure it's not empty before list comprehension
-            try:
-                int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x and x.isdigit()]
-            except ValueError as e:
-                warn(f"Could not convert all material_ids to int: {e}. Proceeding with valid ones.")
-
+        if self.mat_ids_on_disk:
+            int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x.isdigit()]
 
         filtered_data: pl.DataFrame = retrieve_full_data(
             excluded_material_ids=int_mat_ids
         )
         if filtered_data.is_empty() and self.only_changes:
-            warn("No new items found to export to faculty sheets.")
+            logger.warning("No new items found to export to faculty sheets.")
             return
 
         sorted_faculties = sorted(self.faculties) if self.faculties else []
@@ -562,7 +589,7 @@ class EasyAccessTool:
                 pl.col("faculty") == faculty
             )
             if faculty_data.is_empty():
-                warn(f"{faculty}:{gap}{faculty_data.shape[0]} (no new items, skipping)")
+                logger.warning(f"{faculty}:{gap}{faculty_data.shape[0]} (no new items, skipping)")
                 continue
 
             if faculty in self.settings.university_settings.course_mapping:
@@ -570,23 +597,17 @@ class EasyAccessTool:
 
             faculty_dir = Directory(self.dirs[DirSetting.FACULTIES_DIR].full / faculty)
             current_faculty_name = faculty if faculty else "no_faculty_found"
-
             filename_base = f"{current_faculty_name}_{self.latest_file_date}"
-            filename = f"{filename_base}.xlsx"
-            i = 1
-            # Check for existing file and append counter if necessary
-            while (faculty_dir.full / filename).exists():
-                filename = f"{filename_base}_{i}.xlsx"
-                i += 1
-
-            output_file_path = faculty_dir.full / filename
-            info(f"{current_faculty_name}:{gap}{faculty_data.shape[0]} -> {output_file_path.name}")
+            output_file_path = self._get_unique_filepath(faculty_dir, filename_base)
+            logger.info(
+                f"{current_faculty_name}:{gap}{faculty_data.shape[0]} -> {output_file_path.name}"
+            )
             store_complete_data(
                 settings=self.settings,
                 file=output_file_path,
                 data=faculty_data,
             )
-            style_iter_result: int = finalize_sheet(
+            style_iter_result: int | None = finalize_sheet(
                 settings=self.settings,
                 file=File(str(output_file_path)),
                 data=faculty_data,
@@ -610,11 +631,13 @@ class EasyAccessTool:
             input_data: The DataFrame to process. If None, uses `self.copyright_data`.
         """
         if self.disable_writes:
-            warn("Writes are disabled. Skipping programme sheet creation.")
+            logger.warning("Writes are disabled. Skipping programme sheet creation.")
             return
 
-        if not hasattr(self, 'latest_file_date') or not self.latest_file_date:
-            warn("`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping programme sheet creation.")
+        if not hasattr(self, "latest_file_date") or not self.latest_file_date:
+            logger.warning(
+                "`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping programme sheet creation."
+            )
             return
 
         programme_dir = Directory(
@@ -624,38 +647,39 @@ class EasyAccessTool:
             self.settings.university_settings.course_mapping.get(faculty)
         )
         if not course_to_sheet_mapping:
-            warn(
+            logger.warning(
                 f"No course mapping found in settings for faculty {faculty}. Skipping programme sheet creation."
             )
             return
 
         current_data: pl.DataFrame
-        if input_data is not None:
-            current_data = input_data
-        else:
-            current_data = self.copyright_data
+        current_data = input_data if input_data is not None else self.copyright_data
 
         if current_data.is_empty():
-            warn(f"No data provided for {faculty} -- skipping programme sheet creation.")
+            logger.warning(
+                f"No data provided for {faculty} -- skipping programme sheet creation."
+            )
             return
 
-        info(f"Creating programme sheets for {faculty}")
+        logger.info(f"Creating programme sheets for {faculty}")
 
         # data_for_groups stores tuples of (group_name_str, course_data_df)
         data_for_groups: list[tuple[str, pl.DataFrame]] = []
         for course, group_name_str in course_to_sheet_mapping.items():
             if "department" not in current_data.columns:
-                warn(f"'department' column not found in data for faculty {faculty}. Cannot create programme sheets.")
-                return # Or continue to next course if appropriate
+                logger.warning(
+                    f"'department' column not found in data for faculty {faculty}. Cannot create programme sheets."
+                )
+                return  # Or continue to next course if appropriate
 
             course_data = current_data.filter(pl.col("department") == course)
             gap = " " * (40 - len(course))
             if course_data.is_empty():
-                warn(f"{course}:{gap}{course_data.shape[0]} (no new items, skipping)")
+                logger.warning(f"{course}:{gap}{course_data.shape[0]} (no new items, skipping)")
                 continue
 
-            info(f"Retrieved programme sheet data for {course}")
-            info(f"{course}:{gap}{course_data.shape[0]}")
+            logger.info(f"Retrieved programme sheet data for {course}")
+            logger.info(f"{course}:{gap}{course_data.shape[0]}")
             data_for_groups.append((group_name_str, course_data))
 
         final_grouped_data: dict[str, pl.DataFrame] = {}
@@ -669,18 +693,11 @@ class EasyAccessTool:
 
         for group_name_str, df_for_group in final_grouped_data.items():
             filename_base = f"{group_name_str}_{self.latest_file_date}"
-            output_filename = f"{filename_base}.xlsx"
-            i = 1
-            # Check for existing file and append counter
-            while (programme_dir.full / output_filename).exists():
-                output_filename = f"{filename_base}_{i}.xlsx"
-                i += 1
-
-            output_file_path: Path = programme_dir.full / output_filename
+            output_file_path = self._get_unique_filepath(programme_dir, filename_base)
             store_complete_data(
                 settings=self.settings, file=output_file_path, data=df_for_group
             )
-            style_iter_result: int = finalize_sheet(
+            style_iter_result: int | None = finalize_sheet(
                 settings=self.settings,
                 file=File(str(output_file_path)),
                 data=df_for_group,
@@ -688,7 +705,7 @@ class EasyAccessTool:
             )
             if style_iter_result is not None:
                 self.style_iter = style_iter_result
-            info(f"Created programme sheet {output_filename}")
+            logger.info(f"Created programme sheet {output_file_path.name}")
 
     def create_all_items_sheet(self) -> None:
         """
@@ -698,47 +715,49 @@ class EasyAccessTool:
         present on disk (if `only_changes` is True) and exports them.
         """
         if self.disable_writes:
-            warn("Writes are disabled. Skipping create_all_items_sheet.")
+            logger.warning("Writes are disabled. Skipping create_all_items_sheet.")
             return
 
-        if not hasattr(self, 'latest_file_date') or not self.latest_file_date:
-            warn("`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping all_items sheet creation.")
+        if not hasattr(self, "latest_file_date") or not self.latest_file_date:
+            logger.warning(
+                "`latest_file_date` not set. Run `process_raw_copyright_data` first. Skipping all_items sheet creation."
+            )
             return
 
         filtered_data: pl.DataFrame
         if self.only_changes:
-            valid_mat_ids_on_disk = {item for item in self.mat_ids_on_disk if item} # Filter out None or empty strings
+            valid_mat_ids_on_disk = {
+                item for item in self.mat_ids_on_disk if item
+            }  # Filter out None or empty strings
             if "material_id" not in self.copyright_data.columns:
-                 warn("'material_id' column not in copyright_data. Cannot filter for all_items_sheet.")
-                 filtered_data = self.copyright_data.clone() # Or handle error
+                logger.warning(
+                    "'material_id' column not in copyright_data. Cannot filter for all_items_sheet."
+                )
+                filtered_data = self.copyright_data.clone()  # Or handle error
             else:
                 filtered_data = self.copyright_data.filter(
-                    ~pl.col("material_id").cast(pl.Utf8).is_in(list(valid_mat_ids_on_disk))
+                    ~pl.col("material_id")
+                    .cast(pl.Utf8)
+                    .is_in(list(valid_mat_ids_on_disk))
                 )
         else:
             filtered_data = self.copyright_data.clone()
 
-
-        if filtered_data.is_empty(): # Check after potential filtering
-            warn("No new items found to export to all items sheet.")
+        if filtered_data.is_empty():  # Check after potential filtering
+            logger.warning("No new items found to export to all items sheet.")
             return
 
         filename_base = f"all_items_{self.latest_file_date}"
-        output_filename = f"{filename_base}.xlsx"
-        i = 1
-        output_dir = self.dirs[DirSetting.ALL_ITEMS_DIR].full
-        # Check for existing file and append counter
-        while (output_dir / output_filename).exists():
-            output_filename = f"{filename_base}_{i}.xlsx"
-            i += 1
-
-        output_file_path: Path = output_dir / output_filename
+        output_dir = Directory(
+            self.dirs[DirSetting.ALL_ITEMS_DIR].full
+        )  # Ensure Directory object
+        output_file_path = self._get_unique_filepath(output_dir, filename_base)
         store_complete_data(
             settings=self.settings,
             file=output_file_path,
             data=filtered_data,
         )
-        info(f"Created sheet: {output_file_path}")
+        logger.info(f"Created sheet: {output_file_path}")
 
     def clean_and_validate_df(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -764,27 +783,34 @@ class EasyAccessTool:
         df_cleaned = df.clone()
 
         # set all columns to type str (Utf8 in Polars)
-        for col_name in df_cleaned.columns: # Iterate over column names
+        for col_name in df_cleaned.columns:  # Iterate over column names
             if df_cleaned[col_name].dtype != pl.Utf8:
-                df_cleaned = df_cleaned.with_columns(pl.col(col_name).cast(pl.Utf8, strict=False))
-
+                df_cleaned = df_cleaned.with_columns(
+                    pl.col(col_name).cast(pl.Utf8, strict=False)
+                )
 
         marker = self.settings.data_settings.url_truncation_marker
         base_url = self.settings.data_settings.url_default_base
 
         if "url" in df_cleaned.columns:
             df_cleaned = df_cleaned.with_columns(
-                pl.col("url").str.replace_all(marker, base_url) # Use replace_all for global replacement
+                pl.col("url").str.replace_all(
+                    marker, base_url
+                )  # Use replace_all for global replacement
             )
         if "osiris_catalogue_url" in df_cleaned.columns:
             df_cleaned = df_cleaned.with_columns(
-                pl.col("osiris_catalogue_url").str.replace_all(marker, base_url) # Use replace_all
+                pl.col("osiris_catalogue_url").str.replace_all(
+                    marker, base_url
+                )  # Use replace_all
             )
         if "is_duplicate" in df_cleaned.columns:
             df_cleaned = df_cleaned.with_columns(
-                pl.when(pl.col("is_duplicate") == "1").then(pl.lit("TRUE"))
-                .when(pl.col("is_duplicate") == "0").then(pl.lit("FALSE"))
-                .otherwise(pl.col("is_duplicate")) # Keep original if not "0" or "1"
+                pl.when(pl.col("is_duplicate") == "1")
+                .then(pl.lit("TRUE"))
+                .when(pl.col("is_duplicate") == "0")
+                .then(pl.lit("FALSE"))
+                .otherwise(pl.col("is_duplicate"))  # Keep original if not "0" or "1"
                 .alias("is_duplicate")
             )
         return df_cleaned
@@ -797,48 +823,54 @@ class EasyAccessTool:
         and either moves them to a backup location (if configured) or deletes them.
         """
         if self.disable_writes:
-            warn("Writes are disabled. Skipping remove_current_overviews.")
+            logger.warning("Writes are disabled. Skipping remove_current_overviews.")
             return
 
         for faculty in self.faculties:
-            if not faculty: # Skip if faculty name is empty
+            if not faculty:  # Skip if faculty name is empty
                 continue
             overview_fac_dir = Directory(
                 self.dirs[DirSetting.FACULTIES_DIR].full / faculty
             )
             if not overview_fac_dir.exists:
-                warn(f"Faculty directory not found: {overview_fac_dir.full}. Skipping overview removal for {faculty}.")
+                logger.warning(
+                    f"Faculty directory not found: {overview_fac_dir.full}. Skipping overview removal for {faculty}."
+                )
                 continue
 
             movedir = Directory(self.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty)
 
             files_to_process: list[File] = []
             try:
-                files_to_process = overview_fac_dir.files_r # Can raise if dir doesn't exist, handled above
-            except Exception as e: # Catch any other unexpected errors during file listing
-                warn(f"Error listing files in {overview_fac_dir.full}: {e}")
+                files_to_process = (
+                    overview_fac_dir.files_r
+                )  # Can raise if dir doesn't exist, handled above
+            except (
+                Exception
+            ) as e:  # Catch any other unexpected errors during file listing
+                logger.warning(f"Error listing files in {overview_fac_dir.full}: {e}")
                 continue
 
             for file_obj in files_to_process:
                 if "total_overview" in file_obj.name and faculty in file_obj.name:
                     if (
                         self.settings.backup_settings.backup_overviews
-                        and "llm" not in file_obj.name # Do not backup llm specific overviews by default
+                        and "llm"
+                        not in file_obj.name  # Do not backup llm specific overviews by default
                     ):
                         try:
                             if not movedir.exists:
                                 movedir.create()
                             file_obj.move(movedir.full / file_obj.name)
-                            info(f"Moved overview: {file_obj.name} to {movedir.full}")
+                            logger.info(f"Moved overview: {file_obj.name} to {movedir.full}")
                         except Exception as e:
-                            warn(f"Could not move file {file_obj.name} to backup: {e}")
+                            logger.warning(f"Could not move file {file_obj.name} to backup: {e}")
                     else:
                         try:
                             file_obj.delete()
-                            info(f"Deleted overview: {file_obj.name}")
+                            logger.info(f"Deleted overview: {file_obj.name}")
                         except Exception as e:
-                            warn(f"Could not delete file {file_obj.name}: {e}")
-
+                            logger.warning(f"Could not delete file {file_obj.name}: {e}")
 
     def create_overviews(self) -> None:
         """
@@ -851,28 +883,36 @@ class EasyAccessTool:
         faculty_dict: dict[str, pl.DataFrame] = {}
         if not self.faculties:
             # Attempt to populate faculties if empty
-            warn("Faculties list is empty. Attempting to process raw copyright data to populate it.")
-            self.process_raw_copyright_data() # This will set self.faculties
+            logger.warning(
+                "Faculties list is empty. Attempting to process raw copyright data to populate it."
+            )
+            self.process_raw_copyright_data()  # This will set self.faculties
             if not self.faculties:
-                warn("No faculties detected after processing data. Cannot produce overviews.")
+                logger.warning(
+                    "No faculties detected after processing data. Cannot produce overviews."
+                )
                 return
 
-        self.remove_current_overviews() # Remove or backup existing overviews first
+        self.remove_current_overviews()  # Remove or backup existing overviews first
 
         for faculty in self.faculties:
-            if not faculty or faculty == "Unmapped": # Skip empty or "Unmapped"
+            if not faculty or faculty == "Unmapped":  # Skip empty or "Unmapped"
                 continue
-            data = retrieve_full_data(selected_faculties=faculty)
+            data = retrieve_full_data(selected_faculties=faculty, settings=self.settings)
             if data.is_empty():
-                warn(f"No data retrieved for faculty '{faculty}'. Skipping overview creation for this faculty.")
+                logger.warning(
+                    f"No data retrieved for faculty '{faculty}'. Skipping overview creation for this faculty."
+                )
                 continue
             faculty_dict[faculty] = data
 
         if not faculty_dict:
-            warn("No data collected for any faculty. Skipping faculty overview creation.")
+            logger.warning(
+                "No data collected for any faculty. Skipping faculty overview creation."
+            )
             return
 
-        style_iter_result: int = create_faculty_overviews(
+        style_iter_result: int | None = create_faculty_overviews(
             settings=self.settings,
             faculty_data=faculty_dict,
             style_iter=self.style_iter,
@@ -889,11 +929,50 @@ class EasyAccessTool:
         from the `sheets.sheet` module for each one.
         """
         if not self.faculties:
-            warn("No faculties configured or detected. Skipping export sheet creation.")
+            logger.warning("No faculties configured or detected. Skipping export sheet creation.")
             return
 
         for faculty in self.faculties:
-            if not faculty or faculty == "Unmapped": # Skip empty or "Unmapped"
+            if not faculty or faculty == "Unmapped":  # Skip empty or "Unmapped"
                 continue
-            info(f"Creating export sheet for {faculty}")
+            logger.info(f"Creating export sheet for {faculty}")
             create_export_sheet(settings=self.settings, faculty=faculty)
+
+    def _get_unique_filepath(
+        self, directory: Directory, filename_base: str, extension: str = ".xlsx"
+    ) -> Path:
+        """
+        Generates a unique filepath in the given directory.
+
+        If a file with filename_base + extension exists, it appends _1, _2, etc.
+        until a unique name is found.
+
+        Args:
+            directory: The directory to place the file in.
+            filename_base: The base name for the file (without counter or extension).
+            extension: The file extension (defaults to .xlsx).
+
+        Returns:
+            A Path object for the unique file.
+        """
+        if not extension.startswith("."):
+            extension = f".{extension}"
+
+        filename = f"{filename_base}{extension}"
+        output_file_path = directory.full / filename
+        i = 1
+        # Ensure directory exists before checking for file existence
+        if not directory.exists:
+            try:
+                directory.create()
+                logger.info(f"Created directory: {directory.full}")
+            except Exception as e:
+                logger.warning(f"Could not create directory {directory.full}: {e}")
+                # Fallback: attempt to use current directory or raise error?
+                # For now, let it proceed, Path.exists() will handle non-existent parent dirs.
+
+        while output_file_path.exists():
+            filename = f"{filename_base}_{i}{extension}"
+            output_file_path = directory.full / filename
+            i += 1
+        return output_file_path

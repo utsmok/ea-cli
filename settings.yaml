@@ -213,8 +213,8 @@ data_settings:
       default:
         - Unmapped
 
-  url_truncation_marker: "..." # Marker indicating a truncated URL
-  url_default_base: "https://utwente.instructure.com/files" # Default base to prepend if marker is found
+  url_truncation_marker: "..." # Marker used for a truncated URL in the data entry sheet.
+  url_default_base: "https://utwente.instructure.com/files" # Default base for file urls in the sheets
 
 
 # University settings
@@ -224,25 +224,23 @@ data_settings:
 university:
   name: University of Twente
   abbreviation: UT
-  lms: # Learning Management System
-    name: canvas
+  lms: # Main LMS
+    name: Canvas
     url: https://canvas.utwente.nl
-  course_catalogue: # The course catalogue of the university, to retrieve extra info about courses
+  course_catalogue: # Retrieve detailed course information from this page
     name: OSIRIS
     url: https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursus
     query_url: https://utwente.osiris-student.nl/student/osiris/owc/cursussen/
-  employee_catalogue: # The employee catalogue of the university, to retrieve extra info about employees
+  employee_catalogue: # Scrape employee data from this page
     name: People pages
     url: https://people.utwente.nl/
     query_url: https://people.utwente.nl/overview?query=
-  manual_department_mappings: # New section for manual overrides
+  manual_department_mappings: # Manual overrides for entries that do not fit the standard structured mapping below -- e.g. alternative spellings.
     "Master Risicomanagement": "BMS"
     "Master Public Management": "BMS"
     "BMS: Behavioural, Management and Social Sciences": "BMS"
     "EEMCS: Electrical Engineering, Mathematics and Computer Science": "EEMCS"
     "ET: Engineering Technology": "ET"
-    # Add other manual mappings here if needed, e.g.:
-    # "Some Other Specific Programme Name": "FacultyAbbreviation"
   faculties: # this is a hierarchical structure of faculties and programmes. This is used to split the copyright data per faculty (and optionally per programme).
     - name: Faculty of Behavioural, Management and Social Sciences
       abbreviation: BMS
@@ -451,7 +449,7 @@ university:
         - abbreviation: M-SE
           name: Spatial Engineering
           programme_type: m
-    - name: Unmapped # This is the correct placement for the Unmapped faculty
+    - name: Unmapped
       abbreviation: UNM
       programmes:
         - abbreviation: O-TEST

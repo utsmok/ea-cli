@@ -28,28 +28,28 @@ cli_app = typer.Typer()
 
 async def download_files(subset=None, max_amount=None):
     info("downloading files. Will use Chrome do so.")
-    warn(
+    logger.warning(
         "Please make sure you have disabled all extensions, are logged in to Canvas, and have the correct permissions to download the files.\n Then completely close Chrome before continueing."
     )
     input("Press any key to continue...")
     downloader = Downloader()
     await downloader.download_pdfs(subset=None, max_amount=None)
-    cool("done downloading!")
+    logger.success("done downloading!")
 
 
 async def enrich(max_pages=50, str_limit=50000, pdfs=None, input_mat_ids=None):
     info("Loading existing PDFs into database.")
     await load_pdfs()
-    cool("done loading existing PDFs into database.")
+    logger.success("done loading existing PDFs into database.")
     info("Enriching & deduplicating PDFs.")
     await enrich_pdfs(max_pages, str_limit, pdfs, input_mat_ids)
-    cool("done enriching & deduplicating PDFs.")
+    logger.success("done enriching & deduplicating PDFs.")
 
 
 async def classify_items():
     info("Classifying PDFS.")
     await main()
-    cool("done classifying PDFs.")
+    logger.success("done classifying PDFs.")
 
 
 async def run_preprocessing(download, deduplicate, classify):
@@ -120,7 +120,7 @@ def cli(
             if isinstance(data_from, str):
                 data_from = Path(data_from)
             if not data_from.exists():
-                warn(f"Data file not found at {data_from}.")
+                logger.warning(f"Data file not found at {data_from}.")
                 raise typer.Exit(1)
         else:
             data_from = Path(sample_settings.input.get("file"))
@@ -173,10 +173,10 @@ def cli(
         final_df = pl.read_excel(
             "sample_dataset.xlsx", infer_schema_length=None
         ).with_columns(pl.exclude(pl.String).cast(str))
-        cool("Successfully loaded sample dataset.")
+        logger.success("Successfully loaded sample dataset.")
         create = False
     except FileNotFoundError:
-        cool("Creating sample dataset.")
+        logger.success("Creating sample dataset.")
         create = True
     if not create:
         info(f"Loaded existing sample dataset with {len(final_df)} records.")
@@ -288,7 +288,7 @@ def cli(
             faculty_df = df.filter(pl.col("faculty") == faculty)
 
             if len(faculty_df) == 0:
-                warn(f"No data found for faculty {faculty}")
+                logger.warning(f"No data found for faculty {faculty}")
                 continue
 
             faculty_selection = []
@@ -381,7 +381,7 @@ def cli(
 
         final_df: pl.DataFrame = pl.concat(final_selection)
         final_df.write_excel("sample_dataset.xlsx")
-        cool(
+        logger.success(
             f'Wrote base sample dataset with {len(final_selection)} to "sample_dataset.xlsx"'
         )
 
@@ -413,7 +413,7 @@ def cli(
             downloader.download_pdfs(material_ids_missing_classification)
         )
     except Exception as e:
-        warn(f"Error downloading PDFs: {e}")
+        logger.warning(f"Error downloading PDFs: {e}")
 
     try:
         info("Enriching PDFs for selected material_ids.")
@@ -425,14 +425,14 @@ def cli(
             )
         )
     except Exception as e:
-        warn(f"Error enriching PDFs: {e}")
+        logger.warning(f"Error enriching PDFs: {e}")
     try:
         info("Classifying PDFs")
         asyncio.get_event_loop().run_until_complete(
             main(material_ids_missing_classification)
         )
     except Exception as e:
-        warn(f"Error classifying PDFs: {e}")
+        logger.warning(f"Error classifying PDFs: {e}")
 
     # now that all is processed, retrieve the detailed data from the db for the selected material_ids
     info(
@@ -443,7 +443,7 @@ def cli(
     if Path("sample_dataset_full.xlsx").exists():
         Path("sample_dataset_full.xlsx").unlink()
     data.write_excel("sample_dataset_full.xlsx")
-    cool("All done!")
+    logger.success("All done!")
 
 
 if __name__ == "__main__":

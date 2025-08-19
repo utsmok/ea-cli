@@ -6,12 +6,12 @@ from pathlib import Path
 
 import httpx
 import polars as pl
+from loguru import logger
 from rich import print
 
 from easy_access.db.base import CopyrightItem, init
 from easy_access.db.models import Status
-from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import cool, info
+from easy_access.settings import SETTINGS, DirSetting, Settings
 
 SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
 SETTINGS.dirs[DirSetting.SCRIPT_DATA]
@@ -23,7 +23,7 @@ def load_cookies_from_file() -> httpx.Cookies:
     Handles comments, empty lines, and basic structure.
     """
     cookie_file = SETTINGS.dirs[DirSetting.SCRIPT_DATA].full / "cookies.secret"
-    cool(f"Loading cookies from JSON file: {cookie_file}")
+    logger.success(f"Loading cookies from JSON file: {cookie_file}")
     cookies = httpx.Cookies()
     if not cookie_file.exists():
         raise FileNotFoundError(f"Cookie file not found: {cookie_file}")
@@ -53,9 +53,9 @@ def load_cookies_from_file() -> httpx.Cookies:
                 # Note: Leading dots in domain (e.g., ".example.com") are handled correctly by httpx
                 cookies.set(name, value, domain=domain, path=path)
             else:
-                info(f"Skipping invalid cookie object: {cookie_obj}")
+                logger.info(f"Skipping invalid cookie object: {cookie_obj}")
 
-        cool(f"Loaded {len(cookies)} cookies from JSON.")
+        logger.success(f"Loaded {len(cookies)} cookies from JSON.")
         return cookies
     except json.JSONDecodeError as e:
         print(f"[ERROR] Failed to decode JSON from cookie file: {e}")
@@ -80,12 +80,12 @@ class HttpxDownloader:
         self.client = httpx.AsyncClient(
             cookies=self.cookies, headers=headers, follow_redirects=True, timeout=30.0
         )
-        cool("httpx client initialized with loaded cookies.")
+        logger.success("httpx client initialized with loaded cookies.")
 
     async def close_client(self):
         """Closes the httpx client."""
         await self.client.aclose()
-        cool("httpx client closed.")
+        logger.success("httpx client closed.")
 
     async def download_file(self, url: str) -> tuple[bool, Path | None, str | None]:
         """
@@ -99,14 +99,14 @@ class HttpxDownloader:
         """
         if "/files/" not in url:
             error_msg = f"Invalid URL format: {url}. Expected '/files/'."
-            info(error_msg)
+            logger.info(error_msg)
             return False, None, error_msg
 
         try:
             material_id: str = url.split("files/")[1].split("?")[0].strip("/")
         except IndexError:
             error_msg = f"Could not extract material_id from URL: {url}"
-            info(error_msg)
+            logger.info(error_msg)
             return False, None, error_msg
 
         # Construct the download URL (adjust if the pattern differs for your LMS)
@@ -126,7 +126,7 @@ class HttpxDownloader:
         now = datetime.now()
         timestamp = now.strftime("%Y%m%d%H%M%S")
 
-        cool(f"Attempting download: {download_url}")
+        logger.success(f"Attempting download: {download_url}")
         try:
             async with self.client.stream("GET", download_url) as response:
                 # Check for successful response before proceeding
@@ -136,14 +136,14 @@ class HttpxDownloader:
                 filepath = self.download_dir.full / final_filename
 
                 # Stream download to file
-                cool(f"Downloading to: {filepath}")
+                logger.success(f"Downloading to: {filepath}")
                 bytes_downloaded = 0
                 with open(filepath, "wb") as f:
                     async for chunk in response.aiter_bytes():
                         f.write(chunk)
                         bytes_downloaded += len(chunk)
 
-                info(
+                logger.info(
                     f"Successfully downloaded {bytes_downloaded} bytes to {filepath.name}"
                 )
                 return True, filepath, None
@@ -166,7 +166,7 @@ class HttpxDownloader:
             return False, None, error_msg
 
 
-async def main_download_all(max_concurrent: int = 10):
+async def main_download_all(settings: Settings, max_concurrent: int = 10):
     """
     Downloads files from a list of URLs concurrently using HttpxDownloader.
     """
@@ -176,7 +176,7 @@ async def main_download_all(max_concurrent: int = 10):
 
         semaphore = asyncio.Semaphore(max_concurrent)
         tasks = []
-        await init()
+        await init(settings=settings)
 
         async def download_with_semaphore(url):
             async with semaphore:
@@ -185,7 +185,7 @@ async def main_download_all(max_concurrent: int = 10):
         full_df: pl.DataFrame = await get_urls_from_full_data()
         urls_to_download = full_df["url"].to_list()
 
-        cool(
+        logger.success(
             f"Starting bulk download of {len(urls_to_download)} files (max concurrent: {max_concurrent})..."
         )
         for url in urls_to_download:
@@ -208,11 +208,11 @@ async def main_download_all(max_concurrent: int = 10):
                 failed_count += 1
                 failed_urls.append((urls_to_download[i], error_msg))
 
-        cool(f"Download complete. Success: {success_count}, Failed: {failed_count}")
+        logger.success(f"Download complete. Success: {success_count}, Failed: {failed_count}")
         if failed_urls:
-            info("Failed URLs:")
+            logger.info("Failed URLs:")
             for url, err in failed_urls:
-                info(f"  - {url} (Error: {err})")
+                logger.info(f"  - {url} (Error: {err})")
 
     finally:
         # Ensure client is closed
@@ -235,7 +235,7 @@ def get_already_downloaded_material_ids() -> list[str]:
             material_ids_downloaded.append(pdf.split("_")[0])
         else:
             material_ids_downloaded.append(pdf.split(".pdf")[0])
-    info(f"Found {len(material_ids_downloaded)} material_ids in download dir.")
+    logger.info(f"Found {len(material_ids_downloaded)} material_ids in download dir.")
 
     return material_ids_downloaded
 
@@ -261,11 +261,11 @@ async def get_urls_from_full_data() -> pl.DataFrame:
         .values("material_id", "url", "workflow_status", "filename", "status")
     )
     all_item_len = len(all_items)
-    info(
+    logger.info(
         f"Loaded {all_item_len} items of {full_item_len} total amount of items in db. Filtered out url-less items and DELETED items."
     )
     all_items = pl.from_dicts(all_items)
-    info("Loaded into dataframe.")
+    logger.info("Loaded into dataframe.")
     print(all_items.head())
     material_ids_downloaded = [int(x) for x in get_already_downloaded_material_ids()]
     # cast col 'material_id' to int
@@ -281,7 +281,7 @@ async def get_urls_from_full_data() -> pl.DataFrame:
         pl.col("url").replace(old="-", new=None).replace("", None)
     ).select(["url", "material_id", "filename"])
     urls = urls.drop_nulls("url").unique("url")
-    info(
+    logger.info(
         f"{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) ."
     )
     input("Press any key to continue...")
@@ -302,7 +302,7 @@ async def replace_canvas_id_with_material_id() -> None:
 
     download_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
     all_files = download_dir.files
-    info(f"Fixing the filenames of {len(all_files)} files...")
+    logger.info(f"Fixing the filenames of {len(all_files)} files...")
     for item in all_items:
         url = item["url"]
         if not url or "files/" not in url or "?" not in url:
@@ -314,12 +314,12 @@ async def replace_canvas_id_with_material_id() -> None:
             for file in all_files
             if canvas_id in file.name
         ]
-    info(f"Done renaming {len(all_files)} files.")
+    logger.info(f"Done renaming {len(all_files)} files.")
     return
 
 
 # --- Example Usage ---
 def download_pdfs():
-    downloaded, failed = asyncio.run(main_download_all(max_concurrent=15))
-    info(f"\nDownloaded Files ({len(downloaded)})")
-    info(f"Failed Files ({len(failed)})")
+    downloaded, failed = asyncio.run(main_download_all(settings=SETTINGS, max_concurrent=15))
+    logger.info(f"\nDownloaded Files ({len(downloaded)})")
+    logger.info(f"Failed Files ({len(failed)})")

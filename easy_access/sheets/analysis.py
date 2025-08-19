@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import polars as pl
+from loguru import logger
 
 from easy_access.db.ingest import load_base_data
 from easy_access.db.update import update_copyright_items, update_copyright_relations
@@ -10,7 +11,7 @@ from easy_access.db.update import update_copyright_items, update_copyright_relat
 # from easy_access.settings import COURSE_MAPPING, FINE_AMOUNT, SETTINGS, DirSetting # Will be passed
 from easy_access.settings import DirSetting, Settings  # Keep for type hinting
 from easy_access.sheets.sheet import finalize_sheet, store_complete_data
-from easy_access.utils import Directory, File, info
+from easy_access.utils import Directory, File
 
 
 def create_programme_overviews(
@@ -77,7 +78,7 @@ def create_programme_overviews(
             )
 
     for group, item in data.items():
-        info(f"group: {group}: {item.shape[0]} items")
+        logger.info(f"group: {group}: {item.shape[0]} items")
 
     overview_fac_programme_dir = Directory(
         settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty / "per_programme" # Use passed settings
@@ -91,14 +92,14 @@ def create_programme_overviews(
             if "overview" in file.name and groupname in file.name:
                 file.move(overview_fac_programme_dir.full / file.name)
                 continue
-        info(f"{groupname} has {df.shape[0]} items")
+        logger.info(f"{groupname} has {df.shape[0]} items")
         programme_file = File(
             settings.dirs[DirSetting.FACULTIES_DIR].full # Use passed settings
             / faculty
             / "per_programme"
             / f"{groupname}_total_overview_updated_{today}.xlsx"
         )
-        info(f"saving file with {df.shape[0]} rows to {programme_file.path}")
+        logger.info(f"saving file with {df.shape[0]} rows to {programme_file.path}")
         store_complete_data(settings=settings, file=programme_file, data=df) # Pass settings
         style_iter = finalize_sheet(settings=settings, file=programme_file, data=df, style_iter=style_iter) # Pass settings
 
@@ -124,7 +125,7 @@ def create_faculty_overviews(
     data_to_update = []
 
     if disable_writes:
-        info(
+        logger.info(
             "write operations disabled, skipping creation of faculty and programme overviews"
         )
     for faculty, all_faculty_data in faculty_data.items():
@@ -145,7 +146,7 @@ def create_faculty_overviews(
                 / faculty
                 / f"{faculty}_total_overview_updated_{today}.xlsx"
             )
-            info(
+            logger.info(
                 f"saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}"
             )
             store_complete_data(settings=settings, file=fac_file, data=all_faculty_data) # Pass settings
@@ -157,7 +158,7 @@ def create_faculty_overviews(
 
 
 async def update_db(settings: Settings, datalist: list[pl.DataFrame]): # Added settings
-    info("Moving updates into database.")
+    logger.info("Moving updates into database.")
 
     await load_base_data(settings=settings) # Pass settings
 
@@ -165,6 +166,6 @@ async def update_db(settings: Settings, datalist: list[pl.DataFrame]): # Added s
     df = pl.concat(datalist, how="diagonal_relaxed")
     df = df.unique()
 
-    await update_copyright_items(df)
+    await update_copyright_items(settings, df)
 
-    await update_copyright_relations()
+    await update_copyright_relations(settings=settings) # Pass settings

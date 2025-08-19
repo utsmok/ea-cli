@@ -10,7 +10,6 @@ dependencies = [
     "rich",
     "polars[sqlalchemy]",
     "python-dotenv",
-    "fastexcel",
     "xlsxwriter",
     "trogon",
     "httpx",
@@ -44,6 +43,11 @@ dependencies = [
     "fastlite>=0.1.3",
     "spacy>=3.8.5",
     "spacy-layout>=0.0.12",
+    "marimo>=0.14.17",
+    "duckdb>=1.3.2",
+    "sqlglot>=27.7.0",
+    "sentence-transformers>=5.1.0",
+    "ipython>=9.4.0",
 ]
 
 [tool.uv.sources]

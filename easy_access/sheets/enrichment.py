@@ -14,7 +14,7 @@ from easy_access.db.ingest import load_base_data
 
 # from easy_access.settings import SETTINGS, FileSetting # Will be passed
 from easy_access.settings import FileSetting, Settings  # Keep for type hinting
-from easy_access.utils import determine_course_code, info, print, warn
+from easy_access.utils import determine_course_code, print
 
 
 async def update_osiris_data(
@@ -81,7 +81,7 @@ async def update_osiris_data(
                 datadict = dict()
                 if not results:
                     if not jaar: # jaar can be "" or 0 if decremented
-                        warn(f"No data found for code {input_number} with no specific year after retries.")
+                        logger.warning(f"No data found for code {input_number} with no specific year after retries.")
                         return {}
                     elif isinstance(jaar, int) and jaar == 2018:
                         jaar = ""
@@ -91,7 +91,7 @@ async def update_osiris_data(
                         retry = True
                 else:
                     if len(results) != 1:
-                        info(
+                        logger.info(
                             str(len(results))
                             + f" hit(s) for code {input_number} for year {jaar} - {jaar + 1 if isinstance(jaar, int) else 'next'}."
                         )
@@ -261,6 +261,7 @@ async def update_osiris_data(
         except Exception as e:
             print("exception when getting course details")
             logger.exception(e)
+            logger.info(f'Returning an empty dict for input_number {input_number} + {jaar}.')
             return {} # Ensure a dict is returned on error path
         if retry:
             return await get_data_from_osiris(
@@ -339,7 +340,7 @@ async def update_osiris_data(
                                 if ratio > 0.8:
                                     break
                     if ratio < 0.7:
-                        warn(
+                        logger.warning(
                             f"Low match confidence {ratio}: best match for {name} is {best_match}. Actual comparison:\nfound: {remove_dot_and_lower(best_match)} vs input {compare_name})"
                         )
 
@@ -357,7 +358,7 @@ async def update_osiris_data(
                         other_names = []
                         email = ""
                         if not page_data:
-                            warn(f"No page data found for {name} at {new_url}")
+                            logger.warning(f"No page data found for {name} at {new_url}")
                             return {}
                         found_name_tag = page_data.find("h1", class_="pageheader__title")
                         if isinstance(found_name_tag, bs4.Tag):
@@ -507,10 +508,10 @@ async def update_osiris_data(
         lookup_values.update(result)
 
     if len(lookup_values) == 0:
-        info("No course codes found, skipping OSIRIS data enrichment")
+        logger.info("No course codes found, skipping OSIRIS data enrichment")
         return
     else:
-        info(f"Found {len(lookup_values)} course codes to look up in OSIRIS")
+        logger.info(f"Found {len(lookup_values)} course codes to look up in OSIRIS")
 
     osiris_data_w_contacts_file = {}
     with contextlib.suppress(Exception):
@@ -527,16 +528,19 @@ async def update_osiris_data(
             cur_osiris_data = json.load(f)
         cur_osiris_data = {k: v for k, v in cur_osiris_data.items() if v}
         lookup_values = lookup_values - course_codes_already_retrieved
-        info(
+        logger.info(
             f"{len(lookup_values)} remaining course codes to look up in OSIRIS after filtering out already retrieved course codes"
         )
         if len(lookup_values) == 0:
-            info("All course data already retrieved!")
+            logger.info("All course data already retrieved!")
             retrieve_course_data = False
             course_data_dict = cur_osiris_data
 
     if retrieve_course_data:
         # then retrieve data from OSIRIS for each of the values in lookup_values
+        logger.info(
+            f"Now retrieving course data for {len(lookup_values)} course codes from OSIRIS."
+        )
         course_data_dict = {}
         not_found = set()
         found_amount = 0
@@ -572,8 +576,9 @@ async def update_osiris_data(
                         found_amount += 1
                     else:
                         not_found.add(code)
+                logger.debug(f"{"succesfully retrieved data for" if result else "failed to retrieve data for"} course code {code}")
 
-        info(
+        logger.info(
             f"Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes."
         )
         # store course_data_dict as a json file
@@ -582,7 +587,7 @@ async def update_osiris_data(
         with open(settings.files[FileSetting.OSIRIS_DATA].path, "w") as f: # Use passed settings
             json.dump(course_data_dict, f, indent=4)
         if len(not_found) > 0:
-            info(f"{len(not_found)} course codes not found: ")
+            logger.info(f"{len(not_found)} course codes not found: ")
             for code in not_found:
                 print("            " + str(code))
     # now look up all the person data
@@ -595,7 +600,7 @@ async def update_osiris_data(
         for data_field in ["docenten", "examinators"]:
             if data.get(data_field):
                 extended_persons_to_retrieve.update(data.get(data_field))
-    info(f"{len(persons_to_retrieve)} persons in current osiris data to enrich")
+    logger.info(f"{len(persons_to_retrieve)} persons in current osiris data to enrich")
 
     if only_retrieve_missing:
         try:
@@ -606,16 +611,16 @@ async def update_osiris_data(
             extended_persons_to_retrieve = extended_persons_to_retrieve - set(
                 cur_persons
             )
-            info(
+            logger.info(
                 f"{len(persons_to_retrieve)} persons remaining after filtering out already retrieved persons"
             )
         except Exception as e:
-            warn(
+            logger.warning(
                 f"error while loading {settings.files[FileSetting.PERSON_DATA].path}: {e}" # Use passed settings
             )
             ...
     if len(persons_to_retrieve) > 0:
-        info(f"now retrieving person data for {len(persons_to_retrieve)} people.")
+        logger.info(f"now retrieving person data for {len(persons_to_retrieve)} people.")
         person_data = []
         persontasks = []
         async with httpx.AsyncClient(timeout=30) as client:
@@ -636,7 +641,7 @@ async def update_osiris_data(
                     print(e)
                     pass
 
-        info(f"got data for {len(person_data)} persons")
+        logger.info(f"got data for {len(person_data)} persons")
         try:
             if only_retrieve_missing:
                 with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
@@ -660,13 +665,13 @@ async def update_osiris_data(
             with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
                 person_data = json.load(f)
         except Exception as e:
-            warn(f"couldnt load {settings.files[FileSetting.PERSON_DATA].path}: {e}") # Use passed settings
+            logger.warning(f"couldnt load {settings.files[FileSetting.PERSON_DATA].path}: {e}") # Use passed settings
             person_dict = {}
 
     person_dict = {a.get("input_name"): a for a in person_data}
 
     # finally, combine the two by adding the contact details to the course data
-    info("Now enriching each osiris course with detailed contact data.")
+    logger.info("Now enriching each osiris course with detailed contact data.")
     osiris_data_w_contacts = dict()
     for code, entry in course_data_dict.items():
         if not entry:
@@ -688,10 +693,10 @@ async def update_osiris_data(
                         "people_page": details.get("people_page_url"),
                     }
                     if not details.get("orgs"):
-                        warn(f"No orgs found for contact {contact} with details:")
-                        info(details)
+                        logger.warning(f"No orgs found for contact {contact} with details:")
+                        logger.info(details)
                 else:
-                    warn(f"No details found for contact {contact}")
+                    logger.warning(f"No details found for contact {contact}")
 
         entry["contacts"] = contactdetails
         osiris_data_w_contacts[code] = entry
@@ -719,7 +724,7 @@ async def update_osiris_data(
                 indent=4,
             )
 
-    info(
+    logger.info(
         f"Done. Stored data in json files:\n    {settings.files[FileSetting.OSIRIS_DATA]}\n    {settings.files[FileSetting.PERSON_DATA]}\n    {settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}" # Use passed settings
     )
 

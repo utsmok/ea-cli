@@ -9,15 +9,15 @@ from time import time
 from typing import Any, Literal, LiteralString
 
 import polars as pl
+
+# from easy_access.settings import SETTINGS # Will be passed as an argument
+from loguru import logger
 from sqlalchemy import Engine, text
 from tortoise import Tortoise
 
 from easy_access.db.base import init, init_engine
 from easy_access.db.models import ItemUpdate
 from easy_access.settings import Settings  # Import Settings for type hint
-
-# from easy_access.settings import SETTINGS # Will be passed as an argument
-from easy_access.utils import warn
 
 engine: Engine | None = None
 
@@ -121,8 +121,8 @@ def retrieve_full_data(
     with engine.connect() as conn:
         if selected_material_ids is not None:
             if not selected_material_ids:
-                warn(
-                    text="retrieve_full_data received an empty collection of selected_material_ids.  Returning empty DataFrame."
+                logger.warning(
+                    "retrieve_full_data received an empty collection of selected_material_ids.  Returning empty DataFrame."
                 )
                 return pl.DataFrame()
             conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
@@ -159,7 +159,7 @@ def retrieve_full_data(
             faculties_string = "', '".join(selected_faculties)  # Escape for SQL
             faculty_where_clause = f"AND cd.faculty_id IN ('{faculties_string}')"
 
-        query: LiteralString = f"""
+        query: str = f"""
             WITH CourseDataAggregated AS (
                 SELECT
                     cdcd.copyright_data_id,
@@ -279,7 +279,7 @@ def retrieve_full_data(
                     .list.join(separator=" | ")
                 )
             except Exception as e:
-                warn(
+                logger.warning(
                     f"Error {e} while processing {colname} with type {df[colname].dtype} in retrieve_full_data"
                 )
                 print(colname)
@@ -310,7 +310,7 @@ def get_llm_classification_schema() -> dict[str, type]:
         "item_title_llm": pl.Utf8,
         "pdf_page_count_llm": pl.Int64,
         "remarks_llm": pl.Utf8,
-        "author_names_llm": pl.List(pl.Utf8),  # Specify list of strings
+        "author_names_llm": pl.List(pl.Utf8),
         "doi_llm": pl.List(pl.Utf8),
         "isbn_llm": pl.List(pl.Utf8),
         "source_url_llm": pl.List(pl.Utf8),
@@ -334,8 +334,8 @@ def retrieve_llm_classifications(
         # print all table names
         if selected_material_ids is not None:
             if not selected_material_ids:
-                warn(
-                    text="retrieve_llm_classifications received an empty collection of selected_material_ids.  Returning empty DataFrame."
+                logger.warning(
+                    "retrieve_llm_classifications received an empty collection of selected_material_ids.  Returning empty DataFrame."
                 )
                 return pl.DataFrame(schema=get_llm_classification_schema())
             conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
@@ -404,7 +404,7 @@ def retrieve_llm_classifications(
         )
 
 
-def retrieve_osiris_data(material_ids: list[int], settings: Settings | None = None) -> list[dict[str, Any]]: # Added settings
+def retrieve_osiris_data(material_ids: list[int] | int, settings: Settings | None = None) -> list[dict[str, Any]]: # Added settings
     """
     Retrieves copyright data and richly nested related data (faculty, courses,
     persons, organizations) for the given material IDs using SQL JSON functions.
@@ -424,7 +424,7 @@ def retrieve_osiris_data(material_ids: list[int], settings: Settings | None = No
     if not engine:
         engine = init_engine(settings=settings) # Pass settings
     if not material_ids:
-        warn("No material IDs provided. Returning empty list.")
+        logger.warning("No material IDs provided. Returning empty list.")
         return []
     if not isinstance(material_ids, Iterable):
         material_ids = [material_ids]  # Convert to list if not already
@@ -624,7 +624,7 @@ async def retrieve_item_history(material_ids: list[int], settings: Settings | No
     await init(settings=settings) # Pass settings
 
     if not material_ids:
-        warn("No material IDs provided. Returning empty list.")
+        logger.warning("No material IDs provided. Returning empty list.")
         return []
 
     if not isinstance(material_ids, Iterable):
