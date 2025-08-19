@@ -1,10 +1,9 @@
 import contextlib
-import os
+import logging  # Added
 import pathlib
 import shutil
 import time
 from datetime import datetime
-import logging # Added
 
 # Removed loguru and rich
 # from loguru import logger
@@ -14,7 +13,7 @@ import logging # Added
 # cons = Console(emoji=True, markup=True)
 # print: callable = cons.print
 
-logger = logging.getLogger(__name__) # Added
+logger = logging.getLogger(__name__)  # Added
 
 # Removed custom info, warn, cool functions
 # def info(text: str) -> None:
@@ -91,7 +90,7 @@ def determine_course_code(code: str, name: str) -> set[str]:
 
     """
 
-    def is_valid_course_code(check_code: Any) -> bool:
+    def is_valid_course_code(check_code) -> bool:
         """Checks if a given code is a valid Osiris course code (numeric, >= 8 digits)."""
         try:
             check_code_str = str(check_code).strip()
@@ -117,12 +116,14 @@ def determine_course_code(code: str, name: str) -> set[str]:
 
         if not tempresults:
             logger.warning(f"No valid course code found for {code} - {name}")
-            logger.info( # Changed from utils.info to logger.info
+            logger.info(  # Changed from utils.info to logger.info
                 f"code extraction results: {first_try}, name extraction results: {second_try}"
             )
         return tempresults
     except Exception as e:
-        logger.warning(f"Error in determine_course_code for input: code={code}, name={name}: {e}")
+        logger.warning(
+            f"Error in determine_course_code for input: code={code}, name={name}: {e}"
+        )
         return tempresults
 
 
@@ -162,7 +163,7 @@ class Directory:
         else:
             self.full = pathlib.Path.cwd() / resolved_path
 
-        self._post_init() # Changed to internal call
+        self._post_init()  # Changed to internal call
 
     def _post_init(self) -> None:
         """
@@ -174,29 +175,25 @@ class Directory:
             if self.create_dir:
                 self.create()
             else:
-                logger.warning( # Changed from utils.warn to logger.warning
+                logger.warning(  # Changed from utils.warn to logger.warning
                     text=f"Directory {self.full} does not exist and create_dir is set to False. Call create() before any other commands!"
                 )
         elif not self.full.is_dir():
             raise NotADirectoryError(f"Directory {self.full} is not a directory.")
 
     @property
-    def files(self) -> list['File']:
+    def files(self) -> list["File"]:
         """Gets all files directly within this directory."""
         if not self.is_dir:
             return []
-        return [
-            File(path=item) for item in self.full.iterdir() if item.is_file()
-        ]
+        return [File(path=item) for item in self.full.iterdir() if item.is_file()]
 
     @property
-    def files_r(self) -> list['File']:
+    def files_r(self) -> list["File"]:
         """Recursively gets all files within this directory and its subdirectories."""
         if not self.is_dir:
             return []
-        return [
-            File(path=item) for item in self.full.rglob("*") if item.is_file()
-        ]
+        return [File(path=item) for item in self.full.rglob("*") if item.is_file()]
 
     @property
     def name(self) -> str:
@@ -206,10 +203,12 @@ class Directory:
     @property
     def created(self) -> datetime:
         """Timestamp of when the directory was created."""
-        return datetime.fromtimestamp(self.full.stat().st_ctime) # Use fromtimestamp and st_ctime
+        return datetime.fromtimestamp(
+            self.full.stat().st_ctime
+        )  # Use fromtimestamp and st_ctime
 
     @property
-    def dirs(self, r: bool = False) -> list['Directory']: # type: ignore # Pylance complains about @property with params
+    def dirs(self, r: bool = False) -> list["Directory"]:  # type: ignore # Pylance complains about @property with params
         """
         Returns a list of Directory objects within this directory.
 
@@ -234,7 +233,7 @@ class Directory:
             if item.is_dir()
         ]
 
-    def newest_file(self, file_type: list[str] | str | None = None) -> 'File | None':
+    def newest_file(self, file_type: list[str] | str | None = None) -> "File | None":
         """
         Returns the newest file in the directory, optionally filtered by file type.
 
@@ -247,16 +246,22 @@ class Directory:
         """
         all_files: list[File] = self.files
         if file_type:
-            extensions_to_check = [file_type] if isinstance(file_type, str) else file_type
+            extensions_to_check = (
+                [file_type] if isinstance(file_type, str) else file_type
+            )
             # Ensure extensions start with a dot for consistent comparison if needed, though Path.suffix includes it.
-            extensions_to_check = [ext if ext.startswith('.') else f".{ext}" for ext in extensions_to_check]
+            extensions_to_check = [
+                ext if ext.startswith(".") else f".{ext}" for ext in extensions_to_check
+            ]
 
             filtered_files = []
             for file_obj in all_files:
                 # file.extension from File class already includes the dot
                 if file_obj.extension in extensions_to_check:
                     # Original logic had `if "overview" not in file.name`. Keeping if still relevant.
-                    if "overview" not in file_obj.name: # Assuming file.name is just the filename.ext
+                    if (
+                        "overview" not in file_obj.name
+                    ):  # Assuming file.name is just the filename.ext
                         filtered_files.append(file_obj)
             all_files = filtered_files
 
@@ -265,7 +270,7 @@ class Directory:
         return max(all_files, key=lambda f: f.created)
 
     @property
-    def newest_file_r(self) -> 'File | None': # Corrected return type from str
+    def newest_file_r(self) -> "File | None":  # Corrected return type from str
         """Recursively gets the newest file in the directory and its subdirectories."""
         all_files: list[File] = self.files_r
         if not all_files:
@@ -284,18 +289,25 @@ class Directory:
 
     def create(self) -> None:
         """Creates the directory, including any necessary parent directories."""
-        with contextlib.suppress(FileExistsError): # Safely ignore if dir already exists
-            self.full.mkdir(parents=True, exist_ok=True) # exist_ok=True is often more robust
+        with contextlib.suppress(
+            FileExistsError
+        ):  # Safely ignore if dir already exists
+            self.full.mkdir(
+                parents=True, exist_ok=True
+            )  # exist_ok=True is often more robust
 
     def delete(self) -> None:
         """Deletes the directory and all its contents recursively."""
-        if self.exists and self.is_dir: # Ensure it exists and is a directory before deleting
+        if (
+            self.exists and self.is_dir
+        ):  # Ensure it exists and is a directory before deleting
             shutil.rmtree(self.full)
         elif self.exists and not self.is_dir:
-            logger.warning(f"Path {self.full} is a file, not a directory. Cannot use rmtree.")
+            logger.warning(
+                f"Path {self.full} is a file, not a directory. Cannot use rmtree."
+            )
         else:
             logger.info(f"Directory {self.full} does not exist. Nothing to delete.")
-
 
     def copy(self, target: pathlib.Path | str, overwrite: bool = True) -> None:
         """
@@ -306,9 +318,10 @@ class Directory:
             overwrite (bool, optional): If True, overwrites existing files at the destination.
                                        If False, only copies new files. Defaults to True.
         """
+
         def copy_only_new(src: str, dst: str, *, follow_symlinks: bool = True) -> str:
             if pathlib.Path(dst).exists():
-                return dst # Skip if destination exists
+                return dst  # Skip if destination exists
             return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
 
         target_path = pathlib.Path(target) if isinstance(target, str) else target
@@ -322,19 +335,19 @@ class Directory:
         shutil.copytree(
             src=self.full,
             dst=target_path,
-            dirs_exist_ok=True, # Important for merging or overwriting parts of existing target
-            copy_function=copy_func if not overwrite else None # copy_function is only used when dirs_exist_ok=True and we want custom file copy
+            dirs_exist_ok=True,  # Important for merging or overwriting parts of existing target
+            copy_function=copy_func
+            if not overwrite
+            else None,  # copy_function is only used when dirs_exist_ok=True and we want custom file copy
         )
-
 
     def rename_latest_file(self, new_name: str) -> None:
         """Renames the newest file in this directory."""
-        newest_file_obj = self.newest_file() # Renamed variable for clarity
+        newest_file_obj = self.newest_file()  # Renamed variable for clarity
         if newest_file_obj:
             newest_file_obj.rename(new_name)
         else:
             logger.warning(f"No files found in directory {self.full} to rename.")
-
 
     def __eq__(self, other: object) -> bool:
         """Checks if this Directory object is equal to another (based on full path)."""
@@ -361,6 +374,7 @@ class File:
         _extension (str): The file extension.
         _dir (Directory): The Directory object representing the parent directory.
     """
+
     _path: pathlib.Path
     _path_init_str: str
     _name: str
@@ -394,13 +408,14 @@ class File:
         self._name = resolved_path.name
         self._extension = resolved_path.suffix
         # Parent directory should also be resolved to an absolute path
-        self._dir = Directory(path=resolved_path.parent, create_dir=False) # create_dir=False as parent should exist or it's an issue with path
-
+        self._dir = Directory(
+            path=resolved_path.parent, create_dir=False
+        )  # create_dir=False as parent should exist or it's an issue with path
 
     @property
     def exists(self) -> bool:
         """Checks if the file exists."""
-        return self._path.exists() and self._path.is_file() # Ensure it's a file too
+        return self._path.exists() and self._path.is_file()  # Ensure it's a file too
 
     @property
     def is_file(self) -> bool:
@@ -434,9 +449,8 @@ class File:
         # st_ctime is the last metadata change time on Unix, or creation time on Windows.
         try:
             return datetime.fromtimestamp(self._path.stat().st_birthtime)
-        except AttributeError: # pragma: no cover
+        except AttributeError:  # pragma: no cover
             return datetime.fromtimestamp(self._path.stat().st_ctime)
-
 
     @property
     def modified(self) -> datetime:
@@ -448,7 +462,7 @@ class File:
         """Size of the file in bytes."""
         return self._path.stat().st_size
 
-    def copy(self, new_path: str | pathlib.Path) -> 'File':
+    def copy(self, new_path: str | pathlib.Path) -> "File":
         """
         Copies the file to a new location.
 
@@ -462,12 +476,14 @@ class File:
         if not self.exists:
             logger.warning(f"Source file {self._path} does not exist. Cannot copy.")
             # Depending on desired strictness, could raise FileNotFoundError
-            return File(path=target_path) # Return a File object for the target path anyway
+            return File(
+                path=target_path
+            )  # Return a File object for the target path anyway
 
         shutil.copy(src=self._path, dst=target_path)
         return File(path=target_path)
 
-    def move(self, new_path: str | pathlib.Path) -> 'File':
+    def move(self, new_path: str | pathlib.Path) -> "File":
         """
         Moves the file to a new location.
         If the target file already exists, it appends a timestamp to the new filename to avoid overwrite by default.
@@ -485,27 +501,28 @@ class File:
             logger.warning(f"Source file {self._path} does not exist. Cannot move.")
             return File(path=target_path)
 
-
         # If target_path is an existing directory, move the file into it with its original name
         if target_path.is_dir():
             final_target_path = target_path / self.name
-        else: # Assume target_path is a full file path (or a non-existent path where the file should be placed)
+        else:  # Assume target_path is a full file path (or a non-existent path where the file should be placed)
             final_target_path = target_path
             # Ensure parent directory of the target file path exists
             final_target_path.parent.mkdir(parents=True, exist_ok=True)
 
-
         if final_target_path.exists():
             timestamp_suffix = f"_{int(time.time())}"
-            final_name_versioned = f"{final_target_path.stem}{timestamp_suffix}{final_target_path.suffix}"
+            final_name_versioned = (
+                f"{final_target_path.stem}{timestamp_suffix}{final_target_path.suffix}"
+            )
             final_target_path = final_target_path.with_name(final_name_versioned)
-            logger.info(f"Target {new_path} exists or would overwrite. Moving to versioned path: {final_target_path}")
-
+            logger.info(
+                f"Target {new_path} exists or would overwrite. Moving to versioned path: {final_target_path}"
+            )
 
         shutil.move(src=str(self._path), dst=str(final_target_path.resolve()))
         return File(path=final_target_path)
 
-    def rename(self, new_name: str) -> 'File':
+    def rename(self, new_name: str) -> "File":
         """
         Renames the file within its current directory.
 
@@ -524,7 +541,7 @@ class File:
         new_path = self._dir.full / new_name
         self._path = self._path.rename(new_path)
         self._name = new_name
-        self._extension = new_path.suffix # Update extension if new_name changed it
+        self._extension = new_path.suffix  # Update extension if new_name changed it
         return self
 
     def delete(self) -> None:
@@ -535,7 +552,7 @@ class File:
         """Checks if this File object is equal to another (based on resolved absolute path)."""
         if isinstance(other, File):
             return self._path.resolve() == other._path.resolve()
-        if isinstance(other, str): # Allow comparison with string path
+        if isinstance(other, str):  # Allow comparison with string path
             return self._path.resolve() == pathlib.Path(other).resolve()
         return False
 

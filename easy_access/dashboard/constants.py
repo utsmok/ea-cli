@@ -10,13 +10,14 @@ rather than being hardcoded.
 """
 
 import logging
-from pathlib import Path # Added for DB path handling
-from fasthtml.common import Link, Script, Style # Imports for CSS/JS constants
-from fastlite import Database, database
-from monsterui.core import Theme, ThemeRadii, ThemeShadows # For UI theme
-from monsterui.franken import LabelT # For UI labels
+from pathlib import Path  # Added for DB path handling
 
-from easy_access.settings import SETTINGS # To access shared settings like DB path
+from fasthtml.common import Link, Script, Style  # Imports for CSS/JS constants
+from fastlite import Database, database
+from monsterui.core import Theme, ThemeRadii, ThemeShadows  # For UI theme
+from monsterui.franken import LabelT  # For UI labels
+
+from easy_access.settings import SETTINGS  # To access shared settings like DB path
 
 logger = logging.getLogger(__name__)
 
@@ -26,64 +27,109 @@ logger = logging.getLogger(__name__)
 # Ensure SETTINGS is loaded before this module if db_path comes from there.
 try:
     # Assuming SETTINGS.db_path is a pathlib.Path object
-    DASHBOARD_DB_PATH_STR: str = str(SETTINGS.db_path if SETTINGS.db_path else Path("db.sqlite3").resolve())
+    DASHBOARD_DB_PATH_STR: str = str(
+        SETTINGS.db_path if SETTINGS.db_path else Path("db.sqlite3").resolve()
+    )
     logger.info(f"Dashboard database path set to: {DASHBOARD_DB_PATH_STR}")
-except AttributeError: # Fallback if SETTINGS or SETTINGS.db_path is not yet available
+except AttributeError:  # Fallback if SETTINGS or SETTINGS.db_path is not yet available
     DASHBOARD_DB_PATH_STR: str = str(Path("db.sqlite3").resolve())
-    logger.warning(f"SETTINGS.db_path not available, dashboard defaulting DB path to: {DASHBOARD_DB_PATH_STR}")
+    logger.warning(
+        f"SETTINGS.db_path not available, dashboard defaulting DB path to: {DASHBOARD_DB_PATH_STR}"
+    )
 
 db: Database = database(DASHBOARD_DB_PATH_STR)
 
 
 # Columns considered filterable in the dashboard UI
 FILTERABLE_COLUMNS: list[str] = [
-    "workflow_status", "classification", "status",
-    "manual_classification", "faculty", "department", "course_name",
+    "workflow_status",
+    "classification",
+    "status",
+    "manual_classification",
+    "faculty",
+    "department",
+    "course_name",
 ]
 
 # Default columns to display in the main data table of the dashboard
 DISPLAY_COLUMNS: list[str] = [
-    "material_id", "url", "workflow_status", "status",
-    "classification", "ml_prediction", "manual_classification",
-    "remarks", "filename", "title", "faculty",
+    "material_id",
+    "url",
+    "workflow_status",
+    "status",
+    "classification",
+    "ml_prediction",
+    "manual_classification",
+    "remarks",
+    "filename",
+    "title",
+    "faculty",
 ]
 
 # Styling for badges/pills based on column values
 # Uses LabelT from monsterui for FrankenUI compatible styles, or direct CSS classes.
 BADGE_STYLES: dict[str, dict[str, str | LabelT]] = {
     "faculty": {
-        "BMS": "badge-success", "EEMCS": "badge-info", "ET": "badge-warning",
-        "ITC": "badge-error", "TNW": "badge-secondary",
+        "BMS": "badge-success",
+        "EEMCS": "badge-info",
+        "ET": "badge-warning",
+        "ITC": "badge-error",
+        "TNW": "badge-secondary",
     },
     "classification": {
-        **{label_val: LabelT.primary for label_val in [
-            "open access", "eigen materiaal - powerpoint", "eigen materiaal - titelindicatie",
-            "eigen materiaal - overig", "eigen materiaal",
-        ]},
-        **{label_val: LabelT.secondary for label_val in [
-            "onbekend", "niet geanalyseerd", "in onderzoek",
-            "licentie beschikbaar", "verwijderverzoek verstuurd",
-        ]},
-        **{label_val: LabelT.destructive for label_val in [
-            "korte overname", "middellange overname", "lange overname",
-        ]},
-        "None": LabelT.destructive, # For null/empty classification values
+        **{
+            label_val: LabelT.primary
+            for label_val in [
+                "open access",
+                "eigen materiaal - powerpoint",
+                "eigen materiaal - titelindicatie",
+                "eigen materiaal - overig",
+                "eigen materiaal",
+            ]
+        },
+        **{
+            label_val: LabelT.secondary
+            for label_val in [
+                "onbekend",
+                "niet geanalyseerd",
+                "in onderzoek",
+                "licentie beschikbaar",
+                "verwijderverzoek verstuurd",
+            ]
+        },
+        **{
+            label_val: LabelT.destructive
+            for label_val in [
+                "korte overname",
+                "middellange overname",
+                "lange overname",
+            ]
+        },
+        "None": LabelT.destructive,  # For null/empty classification values
     },
     "status": {
-        "Published": LabelT.primary, "Unpublished": LabelT.secondary, "Deleted": LabelT.destructive,
+        "Published": LabelT.primary,
+        "Unpublished": LabelT.secondary,
+        "Deleted": LabelT.destructive,
     },
     "workflow_status": {
-        "ToDo": LabelT.destructive, "InProgress": LabelT.secondary, "Done": LabelT.primary,
+        "ToDo": LabelT.destructive,
+        "InProgress": LabelT.secondary,
+        "Done": LabelT.primary,
     },
 }
-DEFAULT_PILL_STYLE: LabelT = LabelT.secondary # Fallback style for unmapped badge values
+DEFAULT_PILL_STYLE: LabelT = (
+    LabelT.secondary
+)  # Fallback style for unmapped badge values
 
 # Dashboard UI settings
 # TODO: Move PORT and ROOT_URL to a more appropriate configuration method (e.g., environment variables for deployment)
 APP_PORT: int = 8000
 APP_ROOT_URL: str = f"http://localhost:{APP_PORT}"
 DEFAULT_ITEMS_PER_PAGE: int = 15
-MAX_CELL_DISPLAY_LENGTH: int = 35 # Max characters to display in a table cell before truncating (for some fields)
+MAX_CELL_DISPLAY_LENGTH: int = (
+    35  # Max characters to display in a table cell before truncating (for some fields)
+)
 
 
 # --- Embedded CSS and JavaScript for the dashboard ---
@@ -223,7 +269,8 @@ function getFilterValues() {
 """)
 
 # JavaScript for HTMX request configuration listener
-HTMX_CONFIG_REQUEST_LISTENER: Script = Script("""
+HTMX_CONFIG_REQUEST_LISTENER: Script = Script(
+    """
 document.body.addEventListener('htmx:configRequest', function(event) {
     if (event.detail.elt.id === 'apply-filters-btn') {
         // console.log("htmx:configRequest for Apply button");
@@ -233,7 +280,9 @@ document.body.addEventListener('htmx:configRequest', function(event) {
         } catch (e) { console.error("Error processing filter values for HTMX:", e); }
     }
 });
-""", defer=True)
+""",
+    defer=True,
+)
 
 # JavaScript for modal interactions (triggering, form reset, pill updates)
 MODAL_SCRIPTS: Tuple[Script, Script] = (
@@ -272,25 +321,30 @@ MODAL_SCRIPTS: Tuple[Script, Script] = (
                 });
             }
         });
-    """)
+    """),
 )
 
 # Collection of JavaScript resources for the page <head>
 HEAD_JS_RESOURCES: Tuple[Script, ...] = (
     Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit.min.js"),
-    Script(src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit-icons.min.js"),
-    Script(src="https://unpkg.com/alpinejs", defer=True), # defer is boolean
-    Script(content=ALPINE_TOOLTIP_JS_SNIPPET), # Embed snippet directly
-    Script(src="https://cdn.tailwindcss.com"), # TailwindCSS
-    Script(src="https://unpkg.com/htmx-ext-preload@2.1.0"), # HTMX extension
+    Script(
+        src="https://cdn.jsdelivr.net/npm/uikit@3.latest/dist/js/uikit-icons.min.js"
+    ),
+    Script(src="https://unpkg.com/alpinejs", defer=True),  # defer is boolean
+    Script(content=ALPINE_TOOLTIP_JS_SNIPPET),  # Embed snippet directly
+    Script(src="https://cdn.tailwindcss.com"),  # TailwindCSS
+    Script(src="https://unpkg.com/htmx-ext-preload@2.1.0"),  # HTMX extension
 )
 
 # Initial headers for HTML pages, including theme, CSS, and head JS.
 # Body JS (MODAL_SCRIPTS, FILTER_FORM_JS_HELPER, HTMX_CONFIG_REQUEST_LISTENER) should be placed before </body>
-PAGE_INIT_HEADERS: Tuple[Any, ...] = ( # Use Any for mixed types from fasthtml
-    Theme.slate.headers( # Assuming Theme.slate.headers returns a list/tuple of header elements
-        mode="light", daisy=True, katex=False,
-        radii=ThemeRadii.lg, shadows=ThemeShadows.lg
+PAGE_INIT_HEADERS: Tuple[Any, ...] = (  # Use Any for mixed types from fasthtml
+    Theme.slate.headers(  # Assuming Theme.slate.headers returns a list/tuple of header elements
+        mode="light",
+        daisy=True,
+        katex=False,
+        radii=ThemeRadii.lg,
+        shadows=ThemeShadows.lg,
     ),
     CSS_STYLES,
     INTER_FONT_LINK,
@@ -300,9 +354,8 @@ PAGE_INIT_HEADERS: Tuple[Any, ...] = ( # Use Any for mixed types from fasthtml
 PAGE_BODY_JS: Tuple[Script, ...] = (
     FILTER_FORM_JS_HELPER,
     HTMX_CONFIG_REQUEST_LISTENER,
-    *MODAL_SCRIPTS
+    *MODAL_SCRIPTS,
 )
 
 # Removed load_cookies_from_file function as it was misplaced.
 # It belongs in and was correctly implemented in `easy_access/classification/httpx_downloader.py`.
-```

@@ -13,17 +13,20 @@ import logging
 import traceback
 from collections.abc import Iterable
 from time import time
-from typing import Any, LiteralString # Removed Literal as it's >=3.9, using LiteralString for SQL
+from typing import (  # Removed Literal as it's >=3.9, using LiteralString for SQL
+    Any,
+    LiteralString,
+)
 
 import polars as pl
-from sqlalchemy import Engine, text # Engine for type hint
-from tortoise import Tortoise # For async retrieve_item_history
+from sqlalchemy import Engine, text  # Engine for type hint
 
-from easy_access.db.base import init as init_tortoise, init_engine # init_tortoise for async
-from easy_access.db.models import ItemUpdate # For retrieve_item_history return type
+from easy_access.db.base import init as init_tortoise  # init_tortoise for async
+from easy_access.db.base import init_engine
+from easy_access.db.models import ItemUpdate  # For retrieve_item_history return type
 from easy_access.settings import SETTINGS
 
-engine: Engine | None = None # Global SQLAlchemy engine for polars sync functions
+engine: Engine | None = None  # Global SQLAlchemy engine for polars sync functions
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +44,7 @@ def retrieve_copyright_items() -> pl.DataFrame:
     """
     full_start_time = time()
     global engine
-    if not engine: # Initialize engine if not already done
+    if not engine:  # Initialize engine if not already done
         engine = init_engine()
 
     # Define the set of columns to select, based on settings.
@@ -51,43 +54,59 @@ def retrieve_copyright_items() -> pl.DataFrame:
 
     # Modify col_order in place or create new set for select_cols
     select_cols_str_list: list[str] = []
-    if "google_search_file" in col_order: col_order.remove("google_search_file")
-    if "type" in col_order: col_order.remove("type")
+    if "google_search_file" in col_order:
+        col_order.remove("google_search_file")
+    if "type" in col_order:
+        col_order.remove("type")
 
     final_select_cols: set[str] = set()
     for col in col_order:
-        if col == "faculty": # Assuming 'faculty' in raw_data_col_order means 'faculty_id' from DB
+        if (
+            col == "faculty"
+        ):  # Assuming 'faculty' in raw_data_col_order means 'faculty_id' from DB
             final_select_cols.add("cd.faculty_id AS faculty")
         else:
-            final_select_cols.add(f"cd.{col}") # Qualify with alias
+            final_select_cols.add(f"cd.{col}")  # Qualify with alias
 
     # Fallback if 'faculty' was not in raw_data_col_order but is expected
-    if "cd.faculty_id AS faculty" not in final_select_cols and "faculty" not in final_select_cols:
-         # Check if 'faculty_id' is in the model to decide if we should add it
-         # For now, let's assume if 'faculty' is desired, 'faculty_id AS faculty' is the way
-         pass # Or add it explicitly if it's always needed: select_cols.add("cd.faculty_id AS faculty")
+    if (
+        "cd.faculty_id AS faculty" not in final_select_cols
+        and "faculty" not in final_select_cols
+    ):
+        # Check if 'faculty_id' is in the model to decide if we should add it
+        # For now, let's assume if 'faculty' is desired, 'faculty_id AS faculty' is the way
+        pass  # Or add it explicitly if it's always needed: select_cols.add("cd.faculty_id AS faculty")
 
+    query: LiteralString = (
+        f"SELECT {', '.join(final_select_cols)} FROM copyright_data cd"
+    )
 
-    query: LiteralString = f"SELECT {', '.join(final_select_cols)} FROM copyright_data cd"
-
-    df: pl.DataFrame = pl.DataFrame() # Initialize empty DataFrame
+    df: pl.DataFrame = pl.DataFrame()  # Initialize empty DataFrame
     try:
         query_start_time = time()
         # Ensure engine is not None before connecting
         if engine:
             with engine.connect() as connection:
-                df = pl.read_database(query=query, connection=connection, infer_schema_length=None)
+                df = pl.read_database(
+                    query=query, connection=connection, infer_schema_length=None
+                )
             query_duration = time() - query_start_time
-            logger.debug(f"Query for retrieve_copyright_items took {query_duration:.4f} seconds.")
+            logger.debug(
+                f"Query for retrieve_copyright_items took {query_duration:.4f} seconds."
+            )
         else:
-            logger.error("SQLAlchemy engine not initialized for retrieve_copyright_items.")
+            logger.error(
+                "SQLAlchemy engine not initialized for retrieve_copyright_items."
+            )
 
     except Exception as e:
         logger.error(f"Error retrieving copyright items: {e}")
         logger.error(traceback.format_exc())
 
     full_duration = time() - full_start_time
-    logger.info(f"retrieve_copyright_items returned {len(df)} rows in {full_duration:.4f} seconds.")
+    logger.info(
+        f"retrieve_copyright_items returned {len(df)} rows in {full_duration:.4f} seconds."
+    )
     return df
 
 
@@ -115,10 +134,14 @@ def retrieve_duplicate_copyright_items() -> pl.DataFrame:
     try:
         if engine:
             with engine.connect() as connection:
-                df = pl.read_database(query=query, connection=connection, infer_schema_length=None)
+                df = pl.read_database(
+                    query=query, connection=connection, infer_schema_length=None
+                )
             logger.info(f"Retrieved {len(df)} duplicate copyright items.")
         else:
-            logger.error("SQLAlchemy engine not initialized for retrieve_duplicate_copyright_items.")
+            logger.error(
+                "SQLAlchemy engine not initialized for retrieve_duplicate_copyright_items."
+            )
     except Exception as e:
         logger.error(f"Error retrieving duplicate copyright items: {e}")
         logger.error(traceback.format_exc())
@@ -140,9 +163,15 @@ def get_valid_faculties() -> set[str]:
     try:
         if engine:
             with engine.connect() as conn:
-                result = conn.execute(text("SELECT f.abbreviation FROM faculty f")) # Assuming table name is 'faculty'
-                valid_faculties = {row[0] for row in result.fetchall() if row[0] is not None}
-            logger.debug(f"Retrieved {len(valid_faculties)} valid faculties: {valid_faculties}")
+                result = conn.execute(
+                    text("SELECT f.abbreviation FROM faculty f")
+                )  # Assuming table name is 'faculty'
+                valid_faculties = {
+                    row[0] for row in result.fetchall() if row[0] is not None
+                }
+            logger.debug(
+                f"Retrieved {len(valid_faculties)} valid faculties: {valid_faculties}"
+            )
         else:
             logger.error("SQLAlchemy engine not initialized for get_valid_faculties.")
     except Exception as e:
@@ -183,44 +212,71 @@ def retrieve_full_data(
     material_exclusion_clause: str = ""
 
     try:
-        with engine.connect() as conn: # Ensure connection is managed
+        with engine.connect() as conn:  # Ensure connection is managed
             if selected_material_ids:
                 selected_ids_list = list(selected_material_ids)
                 if not selected_ids_list:
-                    logger.warning("retrieve_full_data received empty selected_material_ids. Returning empty DataFrame.")
+                    logger.warning(
+                        "retrieve_full_data received empty selected_material_ids. Returning empty DataFrame."
+                    )
                     return pl.DataFrame()
                 # Use temporary table for large lists of IDs for better performance
-                conn.execute(text("DROP TABLE IF EXISTS temp_select_material_ids;")) # Use temp_select_material_ids
-                conn.execute(text("CREATE TEMP TABLE temp_select_material_ids (material_id INTEGER PRIMARY KEY);"))
                 conn.execute(
-                    text("INSERT INTO temp_select_material_ids (material_id) VALUES (:material_id)"),
+                    text("DROP TABLE IF EXISTS temp_select_material_ids;")
+                )  # Use temp_select_material_ids
+                conn.execute(
+                    text(
+                        "CREATE TEMP TABLE temp_select_material_ids (material_id INTEGER PRIMARY KEY);"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO temp_select_material_ids (material_id) VALUES (:material_id)"
+                    ),
                     [{"material_id": mat_id} for mat_id in selected_ids_list],
                 )
-                conn.commit() # Commit DDL and inserts for temp table
+                conn.commit()  # Commit DDL and inserts for temp table
                 material_join_clause = "INNER JOIN temp_select_material_ids tsmid ON cd.material_id = tsmid.material_id"
 
             if excluded_material_ids:
-                excluded_ids_list = [str(id_val) for id_val in excluded_material_ids if id_val is not None]
+                excluded_ids_list = [
+                    str(id_val)
+                    for id_val in excluded_material_ids
+                    if id_val is not None
+                ]
                 if excluded_ids_list:
-                    material_exclusion_clause = f"AND cd.material_id NOT IN ({', '.join(excluded_ids_list)})"
+                    material_exclusion_clause = (
+                        f"AND cd.material_id NOT IN ({', '.join(excluded_ids_list)})"
+                    )
 
             if selected_faculties:
-                faculties_to_filter = [selected_faculties] if isinstance(selected_faculties, str) else list(selected_faculties)
+                faculties_to_filter = (
+                    [selected_faculties]
+                    if isinstance(selected_faculties, str)
+                    else list(selected_faculties)
+                )
                 invalid_faculties = set(faculties_to_filter) - valid_faculties
                 if invalid_faculties:
-                    logger.error(f"Invalid faculty abbreviations provided: {invalid_faculties}")
+                    logger.error(
+                        f"Invalid faculty abbreviations provided: {invalid_faculties}"
+                    )
                     # Decide behavior: raise error, or filter by valid ones only? For now, log and continue with valid.
                     # raise ValueError(f"Invalid faculty abbreviations: {invalid_faculties}")
-                    faculties_to_filter = [f for f in faculties_to_filter if f in valid_faculties]
+                    faculties_to_filter = [
+                        f for f in faculties_to_filter if f in valid_faculties
+                    ]
 
                 if faculties_to_filter:
                     faculties_string = "', '".join(faculties_to_filter)
-                    faculty_where_clause = f"AND cd.faculty_id IN ('{faculties_string}')"
-                else: # All provided faculties were invalid, or list was empty
-                    logger.warning("No valid faculties selected for filtering in retrieve_full_data, may return empty if faculty filter was intended.")
+                    faculty_where_clause = (
+                        f"AND cd.faculty_id IN ('{faculties_string}')"
+                    )
+                else:  # All provided faculties were invalid, or list was empty
+                    logger.warning(
+                        "No valid faculties selected for filtering in retrieve_full_data, may return empty if faculty filter was intended."
+                    )
                     # To ensure it returns nothing if faculties were specified but all invalid:
                     # faculty_where_clause = "AND 1=0"
-
 
             # Note: SQL query uses LEFT JOINs which can be slow on large tables without proper indexing.
             # Consider optimizing JOIN conditions and ensuring foreign keys are indexed.
@@ -259,20 +315,26 @@ def retrieve_full_data(
                 GROUP BY cd.material_id -- Ensure one row per copyright item if multiple courses/contacts exist
                 ORDER BY cd.material_id;
             """
-            df = pl.read_database(query=query, connection=conn, infer_schema_length=None)
-            if selected_material_ids: # Clean up temp table
+            df = pl.read_database(
+                query=query, connection=conn, infer_schema_length=None
+            )
+            if selected_material_ids:  # Clean up temp table
                 conn.execute(text("DROP TABLE IF EXISTS temp_select_material_ids;"))
                 conn.commit()
 
-
-        cols_to_drop = ["llm_classification_id", "created_at", "modified_at", "possible_fine", "infringement"]
+        cols_to_drop = [
+            "llm_classification_id",
+            "created_at",
+            "modified_at",
+            "possible_fine",
+            "infringement",
+        ]
         existing_cols_to_drop = [col for col in cols_to_drop if col in df.columns]
         if existing_cols_to_drop:
             df = df.drop(existing_cols_to_drop)
 
-        if "faculty_id" in df.columns: # Ensure faculty_id is renamed if present
-             df = df.rename(mapping={"faculty_id": "faculty"})
-
+        if "faculty_id" in df.columns:  # Ensure faculty_id is renamed if present
+            df = df.rename(mapping={"faculty_id": "faculty"})
 
         if df.is_empty():
             logger.info("retrieve_full_data returned no rows.")
@@ -284,7 +346,14 @@ def retrieve_full_data(
         #     return pl.DataFrame() # Return empty if all material_ids are null
 
         # Process JSON-like list columns (e.g. from LLM data)
-        llm_list_cols = ["llm_isbn", "llm_doi", "llm_source_url", "llm_license", "llm_authors", "llm_topic"]
+        llm_list_cols = [
+            "llm_isbn",
+            "llm_doi",
+            "llm_source_url",
+            "llm_license",
+            "llm_authors",
+            "llm_topic",
+        ]
         for colname in llm_list_cols:
             if colname in df.columns:
                 try:
@@ -292,25 +361,32 @@ def retrieve_full_data(
                     # If it's already a list (e.g. from some DBs), just join.
                     # This part is tricky as pl.read_database might already parse some JSON.
                     df = df.with_columns(
-                        pl.col(colname).map_elements(
-                            lambda x: " | ".join(json.loads(x)) if isinstance(x, str) and x.startswith("[") else
-                                      (" | ".join(x) if isinstance(x, list) else x),
-                            return_dtype=pl.Utf8
-                        ).alias(colname)
+                        pl.col(colname)
+                        .map_elements(
+                            lambda x: " | ".join(json.loads(x))
+                            if isinstance(x, str) and x.startswith("[")
+                            else (" | ".join(x) if isinstance(x, list) else x),
+                            return_dtype=pl.Utf8,
+                        )
+                        .alias(colname)
                     )
-                except Exception as e: # Broad exception for varied parsing issues
-                    logger.warning(f"Could not process/join list-like column '{colname}': {e}. Column type: {df[colname].dtype}")
+                except Exception as e:  # Broad exception for varied parsing issues
+                    logger.warning(
+                        f"Could not process/join list-like column '{colname}': {e}. Column type: {df[colname].dtype}"
+                    )
         logger.info(f"retrieve_full_data processed {len(df)} rows.")
 
     except Exception as e:
         logger.error(f"Error in retrieve_full_data: {e}")
         logger.error(traceback.format_exc())
-        return pl.DataFrame() # Return empty DataFrame on error
+        return pl.DataFrame()  # Return empty DataFrame on error
 
     return df
 
 
-def get_llm_classification_schema() -> dict[str, pl.PolarsDataType]: # Changed type to PolarsDataType
+def get_llm_classification_schema() -> dict[
+    str, pl.DataType
+]:  # Changed type to PolarsDataType
     """
     Defines the expected Polars schema for LLM classification data.
     Used for returning an empty DataFrame with correct types if no data is found.
@@ -319,15 +395,24 @@ def get_llm_classification_schema() -> dict[str, pl.PolarsDataType]: # Changed t
         dict[str, pl.PolarsDataType]: A dictionary mapping column names to Polars data types.
     """
     return {
-        "allowed_usage_llm": pl.Categorical, "allowed_usage_reasoning_llm": pl.Utf8,
-        "copyright_status_llm": pl.Categorical, "copyright_classification_reason_llm": pl.Utf8,
-        "item_type_llm": pl.Categorical, "item_type_classification_reason_llm": pl.Utf8,
-        "publisher_name_llm": pl.Utf8, "copyright_holder_llm": pl.Utf8,
-        "item_title_llm": pl.Utf8, "pdf_page_count_llm": pl.Int64,
-        "remarks_llm": pl.Utf8, "author_names_llm": pl.List(pl.Utf8),
-        "doi_llm": pl.List(pl.Utf8), "isbn_llm": pl.List(pl.Utf8),
-        "source_url_llm": pl.List(pl.Utf8), "license_llm": pl.List(pl.Utf8),
-        "topic_llm": pl.List(pl.Utf8), "material_id": pl.Int64, # Changed from Int64 to Utf8 if material_id is string
+        "allowed_usage_llm": pl.Categorical,
+        "allowed_usage_reasoning_llm": pl.Utf8,
+        "copyright_status_llm": pl.Categorical,
+        "copyright_classification_reason_llm": pl.Utf8,
+        "item_type_llm": pl.Categorical,
+        "item_type_classification_reason_llm": pl.Utf8,
+        "publisher_name_llm": pl.Utf8,
+        "copyright_holder_llm": pl.Utf8,
+        "item_title_llm": pl.Utf8,
+        "pdf_page_count_llm": pl.Int64,
+        "remarks_llm": pl.Utf8,
+        "author_names_llm": pl.List(pl.Utf8),
+        "doi_llm": pl.List(pl.Utf8),
+        "isbn_llm": pl.List(pl.Utf8),
+        "source_url_llm": pl.List(pl.Utf8),
+        "license_llm": pl.List(pl.Utf8),
+        "topic_llm": pl.List(pl.Utf8),
+        "material_id": pl.Int64,  # Changed from Int64 to Utf8 if material_id is string
     }
 
 
@@ -349,10 +434,12 @@ def retrieve_llm_classifications(
         engine = init_engine()
 
     df_schema = get_llm_classification_schema()
-    df: pl.DataFrame = pl.DataFrame(schema=df_schema) # Initialize with schema
+    df: pl.DataFrame = pl.DataFrame(schema=df_schema)  # Initialize with schema
 
     if not engine:
-        logger.error("SQLAlchemy engine not initialized for retrieve_llm_classifications.")
+        logger.error(
+            "SQLAlchemy engine not initialized for retrieve_llm_classifications."
+        )
         return df
 
     material_join_clause: str = ""
@@ -361,12 +448,22 @@ def retrieve_llm_classifications(
             if selected_material_ids:
                 selected_ids_list = list(selected_material_ids)
                 if not selected_ids_list:
-                    logger.warning("retrieve_llm_classifications received empty selected_material_ids.")
+                    logger.warning(
+                        "retrieve_llm_classifications received empty selected_material_ids."
+                    )
                     return df
-                conn.execute(text("DROP TABLE IF EXISTS temp_llm_material_ids;")) # Use specific temp table name
-                conn.execute(text("CREATE TEMP TABLE temp_llm_material_ids (material_id INTEGER PRIMARY KEY);"))
                 conn.execute(
-                    text("INSERT INTO temp_llm_material_ids (material_id) VALUES (:material_id)"),
+                    text("DROP TABLE IF EXISTS temp_llm_material_ids;")
+                )  # Use specific temp table name
+                conn.execute(
+                    text(
+                        "CREATE TEMP TABLE temp_llm_material_ids (material_id INTEGER PRIMARY KEY);"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO temp_llm_material_ids (material_id) VALUES (:material_id)"
+                    ),
                     [{"material_id": mat_id} for mat_id in selected_ids_list],
                 )
                 conn.commit()
@@ -375,34 +472,50 @@ def retrieve_llm_classifications(
             query: LiteralString = f"""
                 SELECT llm.* FROM llm_classification_data llm {material_join_clause}
             """
-            raw_df = pl.read_database(query=query, connection=conn, infer_schema_length=None)
+            raw_df = pl.read_database(
+                query=query, connection=conn, infer_schema_length=None
+            )
 
-            if selected_material_ids: # Clean up temp table
+            if selected_material_ids:  # Clean up temp table
                 conn.execute(text("DROP TABLE IF EXISTS temp_llm_material_ids;"))
                 conn.commit()
 
             if raw_df.is_empty():
                 logger.info("No LLM classifications found for the given criteria.")
-                return df # Return empty df with schema
+                return df  # Return empty df with schema
 
             # Rename columns and process JSON list columns
             rename_map = {
-                "allowed_usage": "allowed_usage_llm", "allowed_usage_reasoning": "allowed_usage_reasoning_llm",
-                "copyright_status": "copyright_status_llm", "copyright_classification_reason": "copyright_classification_reason_llm",
-                "item_type": "item_type_llm", "item_type_classification_reason": "item_type_classification_reason_llm",
-                "remarks": "remarks_llm", "author_names": "author_names_llm", "item_title": "item_title_llm",
-                "publisher_name": "publisher_name_llm", "copyright_holder": "copyright_holder_llm",
-                "doi": "doi_llm", "isbn": "isbn_llm", "source_url": "source_url_llm",
-                "license": "license_llm", "topic": "topic_llm", "pdf_page_count": "pdf_page_count_llm",
-                "used_material_id": "material_id", # This is key for joining
+                "allowed_usage": "allowed_usage_llm",
+                "allowed_usage_reasoning": "allowed_usage_reasoning_llm",
+                "copyright_status": "copyright_status_llm",
+                "copyright_classification_reason": "copyright_classification_reason_llm",
+                "item_type": "item_type_llm",
+                "item_type_classification_reason": "item_type_classification_reason_llm",
+                "remarks": "remarks_llm",
+                "author_names": "author_names_llm",
+                "item_title": "item_title_llm",
+                "publisher_name": "publisher_name_llm",
+                "copyright_holder": "copyright_holder_llm",
+                "doi": "doi_llm",
+                "isbn": "isbn_llm",
+                "source_url": "source_url_llm",
+                "license": "license_llm",
+                "topic": "topic_llm",
+                "pdf_page_count": "pdf_page_count_llm",
+                "used_material_id": "material_id",  # This is key for joining
             }
             # Select only columns that exist in raw_df before renaming
-            cols_to_rename = {k: v for k, v in rename_map.items() if k in raw_df.columns}
+            cols_to_rename = {
+                k: v for k, v in rename_map.items() if k in raw_df.columns
+            }
             df_renamed = raw_df.rename(cols_to_rename)
 
             # Drop Tortoise internal columns if they exist
             internal_cols_to_drop = ["id", "created_at", "modified_at"]
-            existing_internal_cols = [col for col in internal_cols_to_drop if col in df_renamed.columns]
+            existing_internal_cols = [
+                col for col in internal_cols_to_drop if col in df_renamed.columns
+            ]
             if existing_internal_cols:
                 df_processed = df_renamed.drop(existing_internal_cols)
             else:
@@ -410,26 +523,39 @@ def retrieve_llm_classifications(
 
             # Ensure material_id is of the correct type (matching schema)
             if "material_id" in df_processed.columns:
-                 df_processed = df_processed.with_columns(pl.col("material_id").cast(df_schema["material_id"]))
+                df_processed = df_processed.with_columns(
+                    pl.col("material_id").cast(df_schema["material_id"])
+                )
 
-
-            json_list_cols_renamed = ["author_names_llm", "doi_llm", "isbn_llm", "source_url_llm", "license_llm", "topic_llm"]
+            json_list_cols_renamed = [
+                "author_names_llm",
+                "doi_llm",
+                "isbn_llm",
+                "source_url_llm",
+                "license_llm",
+                "topic_llm",
+            ]
             for colname in json_list_cols_renamed:
                 if colname in df_processed.columns:
                     df_processed = df_processed.with_columns(
-                        pl.col(colname).map_elements(
-                            lambda x: " | ".join(json.loads(x)) if isinstance(x, str) and x.startswith("[") else
-                                      (" | ".join(x) if isinstance(x, list) else x),
-                            return_dtype=pl.Utf8
-                        ).alias(colname)
+                        pl.col(colname)
+                        .map_elements(
+                            lambda x: " | ".join(json.loads(x))
+                            if isinstance(x, str) and x.startswith("[")
+                            else (" | ".join(x) if isinstance(x, list) else x),
+                            return_dtype=pl.Utf8,
+                        )
+                        .alias(colname)
                     )
-            logger.info(f"Retrieved and processed {len(df_processed)} LLM classifications.")
-            return df_processed # Return processed data
+            logger.info(
+                f"Retrieved and processed {len(df_processed)} LLM classifications."
+            )
+            return df_processed  # Return processed data
 
     except Exception as e:
         logger.error(f"Error retrieving LLM classifications: {e}")
         logger.error(traceback.format_exc())
-        return df # Return empty df with schema on error
+        return df  # Return empty df with schema on error
 
 
 def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
@@ -456,7 +582,9 @@ def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
         return results
 
     if not material_ids:
-        logger.warning("No material IDs provided to retrieve_osiris_data. Returning empty list.")
+        logger.warning(
+            "No material IDs provided to retrieve_osiris_data. Returning empty list."
+        )
         return results
 
     # Ensure material_ids are integers for the query
@@ -529,38 +657,60 @@ def retrieve_osiris_data(material_ids: list[int]) -> list[dict[str, Any]]:
     try:
         with engine.connect() as conn:
             db_result = conn.execute(text(query)).fetchall()
-            for row_proxy in db_result: # Iterate over RowProxy objects
-                item_dict = dict(row_proxy._mapping) # Convert RowProxy to dict
+            for row_proxy in db_result:  # Iterate over RowProxy objects
+                item_dict = dict(row_proxy._mapping)  # Convert RowProxy to dict
 
                 # Safely parse top-level JSON fields
                 for key in ["faculty_data", "courses"]:
                     json_string = item_dict.get(key)
                     if isinstance(json_string, str):
-                        try: item_dict[key] = json.loads(json_string)
+                        try:
+                            item_dict[key] = json.loads(json_string)
                         except json.JSONDecodeError:
-                            logger.warning(f"Could not decode JSON for key '{key}' in material_id {item_dict.get('material_id')}. Value: '{json_string[:100]}...'")
-                            item_dict[key] = [] if key == "courses" else None # Default to empty list for courses, None for faculty
+                            logger.warning(
+                                f"Could not decode JSON for key '{key}' in material_id {item_dict.get('material_id')}. Value: '{json_string[:100]}...'"
+                            )
+                            item_dict[key] = (
+                                [] if key == "courses" else None
+                            )  # Default to empty list for courses, None for faculty
                     elif json_string is None and key == "courses":
-                        item_dict[key] = [] # Ensure courses is an empty list if null
+                        item_dict[key] = []  # Ensure courses is an empty list if null
 
                 # Safely parse nested JSON fields (persons, organizations)
                 if isinstance(item_dict.get("courses"), list):
                     for course in item_dict["courses"]:
-                        if isinstance(course, dict) and isinstance(course.get("persons"), str):
-                            try: course["persons"] = json.loads(course["persons"])
-                            except json.JSONDecodeError: course["persons"] = []
+                        if isinstance(course, dict) and isinstance(
+                            course.get("persons"), str
+                        ):
+                            try:
+                                course["persons"] = json.loads(course["persons"])
+                            except json.JSONDecodeError:
+                                course["persons"] = []
 
                         if isinstance(course.get("persons"), list):
                             for person in course["persons"]:
-                                if isinstance(person, dict) and isinstance(person.get("organizations"), str):
-                                    try: person["organizations"] = json.loads(person["organizations"])
-                                    except json.JSONDecodeError: person["organizations"] = []
-                                elif isinstance(person, dict) and "organizations" not in person:
-                                     person["organizations"] = [] # Ensure key exists
+                                if isinstance(person, dict) and isinstance(
+                                    person.get("organizations"), str
+                                ):
+                                    try:
+                                        person["organizations"] = json.loads(
+                                            person["organizations"]
+                                        )
+                                    except json.JSONDecodeError:
+                                        person["organizations"] = []
+                                elif (
+                                    isinstance(person, dict)
+                                    and "organizations" not in person
+                                ):
+                                    person["organizations"] = []  # Ensure key exists
                 results.append(item_dict)
-        logger.info(f"Retrieved and parsed Osiris data for {len(results)} material IDs.")
+        logger.info(
+            f"Retrieved and parsed Osiris data for {len(results)} material IDs."
+        )
     except Exception as e:
-        logger.error(f"Database query or JSON parsing failed in retrieve_osiris_data: {e}")
+        logger.error(
+            f"Database query or JSON parsing failed in retrieve_osiris_data: {e}"
+        )
         logger.error(traceback.format_exc())
 
     return results
@@ -577,23 +727,33 @@ async def retrieve_item_history(material_ids: list[int]) -> list[ItemUpdate]:
         list[ItemUpdate]: A list of ItemUpdate ORM objects. Returns an empty list if
                           no IDs are provided or no history is found.
     """
-    await init_tortoise() # Ensure Tortoise is initialized
+    await init_tortoise()  # Ensure Tortoise is initialized
 
     if not material_ids:
-        logger.warning("No material IDs provided to retrieve_item_history. Returning empty list.")
+        logger.warning(
+            "No material IDs provided to retrieve_item_history. Returning empty list."
+        )
         return []
 
     # Ensure material_ids are integers, as model expects int.
     try:
         processed_material_ids = [int(mid) for mid in material_ids]
     except (ValueError, TypeError) as e:
-        logger.error(f"Invalid material_ids provided for history: {material_ids}. Error: {e}")
+        logger.error(
+            f"Invalid material_ids provided for history: {material_ids}. Error: {e}"
+        )
         return []
 
     items: list[ItemUpdate] = []
     try:
-        items = await ItemUpdate.filter(material_id__in=processed_material_ids).all().order_by('-created_at')
-        logger.info(f"Retrieved {len(items)} history entries for {len(processed_material_ids)} material IDs.")
+        items = (
+            await ItemUpdate.filter(material_id__in=processed_material_ids)
+            .all()
+            .order_by("-created_at")
+        )
+        logger.info(
+            f"Retrieved {len(items)} history entries for {len(processed_material_ids)} material IDs."
+        )
     except Exception as e:
         logger.error(f"Error retrieving item history: {e}")
         logger.error(traceback.format_exc())
