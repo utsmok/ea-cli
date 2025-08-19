@@ -10,12 +10,10 @@ from datetime import datetime
 from typing import Any
 
 from loguru import logger
-from rich.console import Console
 
-cons = Console(emoji=True, markup=True)
-print: Callable[..., None] = cons.print
-
-
+def print(text:str):
+    print(text)
+    logger.warning('a print function was called...')
 
 def determine_course_code(code: str, name: str) -> set[str]:
     """Determines Osiris course code(s) from Canvas course data.

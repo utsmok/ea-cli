@@ -10,7 +10,6 @@ from typing import Any
 
 import polars as pl
 from loguru import logger
-from rich import print
 from tortoise import Tortoise
 
 from easy_access.db.base import copyright_item_from_dict, init, standardize_dataframe
@@ -367,11 +366,43 @@ async def update_copyright_items(
         data = standardize_dataframe(data)
         existing_mat_ids = await CopyrightItem.all().values("material_id")
         existing_mat_ids = {int(m["material_id"]) for m in existing_mat_ids}
-        new_items = (
+        # Candidate new items (may be partial if coming from faculty sheets)
+        candidate_new_items = (
             data.with_columns(pl.col("material_id").cast(int))
             .filter(~pl.col("material_id").is_in(existing_mat_ids))
             .to_dicts()
         )
+        # Only create new CopyrightItem objects when the incoming row contains
+        # the required, non-nullable fields present in the model. Faculty-sheet
+        # updates intentionally only include a few fields (material_id, workflow_status,
+        # remarks, manual_classification); those should not trigger creation of a
+        # full CopyrightItem. Filter out partial rows to avoid ValueError on save.
+        required_for_creation = [
+            "period",
+            "department",
+            "course_code",
+            "course_name",
+        ]
+        new_items = []
+        skipped_mat_ids: list[int] = []
+        for itm in candidate_new_items:
+            ok = True
+            for rc in required_for_creation:
+                v = itm.get(rc)
+                if v is None or (isinstance(v, str) and v.strip() == ""):
+                    ok = False
+                    break
+            if ok:
+                new_items.append(itm)
+            else:
+                try:
+                    skipped_mat_ids.append(int(itm.get("material_id")))
+                except Exception:
+                    skipped_mat_ids.append(itm.get("material_id"))
+        if skipped_mat_ids:
+            logger.warning(
+                f"Skipping {len(skipped_mat_ids)} new items missing required fields (not creating in DB): {skipped_mat_ids[:20]}"
+            )
         update_items = (
             data.with_columns(pl.col("material_id").cast(int))
             .filter(pl.col("material_id").is_in(existing_mat_ids))
@@ -419,11 +450,11 @@ async def update_copyright_items(
                     "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-                print(f"now in overwrite function for {new_item.get('material_id')}")
+                logger.debug(f"now in overwrite function for {new_item.get('material_id')}")
                 for k in changeable_fields | added_fields:
-                    print(f"checking field {k}")
-                    print(f"new_item.get(k): {new_item.get(k)}")
-                    print(f"getattr(db_item, k): {getattr(db_item, k)}")
+                    logger.debug(f"checking field {k}")
+                    logger.debug(f"new_item.get(k): {new_item.get(k)}")
+                    logger.debug(f"getattr(db_item, k): {getattr(db_item, k)}")
                     if new_item.get(k) is None:
                         continue
                     if new_item.get(k) != getattr(db_item, k):
@@ -437,17 +468,17 @@ async def update_copyright_items(
                             getattr(db_item, k),
                             "[overwrite] new value != old value",
                         )
-                        print(f"changes: {changes}")
+                        logger.debug(f"changes: {changes}")
                 # if any changes were made we'll have 3 or more keys in the changes dict
                 # if not, no need to update the db
-                print("final changes:")
-                print(changes)
+                logger.debug("final changes:")
+                logger.debug(changes)
                 if len(changes) >= 3:
                     changes["modified_at"] = datetime.now()
                     updates[new_item.get("material_id")] = changes
                     changelist.append(db_item)
                 else:
-                    print(f"No changes for item {new_item.get('material_id')}.")
+                    logger.debug(f"No changes for item {new_item.get('material_id')}.")
             except Exception as e:
                 logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
                 logger.warning(traceback.format_exc())
@@ -473,8 +504,6 @@ async def update_copyright_items(
                     changelist.append(db_item)
 
     if changelist:
-        print(f"changelist: {changelist}")
-        print(f"updates: {updates}")
         # get all values from 'updates'
         # then get list of all distinct keys from all those dicts
         # then drop keys 'material_id' and 'update_time'
@@ -489,7 +518,7 @@ async def update_copyright_items(
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)
         if user_info:
             [changes.update({"modified_by": cur_user}) for changes in updates.values()]
-            print(f"items modified by {cur_user}")
+            logger.info(f"items modified by {cur_user}")
 
         await ItemUpdate.bulk_create(
             [

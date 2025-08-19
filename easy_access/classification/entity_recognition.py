@@ -11,7 +11,6 @@ from gliner import GLiNER
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from loguru import logger
 from nameparser import HumanName
-from rich import print
 
 from easy_access.db.retrieve import retrieve_osiris_data
 from easy_access.settings import SETTINGS, DirSetting
@@ -203,9 +202,8 @@ def store_files(material_id: int, annotated_text: str, entities: list[Entity]) -
     except OSError as e:
         logger.warning(f"Error saving Markdown file {save_path_md}: {e}")
 
-    print(
-        f"Saved annotated text ([cyan]{save_path_md.name}[/]) and "
-        f"{len(entities_dict_list)} processed entities ([cyan]{save_path_json.name}[/])"
+    logger.info(
+        f"Saved annotated text ({save_path_md.name}) and {len(entities_dict_list)} processed entities ({save_path_json.name})"
     )
 
 
@@ -409,7 +407,7 @@ def determine_specific_names_from_db(material_id: int) -> dict[str, list[str]]:
                             person.get("people_page_url").split("/")[-1]
                         )
 
-    print(output_dict)
+    logger.debug(output_dict)
     return output_dict
 
 
@@ -444,7 +442,7 @@ def process_items(extract_text_type: str = "paddle") -> None:
     remaining_ids = set(all_ids) - set(all_already_extracted_ids)
     selected_files = []
     if not remaining_ids:
-        print("No files to process.")
+        logger.warning("No files to process.")
         return
     for id in remaining_ids:
         if id in missing_from_extracted:
@@ -457,7 +455,7 @@ def process_items(extract_text_type: str = "paddle") -> None:
 
         selected_files.append(file)
 
-    print(f"Found {len(selected_files)} files to process.")
+    logger.info(f"Found {len(selected_files)} files to process.")
     for file in selected_files:
         if "_" in file.name:
             material_id = int(file.name.split("_")[0])

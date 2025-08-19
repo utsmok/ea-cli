@@ -50,9 +50,9 @@ def retrieve_copyright_items(settings: Settings) -> pl.DataFrame: # Added settin
         query=query, connection=engine.connect(), infer_schema_length=None
     )
     end = time()
-    print(f"db.retrieve.retrieve_copyright_items returned {len(df)} rows")
-    print(f"query took {end - query_start} seconds")
-    print(f"full function took {end - full_start} seconds")
+    logger.info(f"db.retrieve.retrieve_copyright_items returned {len(df)} rows")
+    logger.info(f"query took {end - query_start} seconds")
+    logger.info(f"full function took {end - full_start} seconds")
     return df
 
 
@@ -251,7 +251,7 @@ def retrieve_full_data(
     if df.is_empty():
         return df
     if df["material_id"].is_null().all():
-        return None
+        return pl.DataFrame()
 
     # drop nulcols from llm cols
     llm_cols = ["llm_isbn", "llm_doi", "llm_source_url", "llm_license", "llm_authors"]
@@ -317,7 +317,7 @@ def get_llm_classification_schema() -> dict[str, type]:
         "license_llm": pl.List(pl.Utf8),
         "topic_llm": pl.List(pl.Utf8),
         "material_id": pl.Int64,
-    }
+    } # type: ignore
 
 
 def retrieve_llm_classifications(
@@ -329,7 +329,7 @@ def retrieve_llm_classifications(
         raise ValueError("Settings must be provided to retrieve_llm_classifications")
     if not engine:
         engine = init_engine(settings=settings) # Pass settings
-    material_join_clause: Literal[""] = ""
+    material_join_clause: str = ""
     with engine.connect() as conn:
         # print all table names
         if selected_material_ids is not None:
@@ -381,9 +381,9 @@ def retrieve_llm_classifications(
             }
         )
         if df.is_empty():
-            return None
+            return pl.DataFrame()
         if df["material_id"].is_null().all():
-            return None
+            return pl.DataFrame()
 
         return df.with_columns(
             [
@@ -562,7 +562,7 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
                         try:
                             item_dict[key] = json.loads(json_string)
                         except json.JSONDecodeError:
-                            print(
+                            logger.warning(
                                 f"Warning: Could not decode JSON for key '{key}' in material_id {item_dict.get('material_id')}. Value: {json_string}"
                             )
                             item_dict[key] = None
@@ -600,8 +600,8 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
                 results.append(item_dict)
 
     except Exception as e:
-        print(f"Database query failed: {e}")
-        print(traceback.format_exc())
+        logger.error(f"Database query failed: {e}")
+        logger.error(traceback.format_exc())
     finally:
         pass
 

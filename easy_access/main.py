@@ -14,6 +14,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
+import os
+import contextlib
+import io
 from loguru import logger
 
 from easy_access.db.base import init
@@ -33,7 +36,7 @@ from easy_access.sheets.sheet import (
     read_copyright_export,
     store_complete_data,
 )
-from easy_access.utils import Directory, File, print
+from easy_access.utils import Directory, File
 
 # Existing TODO block remains as it's a design/task list, not a module docstring.
 """
@@ -314,7 +317,7 @@ class EasyAccessTool:
         updated_items, mat_ids = asyncio.get_event_loop().run_until_complete(
             self.update_db_from_faculty_sheets()
         )
-        print(
+        logger.info(
             f"{len(mat_ids)} material_ids found in faculty sheets, {len(self.copyright_data)} items currently in copyright_data."
         )
 
@@ -447,6 +450,26 @@ class EasyAccessTool:
 
             return pl.concat([not_in_other, different_vals], how="diagonal_relaxed")
 
+        # Helper to quietly read Excel files with Polars.
+        # Polars/openpyxl sometimes emits many "Could not determine dtype for column"
+        # messages during inference. We suppress stdout/stderr during the read and
+        # then let our normal cleaning (clean_and_validate_df) cast columns to Utf8.
+        def _read_excel_quiet(path: str | Path, sheet_name: str) -> pl.DataFrame:
+            try:
+                # Redirect noisy output to devnull while reading
+                with open(os.devnull, "w") as devnull:
+                    with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                        df = pl.read_excel(path, sheet_name=sheet_name)
+                return df
+            except Exception:
+                # If an error occurs, try once without suppression so we get a helpful
+                # traceback/logging in normal operation; if that still fails, re-raise.
+                try:
+                    return pl.read_excel(path, sheet_name=sheet_name)
+                except Exception as e:
+                    logger.warning(f"Error reading {path} sheet {sheet_name}: {e}")
+                    raise
+
         select_cols: list[str] = [
             "material_id",
             "workflow_status",
@@ -470,13 +493,22 @@ class EasyAccessTool:
                 continue
             for file_obj in excel_files:
                 try:
-                    data_entry_df = pl.read_excel(
-                        file_obj.path,
-                        sheet_name=self.settings.data_settings.data_entry_name,
+                    data_entry_df = _read_excel_quiet(
+                        file_obj.path, self.settings.data_settings.data_entry_name
                     )
                 except Exception as e:
                     logger.warning(f"Error reading {file_obj.path}: {e}")
                     continue
+                # Also try to read the 'Complete data' sheet from the same file
+                complete_df = None
+                try:
+                    complete_df = _read_excel_quiet(
+                        file_obj.path, self.settings.data_settings.complete_data_name
+                    )
+                    # normalize column names to match expected format
+                    complete_df = self.clean_and_validate_df(complete_df)
+                except Exception:
+                    complete_df = None
 
                 data_entry_df = self.clean_and_validate_df(data_entry_df)
                 if data_entry_df.is_empty():
@@ -531,6 +563,28 @@ class EasyAccessTool:
                     logger.info(
                         f"Retrieved {changes_vs_update_df.shape[0]} probable updated items from {file_obj.path}."
                     )
+                    # If some of these material_ids are NEW (not in current copyright_data)
+                    # and the workbook contains a 'Complete data' sheet, prefer the full
+                    # row from that sheet so new CopyrightItem creation has required fields.
+                    if complete_df is not None and not self.copyright_data.is_empty():
+                        existing_mat_ids = set(
+                            str(x) for x in self.copyright_data.select(pl.col("material_id")).to_series().to_list()
+                        )
+                        replacements = []
+                        for row in changes_vs_update_df.to_dicts():
+                            mid = str(row.get("material_id"))
+                            if mid not in existing_mat_ids:
+                                try:
+                                    full_rows = complete_df.filter(pl.col("material_id").cast(pl.Utf8) == mid)
+                                    if not full_rows.is_empty():
+                                        # use the last matching full row (if duplicates)
+                                        replacements.append(full_rows.tail(1).to_dicts()[0])
+                                        continue
+                                except Exception:
+                                    pass
+                            replacements.append(row)
+                        changes_vs_update_df = pl.DataFrame(replacements)
+
                     update_df = pl.concat(
                         [update_df, changes_vs_update_df], how="diagonal_relaxed"
                     ).unique(subset=["material_id"], keep="last", maintain_order=True)

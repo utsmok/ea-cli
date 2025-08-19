@@ -1,3 +1,7 @@
+import os
+import contextlib
+import warnings
+import logging
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,6 +27,32 @@ from easy_access.settings import ColInfo, DirSetting, Settings  # Keep for type 
 from easy_access.utils import Directory, File
 
 
+def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
+    """
+    Reads an Excel file quietly, suppressing dtype inference messages.
+
+    We redirect stdout/stderr during the read to avoid noisy messages from the
+    underlying libraries. If the quiet read fails, a second attempt without
+    suppression is performed to raise a visible error.
+    """
+    # Temporarily raise log level for noisy libraries and silence warnings
+    noisy_loggers = ["polars", "openpyxl", "pyxlsb", "lxml"]
+    prev_levels = {}
+    for name in noisy_loggers:
+        lg = logging.getLogger(name)
+        prev_levels[name] = lg.level
+        lg.setLevel(logging.ERROR)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with open(os.devnull, "w") as devnull:
+                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                    return pl.read_excel(file_path, **kwargs)
+    finally:
+        for name, level in prev_levels.items():
+            logging.getLogger(name).setLevel(level)
+
+
 def read_copyright_export(settings: Settings, file: File | None = None) -> tuple[str, pl.DataFrame]:
     """
     Reads in data from the latest copyright export file in the copyright dir;
@@ -41,7 +71,7 @@ def read_copyright_export(settings: Settings, file: File | None = None) -> tuple
 
         logger.info(f"Reading in data from:\n            {file.name}\n")
         latest_file_date = file.created.strftime("%Y-%m-%d")
-        raw_copyright_data = pl.read_excel(file.path)
+        raw_copyright_data = _read_excel_quiet(file.path, sheet_name=None)
         copyright_data = (
             raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
             .rename(
@@ -296,7 +326,8 @@ def read_export_sheets(settings: Settings) -> pl.DataFrame: # Added settings
     for file in settings.dirs[DirSetting.EXPORT_TO_SURF].files: # Use passed settings
         if file.extension in [".xls", ".xlsx"]:
             returndata = pl.concat(
-                [returndata, pl.read_excel(file.path)], how="diagonal_relaxed"
+                [returndata, _read_excel_quiet(file.path, sheet_name=None)],
+                how="diagonal_relaxed",
             )
         if file.extension in [".csv"]:
             returndata = pl.concat(

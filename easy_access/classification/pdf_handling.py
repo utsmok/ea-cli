@@ -62,8 +62,8 @@ async def batch_extract_pdf_text(
                 # write extracted text to file
                 with open(pdf_dir.full / f"{pdf.material_id}.md", "w") as f:
                     f.write(content)
-                print(f"Extracted text for {pdf.material_id}:\n")
-                print(content)
+                logger.debug(f"Extracted text for {pdf.material_id}:\n")
+                logger.debug(content)
 
             if metadata:
                 title = metadata.get("title")

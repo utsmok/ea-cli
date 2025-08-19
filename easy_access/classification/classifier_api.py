@@ -11,7 +11,6 @@ from functools import partial
 import pikepdf
 from aiometer import amap
 from google import genai
-from rich.console import Console
 
 from easy_access.classification.classifier_models import Classification
 from easy_access.classification.pdf_handling import extract_pdf_text
@@ -20,8 +19,6 @@ from easy_access.db.ingest import load_llm_classifications
 from easy_access.db.models import PDF, CopyrightItem
 from easy_access.settings import SETTINGS, DirSetting
 from loguru import logger
-
-console = Console(emoji=True, markup=True)
 
 client = None
 prompt = """From the included document, first extract and determine a list of metadata, then determine the copyright status and item type for this item.
@@ -116,7 +113,7 @@ async def classify_pdf(
                 new_pdf.save(temp_stream)
                 return temp_stream.getvalue()
         except Exception as e:
-            print(f"Error processing PDF: {e}")
+            logger.error(f"Error processing PDF: {e}")
             return b""
 
     contents = None
@@ -148,7 +145,7 @@ async def classify_pdf(
                     [prompt, pdf_text]
                 )
         if full_pdf:
-            print(f"Uploading {pdf.current_file_name} to gemini storage.")
+            logger.debug(f"Uploading {pdf.current_file_name} to gemini storage.")
             try:
                 # select only the first 20 pages
                 pdf_bytes = await send_pdf_to_gemini(pdf, max_pages=20)
@@ -165,12 +162,12 @@ async def classify_pdf(
                     f"You received the pdf file {pdf.current_file_name}.\n" + prompt,
                 ]
             except Exception as e:
-                print(e)
+                logger.error(e)
                 return pdf, None
 
-        print(f"sent request for {mat_id}")
+        logger.debug(f"sent request for {mat_id}")
         if not mat_id:
-            print(f"Could not extract material id from {pdf.current_file_name}")
+            logger.warning(f"Could not extract material id from {pdf.current_file_name}")
             return pdf, None
         response = client.models.generate_content(
             model="gemini-2.0-flash",
@@ -188,10 +185,10 @@ async def classify_pdf(
         if parsed:
             if isinstance(parsed, Classification):
                 parsed.pdf_name = pdf.current_file_name
-                print(f"returned response for {mat_id}")
+                logger.debug(f"returned response for {mat_id}")
                 return pdf, parsed
             else:
-                print(f"Error parsing response for {mat_id}")
+                logger.warning(f"Error parsing response for {mat_id}")
                 return pdf, None
         else:
             if response.candidates:
@@ -200,22 +197,21 @@ async def classify_pdf(
                         reason = candidate.finish_reason.value
 
             if reason:
-                print(f"No result for {mat_id}, reason: {reason}")
+                logger.warning(f"No result for {mat_id}, reason: {reason}")
             else:
-                print(
+                logger.warning(
                     f"No response for {mat_id},\n\n parsed: {parsed}.\n\n response:{response}"
                 )
             return pdf, None
     except Exception as e:
-        print(f"Error while classifying {pdf.current_file_name}: {e}")
-        console.print(e)
+        logger.error(f"Error while classifying {pdf.current_file_name}: {e}")
         return
 
 
 def delete_files():
-    console.print("Deleting files from gemini storage.")
+    logger.info("Deleting files from gemini storage.")
     for f in client.files.list():
-        console.print("Deleting: ", f.name)
+        logger.debug(f"Deleting: {f.name}")
         client.files.delete(name=str(f.name))
 
 
@@ -233,10 +229,10 @@ async def classify_items(files: list[PDF]) -> int:
                 continue
             if not classification:
                 continue
-            console.print(classification)
+            logger.debug(classification)
             mat_id = pdf.material_id
             json_name = f"{mat_id}.json"
-            console.print(f"Storing results as {json_name}")
+            logger.debug(f"Storing results as {json_name}")
             if os.path.exists(
                 SETTINGS.dirs[DirSetting.CLASSIFICATIONS].full / f"{json_name}"
             ):
@@ -254,7 +250,7 @@ async def classify_items(files: list[PDF]) -> int:
                 ) as f:
                     f.write(classification.model_dump_json(indent=2, warnings="warn"))
             except Exception as e:
-                console.print(f"Could not store {json_name}: {e}")
+                logger.error(f"Could not store {json_name}: {e}")
                 continue
 
     return 1
@@ -297,18 +293,18 @@ async def main(subset: list[int] | list[str] | None = None):
         ]
         pdfs = await PDF.filter(material_id__in=items_without_classifications).all()
 
-    console.print(f"{len(pdfs)} files found requiring classification.")
+    logger.info(f"{len(pdfs)} files found requiring classification.")
 
     pdf_batch = []
     batch_start_time = time.time()
     for total, pdf in enumerate(pdfs, 1): # Start enumeration from 1
         pdf_batch.append(pdf)
         if len(pdf_batch) == 10:  # rate limit to 10 requests per minute
-            print("awaiting results for a batch of 10 files...")
+            logger.debug("awaiting results for a batch of 10 files...")
             await classify_items(pdf_batch)
-            print(f"\n           Processed {total}/{len(pdfs)} files.\n\n")
+            logger.info(f"\n           Processed {total}/{len(pdfs)} files.\n\n")
             if time.time() - batch_start_time < 120:
-                console.print(
+                logger.info(
                     f"Sleeping for {60 - (time.time() - batch_start_time)} seconds to avoid rate limit."
                 )
                 await asyncio.sleep(60 - (time.time() - batch_start_time))

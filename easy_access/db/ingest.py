@@ -8,6 +8,9 @@ from collections import Counter
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
+import os
+import contextlib
+from pathlib import Path
 
 from easy_access.db.base import (
     copyright_item_from_dict,
@@ -64,12 +67,16 @@ async def load_osiris_data(settings: Settings) -> None:
     existing_course_codes = await Course().all().values("cursuscode")
     existing_course_codes = {int(c["cursuscode"]) for c in existing_course_codes}
     for course_data in osiris_data.values():
-        if int(
-            course_data.get("cursuscode", 0)
-        ) in existing_course_codes or not course_data.get("cursuscode"):
+        course_code_raw = course_data.get("cursuscode", 0)
+        if not isinstance(course_code_raw, int) and not isinstance(course_code_raw, str):
+            logger.warning(f"Invalid course code: {course_code_raw}. Skipping course.")
+            continue
+        else:
+            course_code = int(course_code_raw)
+        if course_code in existing_course_codes or not course_data.get("cursuscode"):
             continue
         course_dict: dict[str, str | list[str] | None] = {
-            "cursuscode": int(course_data.get("cursuscode")),
+            "cursuscode": course_code,
             "internal_id": int(course_data.get("internal_id")),
             "name": course_data.get("name", None),
             "short_name": course_data.get("short_name", None),
@@ -392,6 +399,16 @@ async def load_base_data(settings: Settings) -> None:
 
 
 async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame | None = None) -> None:
+    def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
+        """Read excel quietly suppressing noisy dtype-inference output."""
+        try:
+            with open(os.devnull, "w") as devnull:
+                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                    return pl.read_excel(file_path, **kwargs)
+        except Exception:
+            return pl.read_excel(file_path, **kwargs)
+
+
     def read_copyright_export(settings_param: Settings, file_param: File | None = None) -> pl.DataFrame:
         """
         Reads in data from the latest copyright export file in the copyright dir;
@@ -410,7 +427,7 @@ async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame 
 
             logger.info(f"Reading in data from:\n            {file_param.name}\n")
             latest_file_date = file_param.created.strftime("%Y-%m-%d")
-            raw_copyright_data = pl.read_excel(file_param.path)
+            raw_copyright_data = _read_excel_quiet(file_param.path, sheet_name=None)
             copyright_data = (
                 raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
                 .rename(

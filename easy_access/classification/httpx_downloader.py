@@ -7,7 +7,6 @@ from pathlib import Path
 import httpx
 import polars as pl
 from loguru import logger
-from rich import print
 
 from easy_access.db.base import CopyrightItem, init
 from easy_access.db.models import Status
@@ -58,10 +57,10 @@ def load_cookies_from_file() -> httpx.Cookies:
         logger.success(f"Loaded {len(cookies)} cookies from JSON.")
         return cookies
     except json.JSONDecodeError as e:
-        print(f"[ERROR] Failed to decode JSON from cookie file: {e}")
+        logger.error(f"Failed to decode JSON from cookie file: {e}")
         raise
     except Exception as e:
-        print(f"[ERROR] Failed to load or parse cookie file '{cookie_file}': {e}")
+        logger.error(f"Failed to load or parse cookie file '{cookie_file}': {e}")
         raise
 
 
@@ -150,15 +149,15 @@ class HttpxDownloader:
 
         except httpx.HTTPStatusError as e:
             error_msg = f"HTTP error downloading {material_id}: {e.response.status_code} - {e.request.url} "
-            print(f"[ERROR] {error_msg}")
+            logger.error(error_msg)
             return False, None, error_msg
         except httpx.RequestError as e:
             error_msg = f"Network error downloading {material_id}: {e.__class__.__name__} - {e.request.url}"
-            print(f"[ERROR] {error_msg}")
+            logger.error(error_msg)
             return False, None, error_msg
         except Exception as e:
             error_msg = f"Unexpected error downloading {material_id}: {e.__class__.__name__} - {e}"
-            print(f"[ERROR] {error_msg}")
+            logger.error(error_msg)
             # Clean up potentially incomplete file
             if "filepath" in locals() and filepath.exists():
                 with contextlib.suppress(OSError):
@@ -266,7 +265,7 @@ async def get_urls_from_full_data() -> pl.DataFrame:
     )
     all_items = pl.from_dicts(all_items)
     logger.info("Loaded into dataframe.")
-    print(all_items.head())
+    logger.debug(all_items.head())
     material_ids_downloaded = [int(x) for x in get_already_downloaded_material_ids()]
     # cast col 'material_id' to int
     all_items = all_items.with_columns(pl.col("material_id").cast(pl.Int32))
