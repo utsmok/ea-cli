@@ -1,15 +1,16 @@
 import asyncio
 import contextlib
 import json
-from datetime import datetime
 from pathlib import Path
 
 import httpx
 import polars as pl
 from loguru import logger
+from tortoise.expressions import Q, Subquery
+from tortoise.transactions import in_transaction
 
 from easy_access.db.base import CopyrightItem, init
-from easy_access.db.models import Status
+from easy_access.db.models import PDF
 from easy_access.settings import SETTINGS, DirSetting, Settings
 
 SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
@@ -50,7 +51,11 @@ def load_cookies_from_file() -> httpx.Cookies:
                 # It handles secure attribute implicitly based on request URL scheme
                 # Expiry is not directly managed by the simple httpx.Cookies jar
                 # Note: Leading dots in domain (e.g., ".example.com") are handled correctly by httpx
-                cookies.set(name, value, domain=domain, path=path)
+                # httpx.Cookies.set expects a domain string; only pass domain if present
+                if domain:
+                    cookies.set(name, value, domain=domain, path=path)
+                else:
+                    cookies.set(name, value, path=path)
             else:
                 logger.info(f"Skipping invalid cookie object: {cookie_obj}")
 
@@ -122,9 +127,6 @@ class HttpxDownloader:
         download_url = (
             f"{base_domain}/users/{user_id}/files/{material_id}/download?download_frd=1"
         )
-        now = datetime.now()
-        timestamp = now.strftime("%Y%m%d%H%M%S")
-
         logger.success(f"Attempting download: {download_url}")
         try:
             async with self.client.stream("GET", download_url) as response:
@@ -145,15 +147,102 @@ class HttpxDownloader:
                 logger.info(
                     f"Successfully downloaded {bytes_downloaded} bytes to {filepath.name}"
                 )
+
+                # Persist download success in DB inside a transaction so the
+                # download flags reflect the real outcome immediately.
+                try:
+                    try:
+                        mat_id_int = int(material_id)
+                    except Exception:
+                        mat_id_int = None
+
+                    if mat_id_int is not None:
+                        async with in_transaction():
+                            related_item = await CopyrightItem.get_or_none(
+                                material_id=mat_id_int
+                            )
+                            pdf_obj = await PDF.get_or_none(material_id=mat_id_int)
+                            if pdf_obj:
+                                pdf_obj.current_file_name = filepath.name
+                                pdf_obj.download_attempted = True
+                                pdf_obj.download_succeeded = True
+                                if related_item:
+                                    pdf_obj.original_file_name = related_item.filename
+                                    pdf_obj.original_page_count = related_item.pagecount
+                                await pdf_obj.save()
+                            else:
+                                pdf_kwargs = {
+                                    "material_id": mat_id_int,
+                                    "current_file_name": filepath.name,
+                                    "download_attempted": True,
+                                    "download_succeeded": True,
+                                }
+                                if related_item:
+                                    pdf_kwargs["original_file_name"] = (
+                                        related_item.filename
+                                    )
+                                    pdf_kwargs["original_page_count"] = (
+                                        related_item.pagecount
+                                    )
+                                await PDF.create(**pdf_kwargs)
+                except Exception as e:
+                    logger.warning(f"Could not persist download success to DB: {e}")
+
                 return True, filepath, None
 
         except httpx.HTTPStatusError as e:
             error_msg = f"HTTP error downloading {material_id}: {e.response.status_code} - {e.request.url} "
             logger.error(error_msg)
+            # Persist failure state
+            try:
+                try:
+                    mat_id_int = int(material_id)
+                except Exception:
+                    mat_id_int = None
+
+                if mat_id_int is not None:
+                    async with in_transaction():
+                        pdf_obj = await PDF.get_or_none(material_id=mat_id_int)
+                        if pdf_obj:
+                            pdf_obj.download_attempted = True
+                            pdf_obj.download_succeeded = False
+                            await pdf_obj.save()
+                        else:
+                            await PDF.create(
+                                material_id=mat_id_int,
+                                current_file_name=f"{mat_id_int}.pdf",
+                                download_attempted=True,
+                                download_succeeded=False,
+                            )
+            except Exception as ex:
+                logger.warning(f"Could not persist download failure to DB: {ex}")
             return False, None, error_msg
         except httpx.RequestError as e:
             error_msg = f"Network error downloading {material_id}: {e.__class__.__name__} - {e.request.url}"
             logger.error(error_msg)
+            # Persist failure state (same as above)
+            try:
+                try:
+                    mat_id_int = int(material_id)
+                except Exception:
+                    mat_id_int = None
+
+                if mat_id_int is not None:
+                    async with in_transaction():
+                        pdf_obj = await PDF.get_or_none(material_id=mat_id_int)
+                        if pdf_obj:
+                            pdf_obj.download_attempted = True
+                            pdf_obj.download_succeeded = False
+                            await pdf_obj.save()
+                        else:
+                            await PDF.create(
+                                material_id=mat_id_int,
+                                current_file_name=f"{mat_id_int}.pdf",
+                                download_attempted=True,
+                                download_succeeded=False,
+                            )
+            except Exception as ex:
+                logger.warning(f"Could not persist download failure to DB: {ex}")
             return False, None, error_msg
         except Exception as e:
             error_msg = f"Unexpected error downloading {material_id}: {e.__class__.__name__} - {e}"
@@ -162,6 +251,29 @@ class HttpxDownloader:
             if "filepath" in locals() and filepath.exists():
                 with contextlib.suppress(OSError):
                     filepath.unlink()  # Ignore error during cleanup
+            # Persist failure state
+            try:
+                try:
+                    mat_id_int = int(material_id)
+                except Exception:
+                    mat_id_int = None
+
+                if mat_id_int is not None:
+                    async with in_transaction():
+                        pdf_obj = await PDF.get_or_none(material_id=mat_id_int)
+                        if pdf_obj:
+                            pdf_obj.download_attempted = True
+                            pdf_obj.download_succeeded = False
+                            await pdf_obj.save()
+                        else:
+                            await PDF.create(
+                                material_id=mat_id_int,
+                                current_file_name=f"{mat_id_int}.pdf",
+                                download_attempted=True,
+                                download_succeeded=False,
+                            )
+            except Exception as ex:
+                logger.warning(f"Could not persist download failure to DB: {ex}")
             return False, None, error_msg
 
 
@@ -207,7 +319,9 @@ async def main_download_all(settings: Settings, max_concurrent: int = 10):
                 failed_count += 1
                 failed_urls.append((urls_to_download[i], error_msg))
 
-        logger.success(f"Download complete. Success: {success_count}, Failed: {failed_count}")
+        logger.success(
+            f"Download complete. Success: {success_count}, Failed: {failed_count}"
+        )
         if failed_urls:
             logger.info("Failed URLs:")
             for url, err in failed_urls:
@@ -219,7 +333,7 @@ async def main_download_all(settings: Settings, max_concurrent: int = 10):
     return downloaded_files, failed_urls
 
 
-def get_already_downloaded_material_ids() -> list[str]:
+def get_currently_downloaded_material_ids() -> list[str]:
     """
     Retrieves material_ids from the pdfs in the download dir.
     """
@@ -244,46 +358,84 @@ async def get_urls_from_full_data() -> pl.DataFrame:
     From all CopyrightItems in the db, grab "material_id", "url", "workflow_status", "filename", and "status" for all non-deleted items.
     Returns a dataframe with those columns.
     """
-    full_item_len = await CopyrightItem.all().count()
+    # Exclude CopyrightItems that already have a PDF row marked as downloaded
+    # using a subquery so the filtering is executed in SQL (more efficient).
+    downloaded_subq = Subquery(
+        PDF.filter(download_succeeded=True).values("material_id")
+    )
     all_items = (
         await CopyrightItem.filter(url__isnull=False)
-        .filter(url__not_in=["", "-"])
-        .filter(
-            status__in=[
-                Status.PUBLISHED,
-                Status.UNPUBLISHED,
-                Status.PUBLISHED.value,
-                Status.UNPUBLISHED.value,
-            ]
-        )
-        .all()
+        .exclude(material_id__in=downloaded_subq)
         .values("material_id", "url", "workflow_status", "filename", "status")
     )
-    all_item_len = len(all_items)
     logger.info(
-        f"Loaded {all_item_len} items of {full_item_len} total amount of items in db. Filtered out url-less items and DELETED items."
+        f"Retrieved {len(all_items)} items from the database (excluded already-downloaded PDFs)."
     )
+    all_item_len = len(all_items)
+
     all_items = pl.from_dicts(all_items)
-    logger.info("Loaded into dataframe.")
+    logger.info("Loaded items into dataframe.")
     logger.debug(all_items.head())
-    material_ids_downloaded = [int(x) for x in get_already_downloaded_material_ids()]
+    # Parse material ids found on disk; skip any non-integer names
+    currently_downloaded_ids: list[int] = []
+    for x in get_currently_downloaded_material_ids():
+        try:
+            currently_downloaded_ids.append(int(x))
+        except Exception:
+            logger.debug(f"Skipping non-integer downloaded id from filename: {x}")
     # cast col 'material_id' to int
     all_items = all_items.with_columns(pl.col("material_id").cast(pl.Int32))
     amount_downloaded = len(
-        all_items.filter(all_items["material_id"].is_in(material_ids_downloaded))
+        all_items.filter(all_items["material_id"].is_in(currently_downloaded_ids))
     )
-    all_items = all_items.filter(
-        ~all_items["material_id"].is_in(material_ids_downloaded)
+    items_not_yet_downloaded = all_items.filter(
+        ~all_items["material_id"].is_in(currently_downloaded_ids)
     )
 
-    urls = all_items.with_columns(
+    urls = items_not_yet_downloaded.with_columns(
         pl.col("url").replace(old="-", new=None).replace("", None)
     ).select(["url", "material_id", "filename"])
     urls = urls.drop_nulls("url").unique("url")
     logger.info(
-        f"{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(material_ids_downloaded)} already downloaded files ({amount_downloaded}) ."
+        f"{len(urls)}/{all_item_len} urls remaining to download after filtering out {len(currently_downloaded_ids)} already downloaded files ({amount_downloaded}) ."
     )
-    input("Press any key to continue...")
+
+    if amount_downloaded > 0:
+        logger.info(
+            "Making sure to set 'download_attempted' and 'download_succeeded' to True for files that are already downloaded..."
+        )
+        # grab all PDF files with material_id found in `all_items`
+        # where:
+        # pdf.download_attempted == False
+        # or
+        # pdf.download_succeeded == None or False
+        # Build a queryset for PDFs that correspond to files present on disk
+        # but are not yet marked as attempted/succeeded in the DB.
+        queryset = PDF.filter(
+            Q(material_id__in=currently_downloaded_ids)
+            & (Q(download_attempted=False) | Q(download_succeeded__in=[None, False]))
+        )
+
+        # Perform a bulk update using the queryset.update(...) method which is
+        # executed on the DB side and returns the number of updated rows.
+        try:
+            to_mark = await queryset.count()
+            if to_mark:
+                updated = await queryset.update(
+                    download_attempted=True, download_succeeded=True
+                )
+                logger.info(
+                    f"Marked {updated} PDF row(s) as download_attempted=True and download_succeeded=True in DB."
+                )
+            else:
+                logger.debug("No PDF rows needed marking as downloaded in DB.")
+        except Exception as e:
+            logger.warning(
+                f"Error while marking existing PDFs as downloaded in DB: {e}"
+            )
+
+    # Non-interactive: don't block in async code. Continue execution.
+    logger.debug("Finished marking existing PDFs as downloaded (if any).")
     return urls
 
 
@@ -296,7 +448,7 @@ async def replace_canvas_id_with_material_id() -> None:
     and replace each occurrence of the canvas_id in any filename with the material_id
     """
 
-    await init()
+    await init(settings=SETTINGS)
     all_items = await CopyrightItem.all().values("material_id", "url")
 
     download_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
@@ -319,6 +471,8 @@ async def replace_canvas_id_with_material_id() -> None:
 
 # --- Example Usage ---
 def download_pdfs():
-    downloaded, failed = asyncio.run(main_download_all(settings=SETTINGS, max_concurrent=15))
+    downloaded, failed = asyncio.run(
+        main_download_all(settings=SETTINGS, max_concurrent=15)
+    )
     logger.info(f"\nDownloaded Files ({len(downloaded)})")
     logger.info(f"Failed Files ({len(failed)})")

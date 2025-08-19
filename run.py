@@ -35,6 +35,7 @@ from loguru import logger
 # third-party packages or forcing package downgrades.
 try:
     import inspect
+
     import click
 
     _orig_make_metavar = click.Parameter.make_metavar
@@ -44,6 +45,7 @@ try:
     # replace it with a thin wrapper that provides a default None so calls
     # without ctx don't raise a TypeError.
     if len(_params) >= 2 and _params[1].default is inspect._empty:
+
         def _make_metavar_compat(self, ctx=None):
             return _orig_make_metavar(self, ctx)
 
@@ -70,6 +72,7 @@ backup_app = typer.Typer(name="backup", help="Backup and restore operations.")
 app.add_typer(backup_app)
 
 # Commands for main app
+
 
 @app.command(name="process")
 def process_data(
@@ -129,8 +132,8 @@ def process_data(
             other_sheet = None
 
     # Import project modules here to avoid import-time side-effects when showing --help
-    from easy_access.settings import SETTINGS, EasyAccessSettings
     from easy_access.main import EasyAccessTool
+    from easy_access.settings import SETTINGS, EasyAccessSettings
 
     # Load settings from CLI params, using main SETTINGS for base dir config
     ea_settings = EasyAccessSettings.create_for_runtime(
@@ -151,9 +154,13 @@ def process_data(
 
 
 @app.command(name="dashboard")
-def run_dashboard(port: Annotated[int, typer.Option(help="Port to serve the dashboard on.")] = 8000, host: Annotated[str, typer.Option(help="Host to serve the dashboard on.")] = "0.0.0.0") -> None:
-    """Serves the easy_access dashboard.
-    """
+def run_dashboard(
+    port: Annotated[int, typer.Option(help="Port to serve the dashboard on.")] = 8000,
+    host: Annotated[
+        str, typer.Option(help="Host to serve the dashboard on.")
+    ] = "0.0.0.0",
+) -> None:
+    """Serves the easy_access dashboard."""
     logger.info("Serving the easy_access dashboard.")
     logger.info(f"Once launched, it will be available at http://{host}:{port}.")
     logger.info("Press Ctrl+C or close this terminal window to stop the server.")
@@ -189,31 +196,39 @@ def run_export(
         create_export_sheet(settings=SETTINGS)
     logger.success("Done creating export sheets.")
 
+
 # Commands for backup app
+
 
 @backup_app.command(name="create")
 def create_backup_command() -> None:
     """Creates a backup of the current data based on settings.yaml."""
-    from easy_access.sheets.backup import Backupper
     from easy_access.settings import SETTINGS
+    from easy_access.sheets.backup import Backupper
 
     backupper = Backupper()
     if SETTINGS.backup_settings.backup_all:
         logger.info("Creating backup as per settings.yaml (backup_all: true).")
         backupper.backup_files()
     else:
-        logger.info("Backup not created as per settings.yaml (backup_all: false or not set).")
+        logger.info(
+            "Backup not created as per settings.yaml (backup_all: false or not set)."
+        )
 
 
 @backup_app.command(name="restore")
 def restore_backup_command(
     restore_dir: Annotated[
         str,
-        typer.Option(help="Set which backup to restore. Options: 'latest','oldest','manual'"),
+        typer.Option(
+            help="Set which backup to restore. Options: 'latest','oldest','manual'"
+        ),
     ] = "latest",
     restore_strategy: Annotated[
         str,
-        typer.Option(help="Set the strategy for restoring the backup. Options: 'replace','merge_prefer_existing','merge_prefer_backup'"),
+        typer.Option(
+            help="Set the strategy for restoring the backup. Options: 'replace','merge_prefer_existing','merge_prefer_backup'"
+        ),
     ] = "replace",
 ) -> None:
     """Restores data from a backup."""
@@ -223,13 +238,17 @@ def restore_backup_command(
     try:
         select_enum = RestoreOptions(restore_dir)
     except Exception:
-        logger.warning(f"Invalid restore option '{restore_dir}', defaulting to 'latest'.")
+        logger.warning(
+            f"Invalid restore option '{restore_dir}', defaulting to 'latest'."
+        )
         select_enum = RestoreOptions.LATEST
 
     try:
         strategy_enum = RestoreStrategy(restore_strategy)
     except Exception:
-        logger.warning(f"Invalid restore strategy '{restore_strategy}', defaulting to 'replace'.")
+        logger.warning(
+            f"Invalid restore strategy '{restore_strategy}', defaulting to 'replace'."
+        )
         strategy_enum = RestoreStrategy.REPLACE
 
     backupper = Backupper()
@@ -245,6 +264,7 @@ def restore_backup_command(
 
 # Commands for pre-processing app
 
+
 @preprocess_app.command(name="run_all")
 def run_all_preprocess(
     osiris_update: Annotated[
@@ -258,17 +278,17 @@ def run_all_preprocess(
         typer.Option(
             help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
         ),
-    ] = True,
+    ] = False,
     single_faculty: Annotated[
         str | None,
         typer.Option(
             help="Only run the tool for a single faculty. use the faculty abbreviation as the parameter (e.g. 'BMS').",
         ),
     ] = None,
-    # download: Annotated[
-    #     bool,
-    #     typer.Option(help="Download pdfs from canvas."),
-    # ] = False,
+    download: Annotated[
+        bool,
+        typer.Option(help="Download pdfs from canvas."),
+    ] = False,
     # classify: Annotated[
     #     bool,
     #     typer.Option(help="Classify the pdfs by LLM."),
@@ -280,10 +300,15 @@ def run_all_preprocess(
 ) -> None:
     """(Currently Stubs) Runs all pre-processing steps: PDF download, classification, deduplication."""
     logger.info("Running pre-processing steps (download, deduplicate, classify)...")
-    logger.info("First, running the tool in read-only mode to update DB data if needed.")
+    logger.info(
+        "First, running the tool in read-only mode to update DB data if needed."
+    )
 
-    from easy_access.settings import SETTINGS, EasyAccessSettings
+    import asyncio
+
+    from easy_access.classification.httpx_downloader import main_download_all
     from easy_access.main import EasyAccessTool
+    from easy_access.settings import SETTINGS, EasyAccessSettings
 
     ea_temp_settings = EasyAccessSettings.create_for_runtime(
         main_settings=SETTINGS,
@@ -301,11 +326,16 @@ def run_all_preprocess(
 
     logger.info("Actual pre-processing steps (download, deduplicate, classify) follow.")
     logger.warning(
-        "Download, deduplication, and classification steps are currently stubs and not implemented."
+        "deduplication and classification steps are currently stubs and not implemented."
     )
-    # if download:
-    #     logger.info("Downloading PDFs...")
-    #     # ... downloader logic ...
+    if download:
+        logger.info("Downloading PDFs...")
+        downloaded, failed = asyncio.run(
+            main_download_all(settings=SETTINGS, max_concurrent=15)
+        )
+        logger.info(f"\nDownloaded Files ({len(downloaded)})")
+        logger.info(f"Failed Files ({len(failed)})")
+
     # if deduplicate:
     #     logger.info("Deduplicating PDFs...")
     #     # ... deduplicator logic ...
@@ -313,8 +343,7 @@ def run_all_preprocess(
     #     logger.info("Classifying PDFs...")
     #     # ... classifier logic ...
     logger.success("Pre-processing steps finished")
-
-
+    typer.Exit()
 
 
 if __name__ == "__main__":

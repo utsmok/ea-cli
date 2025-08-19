@@ -2,15 +2,15 @@
 functions to ingest new data into the database
 """
 
+import contextlib
 import json
+import os
 from collections import Counter
+from pathlib import Path
 
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
-import os
-import contextlib
-from pathlib import Path
 
 from easy_access.db.base import (
     copyright_item_from_dict,
@@ -68,7 +68,9 @@ async def load_osiris_data(settings: Settings) -> None:
     existing_course_codes = {int(c["cursuscode"]) for c in existing_course_codes}
     for course_data in osiris_data.values():
         course_code_raw = course_data.get("cursuscode", 0)
-        if not isinstance(course_code_raw, int) and not isinstance(course_code_raw, str):
+        if not isinstance(course_code_raw, int) and not isinstance(
+            course_code_raw, str
+        ):
             logger.warning(f"Invalid course code: {course_code_raw}. Skipping course.")
             continue
         else:
@@ -352,29 +354,45 @@ async def load_base_data(settings: Settings) -> None:
     try:
         faculty_count = await Faculty.all().count()
         programme_count = await Programme.all().count()
-        logger.info(f"# of Faculties present in DB before load_org_data: {faculty_count}")
-        logger.info(f"# of Programmes present in DB before load_org_data: {programme_count}")
+        logger.info(
+            f"# of Faculties present in DB before load_org_data: {faculty_count}"
+        )
+        logger.info(
+            f"# of Programmes present in DB before load_org_data: {programme_count}"
+        )
 
         await load_org_data_from_settings(settings=settings)
 
         faculty_count = await Faculty.all().count()
         programme_count = await Programme.all().count()
-        logger.success(f"# of Faculties present in DB after load_org_data: {faculty_count}")
-        logger.success(f"# of Programmes present in DB after load_org_data: {programme_count}")
+        logger.success(
+            f"# of Faculties present in DB after load_org_data: {faculty_count}"
+        )
+        logger.success(
+            f"# of Programmes present in DB after load_org_data: {programme_count}"
+        )
 
         course_count = await Course.all().count()
-        logger.info(f"# of Courses present in DB before load_osiris_data: {course_count}")
+        logger.info(
+            f"# of Courses present in DB before load_osiris_data: {course_count}"
+        )
 
         await load_osiris_data(settings=settings)
 
         course_count = await Course.all().count()
-        logger.success(f"# of Courses present in DB after load_osiris_data: {course_count}")
+        logger.success(
+            f"# of Courses present in DB after load_osiris_data: {course_count}"
+        )
 
         person_count = await Person.all().count()
         org_count = await Organization.all().count()
         missing_orgs = await MissingCourse.all().count()
-        logger.info(f"# of Persons present in DB before load_person_data: {person_count}")
-        logger.info(f"# of Organizations present in DB before load_person_data: {org_count}")
+        logger.info(
+            f"# of Persons present in DB before load_person_data: {person_count}"
+        )
+        logger.info(
+            f"# of Organizations present in DB before load_person_data: {org_count}"
+        )
         logger.info(
             f"# of MissingCourses present in DB before load_person_data: {missing_orgs}"
         )
@@ -384,8 +402,12 @@ async def load_base_data(settings: Settings) -> None:
         org_count = await Organization.all().count()
         person_count = await Person.all().count()
         missing_orgs = await MissingCourse.all().count()
-        logger.success(f"# of Persons present in DB after load_person_data: {person_count}")
-        logger.success(f"# of Organizations present in DB after load_person_data: {org_count}")
+        logger.success(
+            f"# of Persons present in DB after load_person_data: {person_count}"
+        )
+        logger.success(
+            f"# of Organizations present in DB after load_person_data: {org_count}"
+        )
         logger.success(
             f"# of MissingCourses present in DB after load_person_data: {missing_orgs}"
         )
@@ -398,18 +420,24 @@ async def load_base_data(settings: Settings) -> None:
     await Tortoise.close_connections()
 
 
-async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame | None = None) -> None:
+async def load_raw_copyright_data(
+    settings: Settings, file: File | pl.DataFrame | None = None
+) -> None:
     def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
         """Read excel quietly suppressing noisy dtype-inference output."""
         try:
             with open(os.devnull, "w") as devnull:
-                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                with (
+                    contextlib.redirect_stdout(devnull),
+                    contextlib.redirect_stderr(devnull),
+                ):
                     return pl.read_excel(file_path, **kwargs)
         except Exception:
             return pl.read_excel(file_path, **kwargs)
 
-
-    def read_copyright_export(settings_param: Settings, file_param: File | None = None) -> pl.DataFrame:
+    def read_copyright_export(
+        settings_param: Settings, file_param: File | None = None
+    ) -> pl.DataFrame:
         """
         Reads in data from the latest copyright export file in the copyright dir;
         or if a file is given, reads in that file.
@@ -449,7 +477,8 @@ async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame 
                     .dt.strftime("%Y-%m-%d"),
                     pl.col("classification").str.to_lowercase(),
                     faculty=pl.col("department").replace_strict(
-                        settings_param.university_settings.department_mapping, default="Unmapped"
+                        settings_param.university_settings.department_mapping,
+                        default="Unmapped",
                     ),
                 )
             )
@@ -457,7 +486,9 @@ async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame 
             # now drop rows we definitely do not want.
             # - drop row if material_id is null, None, blank, or '-'
             # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
-            logger.info(f"Retrieved {len(copyright_data)} items from {file_param.name}.")
+            logger.info(
+                f"Retrieved {len(copyright_data)} items from {file_param.name}."
+            )
 
             copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
             copyright_data = copyright_data.filter(
@@ -470,7 +501,9 @@ async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame 
             )
             return copyright_data
         except FileNotFoundError as e:
-            logger.warning(f"No files found in {settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA]}")
+            logger.warning(
+                f"No files found in {settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
+            )
             raise e
         except PermissionError as e:
             logger.warning(f"Permission denied to read {file_param.name}")
@@ -490,13 +523,15 @@ async def load_raw_copyright_data(settings: Settings, file: File | pl.DataFrame 
     )
     if file is not None:
         if isinstance(file, pl.DataFrame):
-            logger.info(f"loading {len(file)} raw copyright items into db from dataframe.")
+            logger.info(
+                f"loading {len(file)} raw copyright items into db from dataframe."
+            )
             df = file
         else:
             logger.info(f"loading raw items from {file}")
     try:
         if not isinstance(file, pl.DataFrame):
-            if file is None: # file here is the parameter of load_raw_copyright_data
+            if file is None:  # file here is the parameter of load_raw_copyright_data
                 logger.info("loading raw items from most recent raw copyright export")
             df = read_copyright_export(settings_param=settings, file_param=file)
 
@@ -603,7 +638,9 @@ async def load_llm_classifications(settings: Settings) -> None:
                 logger.warning(f"Error loading json file {file.name}: {e}")
                 continue
 
-        logger.success(f"Retrieved {len(data_list)} new llm classifications, now adding to db.")
+        logger.success(
+            f"Retrieved {len(data_list)} new llm classifications, now adding to db."
+        )
         if deletelist:
             for f in deletelist:
                 f.delete()
@@ -718,13 +755,18 @@ async def load_pdfs(settings: Settings) -> None:
     for mat_id, pdf_file in pdf_files.items():
         related_item = await CopyrightItem.get_or_none(material_id=int(mat_id))
         if not related_item:
-            logger.warning(f"No related item found for pdf with material_id {mat_id}. Skipping.")
+            logger.warning(
+                f"No related item found for pdf with material_id {mat_id}. Skipping."
+            )
             continue
         pdf_dict = {
             "material_id": int(mat_id),
             "current_file_name": pdf_file.name,
             "original_file_name": related_item.filename,
             "original_page_count": related_item.pagecount,
+            # file exists on disk, so mark download as attempted and succeeded
+            "download_attempted": True,
+            "download_succeeded": True,
         }
         pdf_dicts.append(pdf_dict)
 
