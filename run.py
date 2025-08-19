@@ -21,18 +21,36 @@ from typing import Annotated
 import typer
 import uvicorn
 
-from easy_access.main import EasyAccessTool
-from easy_access.settings import (  # Import the main Settings class
-    SETTINGS,
-    EasyAccessSettings,
-)
-from easy_access.sheets.backup import (
-    Backupper,
-    RestoreOptions,
-    RestoreStrategy,
-)
-from easy_access.sheets.sheet import create_export_sheet
+# Delay importing project modules that may perform work at import-time.
+# Import them inside the command functions to avoid side-effects when
+# the module is imported just to show --help.
 from loguru import logger
+
+# Compatibility shim: some combinations of Typer and Click/Rich have a
+# small signature mismatch where Typer's rich help calls
+# `param.make_metavar()` without providing the `ctx` argument while newer
+# Click versions require `ctx`. Detect that case at runtime and wrap
+# `click.Parameter.make_metavar` so it accepts an optional `ctx` (default
+# None). This is a minimal, local compatibility fix that avoids editing
+# third-party packages or forcing package downgrades.
+try:
+    import inspect
+    import click
+
+    _orig_make_metavar = click.Parameter.make_metavar
+    _sig = inspect.signature(_orig_make_metavar)
+    _params = list(_sig.parameters.values())
+    # If the original has a required ctx parameter (positional, no default),
+    # replace it with a thin wrapper that provides a default None so calls
+    # without ctx don't raise a TypeError.
+    if len(_params) >= 2 and _params[1].default is inspect._empty:
+        def _make_metavar_compat(self, ctx=None):
+            return _orig_make_metavar(self, ctx)
+
+        click.Parameter.make_metavar = _make_metavar_compat
+except Exception:
+    # If anything goes wrong here, fall back to normal behavior.
+    pass
 
 # INIT typer apps
 
@@ -102,8 +120,6 @@ def process_data(
     ] = None,
 ) -> None:
     """Runs the main Easy Access data processing workflow."""
-
-
     if other_sheet:
         try:
             other_sheet = Path(other_sheet)  # Ensure it's a Path object
@@ -112,19 +128,22 @@ def process_data(
             logger.warning(f"Failed to parse path to other sheet: {e}")
             other_sheet = None
 
+    # Import project modules here to avoid import-time side-effects when showing --help
+    from easy_access.settings import SETTINGS, EasyAccessSettings
+    from easy_access.main import EasyAccessTool
+
     # Load settings from CLI params, using main SETTINGS for base dir config
-    ea_settings = EasyAccessSettings.create_for_runtime(  # Renamed method
-        main_settings=SETTINGS,  # Pass the main SETTINGS object
-        export=False,  # 'export' is now a separate command
+    ea_settings = EasyAccessSettings.create_for_runtime(
+        main_settings=SETTINGS,
+        export=False,
         only_changes=changes,
         refresh_osiris_data=osiris_update,
         other_sheet=other_sheet,
-        only_retrieve_missing_osiris_data=not osiris_full_refresh,  # Corrected logic
+        only_retrieve_missing_osiris_data=not osiris_full_refresh,
         disable_writes=disable_writes,
         faculty=single_faculty,
     )
 
-    # The main SETTINGS object is loaded globally in easy_access.settings
     tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)
     tool.run()
 
@@ -138,6 +157,8 @@ def run_dashboard(port: Annotated[int, typer.Option(help="Port to serve the dash
     logger.info("Serving the easy_access dashboard.")
     logger.info(f"Once launched, it will be available at http://{host}:{port}.")
     logger.info("Press Ctrl+C or close this terminal window to stop the server.")
+    from easy_access.settings import SETTINGS
+
     uvicorn.run(
         "easy_access.dashboard.dash:app",
         host=host,
@@ -157,14 +178,15 @@ def run_export(
     ] = None,
 ) -> None:
     """Creates export sheets."""
+    from easy_access.settings import SETTINGS
+    from easy_access.sheets.sheet import create_export_sheet
+
     if single_faculty:
         logger.info(f"Exporting data for faculty: {single_faculty}")
         create_export_sheet(settings=SETTINGS, faculty=single_faculty)
     else:
         logger.info("Creating export sheets for all faculties.")
-        create_export_sheet(
-            settings=SETTINGS
-        )
+        create_export_sheet(settings=SETTINGS)
     logger.success("Done creating export sheets.")
 
 # Commands for backup app
@@ -172,8 +194,11 @@ def run_export(
 @backup_app.command(name="create")
 def create_backup_command() -> None:
     """Creates a backup of the current data based on settings.yaml."""
+    from easy_access.sheets.backup import Backupper
+    from easy_access.settings import SETTINGS
+
     backupper = Backupper()
-    if SETTINGS.backup_settings.backup_all:  # Check main settings
+    if SETTINGS.backup_settings.backup_all:
         logger.info("Creating backup as per settings.yaml (backup_all: true).")
         backupper.backup_files()
     else:
@@ -183,22 +208,37 @@ def create_backup_command() -> None:
 @backup_app.command(name="restore")
 def restore_backup_command(
     restore_dir: Annotated[
-        RestoreOptions,
-        typer.Option(help="Set which backup to restore."),
-    ] = RestoreOptions.LATEST,
+        str,
+        typer.Option(help="Set which backup to restore. Options: 'latest','oldest','manual'"),
+    ] = "latest",
     restore_strategy: Annotated[
-        RestoreStrategy,
-        typer.Option(help="Set the strategy for restoring the backup."),
-    ] = RestoreStrategy.REPLACE,
+        str,
+        typer.Option(help="Set the strategy for restoring the backup. Options: 'replace','merge_prefer_existing','merge_prefer_backup'"),
+    ] = "replace",
 ) -> None:
     """Restores data from a backup."""
+    from easy_access.sheets.backup import Backupper, RestoreOptions, RestoreStrategy
+
+    # Map string inputs to enum values
+    try:
+        select_enum = RestoreOptions(restore_dir)
+    except Exception:
+        logger.warning(f"Invalid restore option '{restore_dir}', defaulting to 'latest'.")
+        select_enum = RestoreOptions.LATEST
+
+    try:
+        strategy_enum = RestoreStrategy(restore_strategy)
+    except Exception:
+        logger.warning(f"Invalid restore strategy '{restore_strategy}', defaulting to 'replace'.")
+        strategy_enum = RestoreStrategy.REPLACE
+
     backupper = Backupper()
     logger.info(
-        f"Restoring backup from '{restore_dir.value}' with strategy '{restore_strategy.value}'."
+        f"Restoring backup from '{select_enum.value}' with strategy '{strategy_enum.value}'."
     )
     backupper.restore_backup(
-        strategy=restore_strategy,
-        select=restore_dir,
+        strategy=strategy_enum,
+        select=select_enum,
     )
     logger.success("Backup restoration process finished.")
 
@@ -242,12 +282,15 @@ def run_all_preprocess(
     logger.info("Running pre-processing steps (download, deduplicate, classify)...")
     logger.info("First, running the tool in read-only mode to update DB data if needed.")
 
-    ea_temp_settings = EasyAccessSettings.create_for_runtime(  # Renamed method
-        main_settings=SETTINGS,  # Pass the main SETTINGS object
+    from easy_access.settings import SETTINGS, EasyAccessSettings
+    from easy_access.main import EasyAccessTool
+
+    ea_temp_settings = EasyAccessSettings.create_for_runtime(
+        main_settings=SETTINGS,
         export=False,
-        only_changes=True,  # Assuming this is a sensible default for pre-processing
+        only_changes=True,
         refresh_osiris_data=osiris_update,
-        other_sheet=None,  # Pre-processing typically works on existing DB data
+        other_sheet=None,
         only_retrieve_missing_osiris_data=not osiris_full_refresh,
         disable_writes=True,
         faculty=single_faculty,
