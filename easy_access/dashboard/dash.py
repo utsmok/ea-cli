@@ -146,7 +146,7 @@ async def get_osiris_data(material_id: int):
     Logic is almost completely found in the db.retrieve module.
 
     """
-    data = asyncio.to_thread(retrieve_osiris_data([material_id]))
+    data = await asyncio.to_thread(retrieve_osiris_data, [material_id], SETTINGS)
     if not data or len(data) == 0 or not isinstance(data, list):
         return []
     return data[0]
@@ -454,7 +454,9 @@ async def show_item_details(session: dict, material_id: int):
         return item_data.get(key, default)
 
     try:
-        nested_data_list = await asyncio.to_thread(retrieve_osiris_data, [material_id])
+        nested_data_list = await asyncio.to_thread(
+            retrieve_osiris_data, [material_id], SETTINGS
+        )
         if not nested_data_list:
             raise ValueError(
                 f"Material ID {material_id} not found in detailed data source."

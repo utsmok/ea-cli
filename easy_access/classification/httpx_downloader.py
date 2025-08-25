@@ -91,7 +91,9 @@ class HttpxDownloader:
         await self.client.aclose()
         logger.success("httpx client closed.")
 
-    async def download_file(self, url: str) -> tuple[bool, Path | None, str | None]:
+    async def download_file(
+        self, url: str, copyright_material_id: int
+    ) -> tuple[bool, Path | None, str | None]:
         """
         Downloads a file from a canvas URL using httpx.
 
@@ -289,18 +291,27 @@ async def main_download_all(settings: Settings, max_concurrent: int = 10):
         tasks = []
         await init(settings=settings)
 
-        async def download_with_semaphore(url):
+        async def download_with_semaphore(url, copyright_material_id):
             async with semaphore:
-                return await downloader.download_file(url)
+                return await downloader.download_file(url, copyright_material_id)
 
-        full_df: pl.DataFrame = await get_urls_from_full_data()
-        urls_to_download = full_df["url"].to_list()
+        full_df: pl.DataFrame = await get_urls_from_full_data(
+            skip_attempted_downloads=True
+        )
+        if full_df.is_empty():
+            logger.info("No URLs to download.")
+            return [], []
+        urls_to_download = full_df.select("url", "material_id").to_dicts()
 
         logger.success(
             f"Starting bulk download of {len(urls_to_download)} files (max concurrent: {max_concurrent})..."
         )
-        for url in urls_to_download:
-            tasks.append(download_with_semaphore(url))
+        for download_info in urls_to_download:
+            tasks.append(
+                download_with_semaphore(
+                    download_info.get("url"), download_info.get("material_id")
+                )
+            )
 
         results = await asyncio.gather(*tasks)
 
@@ -353,7 +364,9 @@ def get_currently_downloaded_material_ids() -> list[str]:
     return material_ids_downloaded
 
 
-async def get_urls_from_full_data() -> pl.DataFrame:
+async def get_urls_from_full_data(
+    skip_attempted_downloads: bool = False,
+) -> pl.DataFrame:
     """
     From all CopyrightItems in the db, grab "material_id", "url", "workflow_status", "filename", and "status" for all non-deleted items.
     Returns a dataframe with those columns.
@@ -363,15 +376,27 @@ async def get_urls_from_full_data() -> pl.DataFrame:
     downloaded_subq = Subquery(
         PDF.filter(download_succeeded=True).values("material_id")
     )
-    all_items = (
-        await CopyrightItem.filter(url__isnull=False)
-        .exclude(material_id__in=downloaded_subq)
-        .values("material_id", "url", "workflow_status", "filename", "status")
-    )
-    logger.info(
-        f"Retrieved {len(all_items)} items from the database (excluded already-downloaded PDFs)."
-    )
+    attempted_subq = Subquery(PDF.filter(download_attempted=True).values("material_id"))
+    if skip_attempted_downloads:
+        logger.info("Removing items with download_attempted=True from consideration.")
+        all_items = (
+            await CopyrightItem.filter(url__isnull=False)
+            .exclude(material_id__in=downloaded_subq)
+            .exclude(material_id__in=attempted_subq)
+            .values("material_id", "url", "workflow_status", "filename", "status")
+        )
+    else:
+        all_items = (
+            await CopyrightItem.filter(url__isnull=False)
+            .exclude(material_id__in=downloaded_subq)
+            .values("material_id", "url", "workflow_status", "filename", "status")
+        )
+
+    if not all_items:
+        logger.info("No items require downloading. Done!")
+        return pl.DataFrame()
     all_item_len = len(all_items)
+    logger.info(f"Retrieved {all_item_len} items from the database to download..")
 
     all_items = pl.from_dicts(all_items)
     logger.info("Loaded items into dataframe.")

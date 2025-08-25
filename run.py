@@ -279,6 +279,12 @@ def run_all_preprocess(
             help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            help="If enabled, will run the tool in dry-run mode to update the DB without changing .xlsx files.",
+        ),
+    ] = True,
     single_faculty: Annotated[
         str | None,
         typer.Option(
@@ -307,6 +313,7 @@ def run_all_preprocess(
     import asyncio
 
     from easy_access.classification.httpx_downloader import main_download_all
+    from easy_access.db.retrieve import retrieve_unmarked_deleted_items
     from easy_access.main import EasyAccessTool
     from easy_access.settings import SETTINGS, EasyAccessSettings
 
@@ -320,14 +327,17 @@ def run_all_preprocess(
         disable_writes=True,
         faculty=single_faculty,
     )
-    temp_tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_temp_settings)
-    temp_tool.run()
-    logger.success("Done updating data in read-only mode for pre-processing.")
+    if dry_run:
+        temp_tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_temp_settings)
+        temp_tool.run()
+        logger.success("Done updating data in read-only mode for pre-processing.")
 
-    logger.info("Actual pre-processing steps (download, deduplicate, classify) follow.")
-    logger.warning(
-        "deduplication and classification steps are currently stubs and not implemented."
-    )
+        logger.info(
+            "Actual pre-processing steps (download, deduplicate, classify) follow."
+        )
+        logger.warning(
+            "deduplication and classification steps are currently stubs and not implemented."
+        )
     if download:
         logger.info("Downloading PDFs...")
         downloaded, failed = asyncio.run(
@@ -335,6 +345,25 @@ def run_all_preprocess(
         )
         logger.info(f"\nDownloaded Files ({len(downloaded)})")
         logger.info(f"Failed Files ({len(failed)})")
+
+    # now use retrieve_unmarked_deleted_items function to see if any failed downloads correspond to unmarked deleted items
+    failed_items = asyncio.run(retrieve_unmarked_deleted_items(settings=SETTINGS))
+    if failed_items:
+        logger.info(
+            f"Found {len(failed_items)} failed downloads corresponding to unmarked deleted items."
+        )
+        skip = 0
+        for item in failed_items:
+            if not item.manual_classification:
+                skip += 1
+                continue
+            else:
+                logger.info(
+                    f" - {item.material_id} | {item.last_change} | {item.title} | {item.status} | {item.remarks} | {item.manual_classification}"
+                )
+        logger.info(
+            f"Skipped {skip}/{len(failed_items)} items without manual classification."
+        )
 
     # if deduplicate:
     #     logger.info("Deduplicating PDFs...")

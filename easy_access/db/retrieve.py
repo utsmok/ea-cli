@@ -6,7 +6,7 @@ import json
 import traceback
 from collections.abc import Iterable
 from time import time
-from typing import Any, Literal, LiteralString
+from typing import Any, LiteralString
 
 import polars as pl
 
@@ -14,15 +14,16 @@ import polars as pl
 from loguru import logger
 from sqlalchemy import Engine, text
 from tortoise import Tortoise
+from tortoise.expressions import Q
 
 from easy_access.db.base import init, init_engine
-from easy_access.db.models import ItemUpdate
+from easy_access.db.models import PDF, CopyrightItem, ItemUpdate
 from easy_access.settings import Settings  # Import Settings for type hint
 
 engine: Engine | None = None
 
 
-def retrieve_copyright_items(settings: Settings) -> pl.DataFrame: # Added settings
+def retrieve_copyright_items(settings: Settings) -> pl.DataFrame:  # Added settings
     """
     Retrieve all copyright items currently in db
     returns a flat dataframe with the core fields
@@ -30,9 +31,11 @@ def retrieve_copyright_items(settings: Settings) -> pl.DataFrame: # Added settin
     full_start = time()
     global engine
     if not engine:
-        engine = init_engine(settings=settings) # Pass settings
+        engine = init_engine(settings=settings)  # Pass settings
 
-    col_order: set[str] = set(settings.data_settings.raw_data_col_order) # Use passed settings
+    col_order: set[str] = set(
+        settings.data_settings.raw_data_col_order
+    )  # Use passed settings
 
     if "google_search_file" in col_order:
         col_order.remove("google_search_file")
@@ -56,14 +59,16 @@ def retrieve_copyright_items(settings: Settings) -> pl.DataFrame: # Added settin
     return df
 
 
-def retrieve_duplicate_copyright_items(settings: Settings) -> pl.DataFrame: # Added settings
+def retrieve_duplicate_copyright_items(
+    settings: Settings,
+) -> pl.DataFrame:  # Added settings
     """
     for copyright_items with duplicates, find the replacing material id
     returns a dataframe with 'material_id', 'is_duplicate', and 'replacement_id' columns
     """
     global engine
     if not engine:
-        engine = init_engine(settings=settings) # Pass settings
+        engine = init_engine(settings=settings)  # Pass settings
 
     query: str = """
         SELECT material_id, is_duplicate, replacement_id
@@ -76,11 +81,11 @@ def retrieve_duplicate_copyright_items(settings: Settings) -> pl.DataFrame: # Ad
     return df
 
 
-def get_valid_faculties(settings: Settings) -> set[str]: # Added settings
+def get_valid_faculties(settings: Settings) -> set[str]:  # Added settings
     """Retrieves the set of valid faculty abbreviations from the database."""
     global engine
     if not engine:
-        engine = init_engine(settings=settings) # Pass settings
+        engine = init_engine(settings=settings)  # Pass settings
     with engine.connect() as conn:
         result = conn.execute(text("SELECT abbreviation FROM faculty"))
         return {row[0] for row in result.fetchall()}
@@ -90,7 +95,8 @@ def retrieve_full_data(
     selected_material_ids: Iterable[int] | None = None,
     selected_faculties: Iterable[str] | str | None = None,
     excluded_material_ids: Iterable[int] | None = None,
-    settings: Settings | None = None, # Added settings, optional for now if not always available
+    settings: Settings
+    | None = None,  # Added settings, optional for now if not always available
 ) -> pl.DataFrame:
     """
     Retrieves copyright items, enriched with related data, with optional filtering.
@@ -113,8 +119,8 @@ def retrieve_full_data(
         raise ValueError("Settings must be provided to retrieve_full_data")
 
     if not engine:
-        engine = init_engine(settings=settings) # Pass settings
-    valid_faculties = get_valid_faculties(settings=settings) # Pass settings
+        engine = init_engine(settings=settings)  # Pass settings
+    valid_faculties = get_valid_faculties(settings=settings)  # Pass settings
     material_join_clause = ""
     faculty_where_clause = ""
     material_exclusion_clause = ""
@@ -290,8 +296,10 @@ def retrieve_full_data(
 
     # add droplist cols back in with empty values
     if droplist:
-        for _col in droplist: # Renamed col to _col as it's not used in the loop body directly
-            df = df.with_columns(pl.lit(None).alias(_col)) # Use _col in alias
+        for (
+            _col
+        ) in droplist:  # Renamed col to _col as it's not used in the loop body directly
+            df = df.with_columns(pl.lit(None).alias(_col))  # Use _col in alias
 
     return df
 
@@ -317,18 +325,18 @@ def get_llm_classification_schema() -> dict[str, type]:
         "license_llm": pl.List(pl.Utf8),
         "topic_llm": pl.List(pl.Utf8),
         "material_id": pl.Int64,
-    } # type: ignore
+    }  # type: ignore
 
 
 def retrieve_llm_classifications(
     selected_material_ids: Iterable[int] | None = None,
-    settings: Settings | None = None, # Added settings
+    settings: Settings | None = None,  # Added settings
 ) -> pl.DataFrame:
     global engine
     if not settings:
         raise ValueError("Settings must be provided to retrieve_llm_classifications")
     if not engine:
-        engine = init_engine(settings=settings) # Pass settings
+        engine = init_engine(settings=settings)  # Pass settings
     material_join_clause: str = ""
     with engine.connect() as conn:
         # print all table names
@@ -404,7 +412,9 @@ def retrieve_llm_classifications(
         )
 
 
-def retrieve_osiris_data(material_ids: list[int] | int, settings: Settings | None = None) -> list[dict[str, Any]]: # Added settings
+def retrieve_osiris_data(
+    material_ids: list[int] | int, settings: Settings | None = None
+) -> list[dict[str, Any]]:  # Added settings
     """
     Retrieves copyright data and richly nested related data (faculty, courses,
     persons, organizations) for the given material IDs using SQL JSON functions.
@@ -422,7 +432,7 @@ def retrieve_osiris_data(material_ids: list[int] | int, settings: Settings | Non
     if not settings:
         raise ValueError("Settings must be provided to retrieve_osiris_data")
     if not engine:
-        engine = init_engine(settings=settings) # Pass settings
+        engine = init_engine(settings=settings)  # Pass settings
     if not material_ids:
         logger.warning("No material IDs provided. Returning empty list.")
         return []
@@ -608,7 +618,9 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
     return results
 
 
-async def retrieve_item_history(material_ids: list[int], settings: Settings | None = None) -> list[ItemUpdate]: # Added settings
+async def retrieve_item_history(
+    material_ids: list[int], settings: Settings | None = None
+) -> list[ItemUpdate]:  # Added settings
     """
     Retrieves the history of changes for the given material IDs.
 
@@ -621,7 +633,7 @@ async def retrieve_item_history(material_ids: list[int], settings: Settings | No
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_item_history")
-    await init(settings=settings) # Pass settings
+    await init(settings=settings)  # Pass settings
 
     if not material_ids:
         logger.warning("No material IDs provided. Returning empty list.")
@@ -635,3 +647,38 @@ async def retrieve_item_history(material_ids: list[int], settings: Settings | No
     items = await ItemUpdate().filter(material_id__in=material_ids).all()
     await Tortoise.close_connections()
     return items
+
+
+async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightItem]:
+    """
+    for each PDF in the db that has been marked with 'download_succeeded'==False (NOTE: -not- is None!),
+    retrieve the corresponding copyright item using `material_id` (pk for both).
+
+    Return all copyrightitems that DO NOT have the status `deleted` but failed to download.
+    These are (probably) actually deleted, but aren't marked as such.
+    """
+    global engine
+    if not settings:
+        raise ValueError("Settings must be provided to retrieve_failed_downloads")
+    # Ensure Tortoise ORM is initialized before using ORM models
+    await init(settings=settings)
+
+    if not engine:
+        engine = init_engine(settings=settings)  # Pass settings
+
+    # Retrieve material_ids as a flat list of ints so it can be used in __in filters
+    deleted_pdfs = await PDF.filter(download_succeeded=False).values()
+    print(deleted_pdfs[0:5])
+    logger.info(
+        f'Retrieved {len(deleted_pdfs)} PDFs with "download_succeeded" set to False'
+    )
+    print(deleted_pdfs)
+    copyright_items = await CopyrightItem.filter(
+        Q(material_id__in=deleted_pdfs)
+    ).values()
+    print([item.get("status") for item in copyright_items])
+    print(
+        f"Retrieved {len(copyright_items)} copyright items associated with non-downloadable PDFs"
+    )
+    await Tortoise.close_connections()
+    return copyright_items

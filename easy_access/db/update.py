@@ -86,7 +86,9 @@ async def link_courses_to_copyright_items() -> None:
                 logger.warning(
                     f"Error while trying to get course {course_code} for item {item.material_id}: {e}"
                 )
-    logger.success(f"Added {links_added} links to {course_codes_found} found coursecodes.")
+    logger.success(
+        f"Added {links_added} links to {course_codes_found} found coursecodes."
+    )
 
 
 async def update_duplicate_status() -> None:
@@ -450,7 +452,9 @@ async def update_copyright_items(
                     "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-                logger.debug(f"now in overwrite function for {new_item.get('material_id')}")
+                logger.debug(
+                    f"now in overwrite function for {new_item.get('material_id')}"
+                )
                 for k in changeable_fields | added_fields:
                     logger.debug(f"checking field {k}")
                     logger.debug(f"new_item.get(k): {new_item.get(k)}")
@@ -480,7 +484,9 @@ async def update_copyright_items(
                 else:
                     logger.debug(f"No changes for item {new_item.get('material_id')}.")
             except Exception as e:
-                logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
+                logger.warning(
+                    f"Could not update item {new_item.get('material_id')}: {e}"
+                )
                 logger.warning(traceback.format_exc())
         else:
             try:
@@ -496,7 +502,9 @@ async def update_copyright_items(
                 )
 
             except Exception as e:
-                logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
+                logger.warning(
+                    f"Could not update item {new_item.get('material_id')}: {e}"
+                )
             finally:
                 if len(list(changes.keys())) >= 3:
                     changes["modified_at"] = datetime.now()
@@ -513,7 +521,9 @@ async def update_copyright_items(
         all_keys.discard("update_time")
         changed_fields = list(all_keys)
         changed_fields.append("modified_at")
-        logger.info(f"Updating {len(changelist)} items in db for fields {changed_fields}.")
+        logger.info(
+            f"Updating {len(changelist)} items in db for fields {changed_fields}."
+        )
         logger.info(f"Updating {len(updates)} changelog items in db.")
         await CopyrightItem.bulk_update(changelist, fields=changed_fields)
         if user_info:

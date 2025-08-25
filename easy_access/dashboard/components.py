@@ -507,8 +507,13 @@ def render_item_history(history: list[ItemUpdate]):
         if not changes:
             continue
         max_key_len = max(len(key) for key in changes)
+        try:
+            change_date = datetime.datetime.strptime(date[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            change_date = "?"
+            print(f"Warning: Invalid date format '{date}'. Using placeholder.")
         edit_content = [
-            f"<span class='badge badge-xs  badge-secondary text-[10px]'>{datetime.datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S')}</span>"
+            f"<span class='badge badge-xs  badge-secondary text-[10px]'>{change_date}</span>"
         ]
         edit_content.extend(
             [

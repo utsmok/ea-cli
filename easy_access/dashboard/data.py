@@ -18,6 +18,7 @@ from easy_access.dashboard.constants import (
 from easy_access.dashboard.web import AppState, load_app_state
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_item_history
 from easy_access.db.update import update_copyright_items
+from easy_access.settings import SETTINGS
 
 EMPTY_FILTERS: dict[str, list[str]] = {}
 
@@ -325,7 +326,7 @@ def get_item_df() -> pl.DataFrame:
     """
     Returns the global copyright DataFrame defined in this module, for use in other modules.
     """
-    return retrieve_copyright_items()
+    return retrieve_copyright_items(SETTINGS)
 
 
 def refresh_copyright_df() -> pl.DataFrame:
@@ -617,7 +618,11 @@ async def store_item_changes(
                 full_data_list.append(full_item_data)
 
     await update_copyright_items(
-        full_data_list, update_relations=False, overwrite=True, user_info=user_info
+        SETTINGS,
+        full_data_list,
+        update_relations=False,
+        overwrite=True,
+        user_info=user_info,
     )
 
     # the global_df is now stale, reload it
@@ -632,6 +637,6 @@ async def get_item_history(material_id: int):
     """
     retrieves the items edit history and parses it
     """
-    history = await retrieve_item_history([material_id])
+    history = await retrieve_item_history([material_id], SETTINGS)
 
     return history
