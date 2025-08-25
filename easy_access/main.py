@@ -10,16 +10,15 @@ coordinating the various data processing workflows, including:
 """
 
 import asyncio
+import contextlib
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
-import os
-import contextlib
-import io
 from loguru import logger
 
-from easy_access.db.base import init
+from easy_access.db.base import ensure_db_inited
 from easy_access.db.ingest import load_base_data, load_raw_copyright_data
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_full_data
 from easy_access.db.update import update_copyright_items
@@ -279,7 +278,7 @@ class EasyAccessTool:
             )
         else:
             fresh_db: bool | None = asyncio.get_event_loop().run_until_complete(
-                init(settings=self.settings)
+                ensure_db_inited(settings=self.settings)
             )
             if fresh_db:
                 asyncio.get_event_loop().run_until_complete(
@@ -458,7 +457,10 @@ class EasyAccessTool:
             try:
                 # Redirect noisy output to devnull while reading
                 with open(os.devnull, "w") as devnull:
-                    with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                    with (
+                        contextlib.redirect_stdout(devnull),
+                        contextlib.redirect_stderr(devnull),
+                    ):
                         df = pl.read_excel(path, sheet_name=sheet_name)
                 return df
             except Exception:
@@ -512,7 +514,9 @@ class EasyAccessTool:
 
                 data_entry_df = self.clean_and_validate_df(data_entry_df)
                 if data_entry_df.is_empty():
-                    logger.warning(f"No data found in data entry sheet of {file_obj.path}.")
+                    logger.warning(
+                        f"No data found in data entry sheet of {file_obj.path}."
+                    )
                     continue
 
                 current_file_mat_ids = (
@@ -568,17 +572,24 @@ class EasyAccessTool:
                     # row from that sheet so new CopyrightItem creation has required fields.
                     if complete_df is not None and not self.copyright_data.is_empty():
                         existing_mat_ids = set(
-                            str(x) for x in self.copyright_data.select(pl.col("material_id")).to_series().to_list()
+                            str(x)
+                            for x in self.copyright_data.select(pl.col("material_id"))
+                            .to_series()
+                            .to_list()
                         )
                         replacements = []
                         for row in changes_vs_update_df.to_dicts():
                             mid = str(row.get("material_id"))
                             if mid not in existing_mat_ids:
                                 try:
-                                    full_rows = complete_df.filter(pl.col("material_id").cast(pl.Utf8) == mid)
+                                    full_rows = complete_df.filter(
+                                        pl.col("material_id").cast(pl.Utf8) == mid
+                                    )
                                     if not full_rows.is_empty():
                                         # use the last matching full row (if duplicates)
-                                        replacements.append(full_rows.tail(1).to_dicts()[0])
+                                        replacements.append(
+                                            full_rows.tail(1).to_dicts()[0]
+                                        )
                                         continue
                                 except Exception:
                                     pass
@@ -614,7 +625,9 @@ class EasyAccessTool:
         Also triggers programme sheet creation if applicable for the faculty.
         """
         if self.disable_writes:
-            logger.warning("Writes are disabled. Skipping programme & faculty sheet creation.")
+            logger.warning(
+                "Writes are disabled. Skipping programme & faculty sheet creation."
+            )
             return
 
         if not hasattr(self, "latest_file_date") or not self.latest_file_date:
@@ -623,7 +636,9 @@ class EasyAccessTool:
             )
             return
 
-        logger.info(f"Exporting new items to faculty sheets for date {self.latest_file_date}")
+        logger.info(
+            f"Exporting new items to faculty sheets for date {self.latest_file_date}"
+        )
 
         int_mat_ids: list[int] = []
         if self.mat_ids_on_disk:
@@ -643,7 +658,9 @@ class EasyAccessTool:
                 pl.col("faculty") == faculty
             )
             if faculty_data.is_empty():
-                logger.warning(f"{faculty}:{gap}{faculty_data.shape[0]} (no new items, skipping)")
+                logger.warning(
+                    f"{faculty}:{gap}{faculty_data.shape[0]} (no new items, skipping)"
+                )
                 continue
 
             if faculty in self.settings.university_settings.course_mapping:
@@ -729,7 +746,9 @@ class EasyAccessTool:
             course_data = current_data.filter(pl.col("department") == course)
             gap = " " * (40 - len(course))
             if course_data.is_empty():
-                logger.warning(f"{course}:{gap}{course_data.shape[0]} (no new items, skipping)")
+                logger.warning(
+                    f"{course}:{gap}{course_data.shape[0]} (no new items, skipping)"
+                )
                 continue
 
             logger.info(f"Retrieved programme sheet data for {course}")
@@ -916,15 +935,21 @@ class EasyAccessTool:
                             if not movedir.exists:
                                 movedir.create()
                             file_obj.move(movedir.full / file_obj.name)
-                            logger.info(f"Moved overview: {file_obj.name} to {movedir.full}")
+                            logger.info(
+                                f"Moved overview: {file_obj.name} to {movedir.full}"
+                            )
                         except Exception as e:
-                            logger.warning(f"Could not move file {file_obj.name} to backup: {e}")
+                            logger.warning(
+                                f"Could not move file {file_obj.name} to backup: {e}"
+                            )
                     else:
                         try:
                             file_obj.delete()
                             logger.info(f"Deleted overview: {file_obj.name}")
                         except Exception as e:
-                            logger.warning(f"Could not delete file {file_obj.name}: {e}")
+                            logger.warning(
+                                f"Could not delete file {file_obj.name}: {e}"
+                            )
 
     def create_overviews(self) -> None:
         """
@@ -952,7 +977,9 @@ class EasyAccessTool:
         for faculty in self.faculties:
             if not faculty or faculty == "Unmapped":  # Skip empty or "Unmapped"
                 continue
-            data = retrieve_full_data(selected_faculties=faculty, settings=self.settings)
+            data = retrieve_full_data(
+                selected_faculties=faculty, settings=self.settings
+            )
             if data.is_empty():
                 logger.warning(
                     f"No data retrieved for faculty '{faculty}'. Skipping overview creation for this faculty."
@@ -983,7 +1010,9 @@ class EasyAccessTool:
         from the `sheets.sheet` module for each one.
         """
         if not self.faculties:
-            logger.warning("No faculties configured or detected. Skipping export sheet creation.")
+            logger.warning(
+                "No faculties configured or detected. Skipping export sheet creation."
+            )
             return
 
         for faculty in self.faculties:

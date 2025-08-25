@@ -12,7 +12,11 @@ import polars as pl
 from loguru import logger
 from tortoise import Tortoise
 
-from easy_access.db.base import copyright_item_from_dict, init, standardize_dataframe
+from easy_access.db.base import (
+    copyright_item_from_dict,
+    ensure_db_inited,
+    standardize_dataframe,
+)
 from easy_access.db.models import (
     PDF,
     Classification,
@@ -120,7 +124,7 @@ async def update_copyright_relations(settings: Settings) -> None:
     Go through the copyright items in the db
     use the values of the item fields to find links to other tables.
     """
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     await update_duplicate_status()
 
     await link_llm_classifications_to_copyright_items()
@@ -149,7 +153,9 @@ async def update_copyright_items(
     user_info: dict | None = None,
 ) -> None:
     """
-    TODO: REFACTOR
+    TODO: Decide if we want to refactor this?
+
+    IDEA:
 
     Split functionality based on type of input. Reuse logic where possible.
     Type of input mainly determines what to overwrite/update/compare.
@@ -181,9 +187,6 @@ async def update_copyright_items(
     --> user_info: dict | None, default: None
         The user info used to determine who made the changes. If None, will use the default user info.
         Currently only uses the 'email' field, stored in 'modified_by' in ItemUpdate.changes.
-
-
-
 
     """
     """
@@ -315,7 +318,7 @@ async def update_copyright_items(
 
         return changes, db_item
 
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     # Fields added by script.
     # dict with field name as key,
     # value are the ordered possible values:in case of conflict, take the earliest value

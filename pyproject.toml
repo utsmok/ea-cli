@@ -49,6 +49,7 @@ dependencies = [
     "sentence-transformers>=5.1.0",
     "ipython>=9.4.0",
     "fastexcel>=0.14.0",
+    "ty>=0.0.1a19",
 ]
 
 [tool.uv.sources]

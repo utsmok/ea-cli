@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fasthtml.common import *
-from rich import print
+from loguru import logger
 
 from easy_access.dashboard.constants import DEFAULT_PER_PAGE, db
 from easy_access.settings import SETTINGS, DirSetting
@@ -161,7 +161,7 @@ def load_app_state(session: dict) -> AppState:
         # Attempt to create AppState; might fail if dict structure is wrong
         state = AppState(**app_state_dict)
     except (TypeError, ValueError):
-        print("Warning: Invalid or missing app_state in session. Using default.")
+        logger.warning("Invalid or missing app_state in session. Using default.")
         state = AppState()  # Return default state
     return state
 

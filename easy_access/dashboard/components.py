@@ -7,8 +7,8 @@ import polars as pl
 from fastcore.utils import *
 from fasthtml.common import *
 from fasthtml.components import Button
+from loguru import logger
 from monsterui.all import *
-from rich import print
 
 import easy_access.dashboard.urls as urls
 from easy_access.dashboard.constants import (
@@ -110,12 +110,7 @@ def create_checkbox_filter_group(
     counts: Optional[dict[str, int | str]] = None,
 ) -> FT:
     """Creates a compact group of styled checkboxes with counts and HTMX trigger. Disabled options are minimized."""
-    # print(f"--- checkbox filter group: {filter_key} ---")
-    # print(f"  current_values: {current_values}")
-    # print(f"  current_total: {current_total}")
-    # print(f"  counts: {counts}")
-    # print(f"  options: {options}")
-    # print(f"  label_text: {label_text}")
+
     selected_values = set(current_values.split("|") if current_values else [])
     outer_group_id = f"filter-group-{filter_key}"
 
@@ -469,7 +464,7 @@ def render_item_history(history: list[ItemUpdate]):
     if not history:
         return Div("No history found for this item.")
 
-    print(f"Rendering item history for {len(history)} items")
+    logger.debug(f"Rendering item history for {len(history)} items")
     all_data: list[dict[str, str | dict[str, str]] | int | datetime.datetime] = [
         item.__dict__.get("change_details", {}) for item in history
     ]
@@ -511,7 +506,7 @@ def render_item_history(history: list[ItemUpdate]):
             change_date = datetime.datetime.strptime(date[:19], "%Y-%m-%d %H:%M:%S")
         except ValueError:
             change_date = "?"
-            print(f"Warning: Invalid date format '{date}'. Using placeholder.")
+            logger.warning(f"Warning: Invalid date format '{date}'. Using placeholder.")
         edit_content = [
             f"<span class='badge badge-xs  badge-secondary text-[10px]'>{change_date}</span>"
         ]
@@ -1291,7 +1286,7 @@ def create_editable_pill_div(
         if not isinstance(component_with_id.attrs, dict):
             component_with_id.attrs = {}
         component_with_id.attrs["id"] = target_id
-        print(
+        logger.debug(
             f"Assigned ID '{target_id}' to existing FT component: {component_with_id.tag}"
         )
     elif isinstance(component_with_id, str | int | float) or component_with_id is None:
@@ -1299,9 +1294,9 @@ def create_editable_pill_div(
             str(component_with_id) if component_with_id is not None else "",
             id=target_id,
         )
-        print(f"Wrapped simple content in Label with ID '{target_id}'")
+        logger.debug(f"Wrapped simple content in Label with ID '{target_id}'")
     else:
-        print(
+        logger.warning(
             f"Warning: Wrapping unknown component type for '{field_name}' in Label with ID '{target_id}'"
         )
         component_with_id = Label(component_with_id, id=target_id)

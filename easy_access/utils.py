@@ -5,15 +5,11 @@ import os
 import pathlib
 import shutil
 import time
-from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from loguru import logger
 
-def print(text:str):
-    print(text)
-    logger.warning('a print function was called...')
 
 def determine_course_code(code: str, name: str) -> set[str]:
     """Determines Osiris course code(s) from Canvas course data.
@@ -476,7 +472,6 @@ class File:
             raise FileNotFoundError(
                 f"File {self._path} does not exist. Cannot retrieve creation time."
             )
-
 
     @property
     def modified(self) -> datetime | None:

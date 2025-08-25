@@ -14,13 +14,13 @@ from easy_access.db.ingest import load_base_data
 
 # from easy_access.settings import SETTINGS, FileSetting # Will be passed
 from easy_access.settings import FileSetting, Settings  # Keep for type hinting
-from easy_access.utils import determine_course_code, print
+from easy_access.utils import determine_course_code
 
 
 async def update_osiris_data(
-    settings: Settings, # Added settings
+    settings: Settings,  # Added settings
     df: pl.DataFrame,
-    only_retrieve_missing: bool = False
+    only_retrieve_missing: bool = False,
 ) -> None:
     """
     For a given df with copyright items, retrieve all OSIRIS course data + person data from people pages.
@@ -80,8 +80,10 @@ async def update_osiris_data(
                 results = x.json().get("hits", {}).get("hits")
                 datadict = dict()
                 if not results:
-                    if not jaar: # jaar can be "" or 0 if decremented
-                        logger.warning(f"No data found for code {input_number} with no specific year after retries.")
+                    if not jaar:  # jaar can be "" or 0 if decremented
+                        logger.warning(
+                            f"No data found for code {input_number} with no specific year after retries."
+                        )
                         return {}
                     elif isinstance(jaar, int) and jaar == 2018:
                         jaar = ""
@@ -138,11 +140,10 @@ async def update_osiris_data(
                             "programme": rawdata.get("coordinerend_onderdeel_oms"),
                             "ec": rawdata.get("punten"),
                             "language": (
-                                [
-                                    x.get("voertaal_omschrijving")
-                                    for x in voertalen_data
-                                ]
-                                if isinstance(voertalen_data := rawdata.get("voertalen"), list)
+                                [x.get("voertaal_omschrijving") for x in voertalen_data]
+                                if isinstance(
+                                    voertalen_data := rawdata.get("voertalen"), list
+                                )
                                 else []
                             ),
                             "notes": rawdata.get("opmerking_cursus"),
@@ -154,7 +155,7 @@ async def update_osiris_data(
                             "unknown_role": set(),
                             "tutors": set(),
                         }
-                        print("\n") if print_details else None
+                        logger.debug("\n") if print_details else None
 
                     headers_course = {
                         "accept": "application/json, text/plain, */*",
@@ -191,9 +192,13 @@ async def update_osiris_data(
                             course_data = course_details.json()
                             for datapoint in course_data.get("items"):
                                 if datapoint.get("rubriek") == "rubriek-docenten":
-                                    _docentdata = datapoint.get("velden") # Prefixed with underscore
-                            if _docentdata: # Use the prefixed variable
-                                for docentitem in _docentdata: # Use the prefixed variable
+                                    _docentdata = datapoint.get(
+                                        "velden"
+                                    )  # Prefixed with underscore
+                            if _docentdata:  # Use the prefixed variable
+                                for (
+                                    docentitem
+                                ) in _docentdata:  # Use the prefixed variable
                                     if docentitem.get("waarde"):
                                         for docenttype in docentitem.get("waarde"):
                                             for persoon in docenttype.get("velden"):
@@ -253,21 +258,23 @@ async def update_osiris_data(
                                             newdatadict[course][field] = []
 
                         else:
-                            print("Error!")
-                            print(course_details.status_code)
+                            logger.error("Error retrieving course details")
+                            logger.debug(f"Status code: {course_details.status_code}")
 
-                    print(newdatadict) if print_details else None
+                    logger.debug(newdatadict) if print_details else None
                     return newdatadict
         except Exception as e:
-            print("exception when getting course details")
+            logger.error("exception when getting course details")
             logger.exception(e)
-            logger.info(f'Returning an empty dict for input_number {input_number} + {jaar}.')
-            return {} # Ensure a dict is returned on error path
+            logger.info(
+                f"Returning an empty dict for input_number {input_number} + {jaar}."
+            )
+            return {}  # Ensure a dict is returned on error path
         if retry:
             return await get_data_from_osiris(
                 input_number, httpx_client, semaphore, jaar
             )
-        return {} # Ensure a dict is returned if no other path is taken
+        return {}  # Ensure a dict is returned if no other path is taken
 
     async def get_data_from_people_page(
         name: str, httpx_client: httpx.AsyncClient, semaphore: asyncio.Semaphore
@@ -310,8 +317,8 @@ async def update_osiris_data(
         async with semaphore:
             url = f"https://people.utwente.nl/overview?query={name}"
             r = await httpx_client.get(url, headers=headers)
-            print(f"{name} --> {r.request}")
-            # print(r.text)
+            logger.debug(f"{name} --> {r.request}")
+            # logger.debug(r.text)
             data = r.text
             pattern = r'data-link="([^"]+)"'
             name_parsed_str = strip_name(name)
@@ -347,7 +354,7 @@ async def update_osiris_data(
                     new_url: str = "https://people.utwente.nl/" + best_match
                     try:
                         r = await httpx_client.get(new_url, headers=headers)
-                        _page_data = None # Prefixed with underscore
+                        _page_data = None  # Prefixed with underscore
                         if r.status_code in [500, 502]:
                             return await get_data_from_people_page(
                                 name, httpx_client, semaphore
@@ -358,28 +365,45 @@ async def update_osiris_data(
                         other_names = []
                         email = ""
                         if not page_data:
-                            logger.warning(f"No page data found for {name} at {new_url}")
+                            logger.warning(
+                                f"No page data found for {name} at {new_url}"
+                            )
                             return {}
-                        found_name_tag = page_data.find("h1", class_="pageheader__title")
+                        found_name_tag = page_data.find(
+                            "h1", class_="pageheader__title"
+                        )
                         if isinstance(found_name_tag, bs4.Tag):
                             for possible_name in found_name_tag.strings:
                                 if not main_name:
-                                    main_name = str(possible_name).strip() if possible_name else ""
+                                    main_name = (
+                                        str(possible_name).strip()
+                                        if possible_name
+                                        else ""
+                                    )
                                 else:
                                     other_names.append(
-                                        str(possible_name).strip().replace("(", "").replace(")", "") if possible_name else ""
+                                        str(possible_name)
+                                        .strip()
+                                        .replace("(", "")
+                                        .replace(")", "")
+                                        if possible_name
+                                        else ""
                                     )
-                            if main_name: # Ensure main_name was found before calculating ratio
+                            if (
+                                main_name
+                            ):  # Ensure main_name was found before calculating ratio
                                 final_ratio = Levenshtein.ratio(
                                     name_parsed_str, strip_name(main_name)
                                 )
                                 if final_ratio < 0.7:
-                                    print(
+                                    logger.debug(
                                         f"found name {main_name} differs from input name: {name} with ratio {final_ratio}. Actually compared strings: found: {strip_name(main_name)} | input: {strip_name(name)}"
                                     )
-                                    print("still processing...")
-                            else: # main_name was not found
-                                final_ratio = 0.0 # or some other default indicating no match
+                                    logger.debug("still processing...")
+                            else:  # main_name was not found
+                                final_ratio = (
+                                    0.0  # or some other default indicating no match
+                                )
 
                         try:
                             for link_tag in page_data.find_all("a"):
@@ -400,25 +424,46 @@ async def update_osiris_data(
                         )
                         # org_data is from page_data.find_all(class_="widget-linklist--smallicons")
                         processed_org_data_tags = []
-                        if org_data: # Check if the list of 'widget-linklist--smallicons' tags is not empty
+                        if org_data:  # Check if the list of 'widget-linklist--smallicons' tags is not empty
                             first_container_tag = org_data[0]
                             if isinstance(first_container_tag, bs4.Tag):
-                                processed_org_data_tags = first_container_tag.find_all(class_="widget-linklist__text")
+                                processed_org_data_tags = first_container_tag.find_all(
+                                    class_="widget-linklist__text"
+                                )
 
-                        for org_tag_item in processed_org_data_tags: # Iterate over the 'widget-linklist__text' tags
+                        for org_tag_item in (
+                            processed_org_data_tags
+                        ):  # Iterate over the 'widget-linklist__text' tags
                             if isinstance(org_tag_item, bs4.Tag):
                                 text_content = org_tag_item.string
-                                if isinstance(text_content, str) and "(" in text_content:
+                                if (
+                                    isinstance(text_content, str)
+                                    and "(" in text_content
+                                ):
                                     try:
                                         orgname = text_content.split("(")[0].strip()
-                                        orgabbr = text_content.split("(")[1].split(")")[0].strip()
-                                        if orgabbr in ["BMS", "ET", "EEMCS", "ITC", "TNW"]:
+                                        orgabbr = (
+                                            text_content.split("(")[1]
+                                            .split(")")[0]
+                                            .strip()
+                                        )
+                                        if orgabbr in [
+                                            "BMS",
+                                            "ET",
+                                            "EEMCS",
+                                            "ITC",
+                                            "TNW",
+                                        ]:
                                             faculty = orgname
                                             facultyabbr = orgabbr
                                         else:
-                                            found_orgs.append({"name": orgname, "abbr": orgabbr})
+                                            found_orgs.append(
+                                                {"name": orgname, "abbr": orgabbr}
+                                            )
                                     except Exception as e:
-                                        logger.exception(f"error while processing org {text_content}: {e}")
+                                        logger.exception(
+                                            f"error while processing org {text_content}: {e}"
+                                        )
 
                         if faculty and facultyabbr and found_orgs:
                             orgs.append({"name": faculty, "abbr": facultyabbr})
@@ -441,7 +486,9 @@ async def update_osiris_data(
                                     }
                                 )
 
-                        education_tab_tag = page_data.find("div", id="tabpanel-education")
+                        education_tab_tag = page_data.find(
+                            "div", id="tabpanel-education"
+                        )
                         courses = []
                         programmes = []
                         if isinstance(education_tab_tag, bs4.Tag):
@@ -450,23 +497,44 @@ async def update_osiris_data(
                                     href = link_tag.get("href")
                                     link_text_val = link_tag.string
 
-                                    if isinstance(href, str) and "https://utwente.osiris-student.nl" in href:
+                                    if (
+                                        isinstance(href, str)
+                                        and "https://utwente.osiris-student.nl" in href
+                                    ):
                                         # course
-                                        linktext_str = str(link_text_val).strip() if link_text_val else ""
+                                        linktext_str = (
+                                            str(link_text_val).strip()
+                                            if link_text_val
+                                            else ""
+                                        )
                                         if " - " in linktext_str:
-                                            code, coursename = linktext_str.split(" - ", 1)
+                                            code, coursename = linktext_str.split(
+                                                " - ", 1
+                                            )
                                             courses.append(
                                                 {
                                                     "course_code": code.strip(),
                                                     "course_name": coursename.strip(),
                                                 }
                                             )
-                                    elif isinstance(href, str) and "https://www.utwente.nl/" in href:
+                                    elif (
+                                        isinstance(href, str)
+                                        and "https://www.utwente.nl/" in href
+                                    ):
                                         # programme
-                                        programme_name_str = str(link_text_val).strip() if link_text_val else ""
-                                        if href and programme_name_str: # Ensure both URL and name exist
+                                        programme_name_str = (
+                                            str(link_text_val).strip()
+                                            if link_text_val
+                                            else ""
+                                        )
+                                        if (
+                                            href and programme_name_str
+                                        ):  # Ensure both URL and name exist
                                             programmes.append(
-                                                {"name": programme_name_str, "url": href}
+                                                {
+                                                    "name": programme_name_str,
+                                                    "url": href,
+                                                }
                                             )
 
                         person_data = {
@@ -484,14 +552,14 @@ async def update_osiris_data(
                         return person_data
 
                     except Exception as e:
-                        print(
+                        logger.error(
                             f"error while retrieving / processing {new_url} for person {name}"
                         )
                         logger.exception(e)
                         # raise e # Decide if re-raising is appropriate or if returning {} is better
-                        return {} # Return empty dict on exception after logging
+                        return {}  # Return empty dict on exception after logging
 
-            return {} # Ensure a dict is returned if 'matches' is empty or other paths don't return
+            return {}  # Ensure a dict is returned if 'matches' is empty or other paths don't return
 
     """
     each row in the df should have 1 or multiple osiris course codes attached to it.
@@ -499,7 +567,9 @@ async def update_osiris_data(
         code: canvas code from column course_code
         name: canvas course name from column course_name
     """
-    course_data_dict_from_df = df.select(pl.col("course_code"), pl.col("course_name")).to_dict() # Returns Dict[str, list]
+    course_data_dict_from_df = df.select(
+        pl.col("course_code"), pl.col("course_name")
+    ).to_dict()  # Returns Dict[str, list]
     course_code_list = course_data_dict_from_df.get("course_code", [])
     course_name_list = course_data_dict_from_df.get("course_name", [])
     lookup_values = set()
@@ -516,15 +586,19 @@ async def update_osiris_data(
     osiris_data_w_contacts_file = {}
     with contextlib.suppress(Exception):
         with open(
-                settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, # Use passed settings
-                encoding="utf-8",
-            ) as f:
+            settings.files[
+                FileSetting.OSIRIS_DATA_W_CONTACTS
+            ].path,  # Use passed settings
+            encoding="utf-8",
+        ) as f:
             osiris_data_w_contacts_file = json.load(f)
 
     course_codes_already_retrieved = set(osiris_data_w_contacts_file.keys())
     retrieve_course_data = True
     if only_retrieve_missing:
-        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f: # Use passed settings
+        with open(
+            settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8"
+        ) as f:  # Use passed settings
             cur_osiris_data = json.load(f)
         cur_osiris_data = {k: v for k, v in cur_osiris_data.items() if v}
         lookup_values = lookup_values - course_codes_already_retrieved
@@ -576,7 +650,9 @@ async def update_osiris_data(
                         found_amount += 1
                     else:
                         not_found.add(code)
-                logger.debug(f"{"succesfully retrieved data for" if result else "failed to retrieve data for"} course code {code}")
+                logger.debug(
+                    f"{'succesfully retrieved data for' if result else 'failed to retrieve data for'} course code {code}"
+                )
 
         logger.info(
             f"Found {found_amount} course codes in OSIRIS from {len(lookup_values)} starting course codes."
@@ -584,12 +660,14 @@ async def update_osiris_data(
         # store course_data_dict as a json file
         if only_retrieve_missing:
             course_data_dict.update(cur_osiris_data)
-        with open(settings.files[FileSetting.OSIRIS_DATA].path, "w") as f: # Use passed settings
+        with open(
+            settings.files[FileSetting.OSIRIS_DATA].path, "w"
+        ) as f:  # Use passed settings
             json.dump(course_data_dict, f, indent=4)
         if len(not_found) > 0:
             logger.info(f"{len(not_found)} course codes not found: ")
             for code in not_found:
-                print("            " + str(code))
+                logger.info("            " + str(code))
     # now look up all the person data
     persons_to_retrieve = set()
     extended_persons_to_retrieve = set()
@@ -604,7 +682,9 @@ async def update_osiris_data(
 
     if only_retrieve_missing:
         try:
-            with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
+            with open(
+                settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8"
+            ) as f:  # Use passed settings
                 cur_person_data = json.load(f)
             cur_persons = {x.get("input_name") for x in cur_person_data}
             persons_to_retrieve = persons_to_retrieve - set(cur_persons)
@@ -616,11 +696,13 @@ async def update_osiris_data(
             )
         except Exception as e:
             logger.warning(
-                f"error while loading {settings.files[FileSetting.PERSON_DATA].path}: {e}" # Use passed settings
+                f"error while loading {settings.files[FileSetting.PERSON_DATA].path}: {e}"  # Use passed settings
             )
             ...
     if len(persons_to_retrieve) > 0:
-        logger.info(f"now retrieving person data for {len(persons_to_retrieve)} people.")
+        logger.info(
+            f"now retrieving person data for {len(persons_to_retrieve)} people."
+        )
         person_data = []
         persontasks = []
         async with httpx.AsyncClient(timeout=30) as client:
@@ -638,18 +720,22 @@ async def update_osiris_data(
                     if parsed_data:
                         person_data.append(parsed_data)
                 except Exception as e:
-                    print(e)
+                    logger.exception(e)
                     pass
 
         logger.info(f"got data for {len(person_data)} persons")
         try:
             if only_retrieve_missing:
-                with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
+                with open(
+                    settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8"
+                ) as f:  # Use passed settings
                     current_person_data = json.load(f)
                 person_data.extend(current_person_data)
 
             with open(
-                    settings.files[FileSetting.PERSON_DATA].path, "w", encoding="utf-8" # Use passed settings
+                settings.files[FileSetting.PERSON_DATA].path,
+                "w",
+                encoding="utf-8",  # Use passed settings
             ) as f:
                 json.dump(
                     person_data,
@@ -657,15 +743,19 @@ async def update_osiris_data(
                     indent=4,
                 )
         except Exception as e:
-            print("error while dumping person data")
-            print(e)
+            logger.error("error while dumping person data")
+            logger.exception(e)
             pass
     if len(person_data) == 0:
         try:
-            with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f: # Use passed settings
+            with open(
+                settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8"
+            ) as f:  # Use passed settings
                 person_data = json.load(f)
         except Exception as e:
-            logger.warning(f"couldnt load {settings.files[FileSetting.PERSON_DATA].path}: {e}") # Use passed settings
+            logger.warning(
+                f"couldnt load {settings.files[FileSetting.PERSON_DATA].path}: {e}"
+            )  # Use passed settings
             person_dict = {}
 
     person_dict = {a.get("input_name"): a for a in person_data}
@@ -675,7 +765,7 @@ async def update_osiris_data(
     osiris_data_w_contacts = dict()
     for code, entry in course_data_dict.items():
         if not entry:
-            print(f"No osiris data found for course code {code}")
+            logger.warning(f"No osiris data found for course code {code}")
             continue
         contactdetails = {}
         if entry.get("contacts"):
@@ -693,7 +783,9 @@ async def update_osiris_data(
                         "people_page": details.get("people_page_url"),
                     }
                     if not details.get("orgs"):
-                        logger.warning(f"No orgs found for contact {contact} with details:")
+                        logger.warning(
+                            f"No orgs found for contact {contact} with details:"
+                        )
                         logger.info(details)
                 else:
                     logger.warning(f"No details found for contact {contact}")
@@ -701,22 +793,26 @@ async def update_osiris_data(
         entry["contacts"] = contactdetails
         osiris_data_w_contacts[code] = entry
         if entry.get("contacts") == {}:
-            print(f"No contact details found for course code {code}")
-            print("osiris course data:")
-            print(entry)
+            logger.warning(f"No contact details found for course code {code}")
+            logger.debug("osiris course data:")
+            logger.debug(entry)
 
     with contextlib.suppress(Exception):
         if only_retrieve_missing:
             with open(
-                    settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, # Use passed settings
-                    encoding="utf-8",
+                settings.files[
+                    FileSetting.OSIRIS_DATA_W_CONTACTS
+                ].path,  # Use passed settings
+                encoding="utf-8",
             ) as f:
                 current_osiris_data_w_contacts = json.load(f)
             osiris_data_w_contacts.update(current_osiris_data_w_contacts)
         with open(
-                settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path, # Use passed settings
-                "w",
-                encoding="utf-8",
+            settings.files[
+                FileSetting.OSIRIS_DATA_W_CONTACTS
+            ].path,  # Use passed settings
+            "w",
+            encoding="utf-8",
         ) as f:
             json.dump(
                 osiris_data_w_contacts,
@@ -725,9 +821,9 @@ async def update_osiris_data(
             )
 
     logger.info(
-        f"Done. Stored data in json files:\n    {settings.files[FileSetting.OSIRIS_DATA]}\n    {settings.files[FileSetting.PERSON_DATA]}\n    {settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}" # Use passed settings
+        f"Done. Stored data in json files:\n    {settings.files[FileSetting.OSIRIS_DATA]}\n    {settings.files[FileSetting.PERSON_DATA]}\n    {settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}"  # Use passed settings
     )
 
     # now update the database with the new data
 
-    await load_base_data(settings=settings) # Pass settings
+    await load_base_data(settings=settings)  # Pass settings

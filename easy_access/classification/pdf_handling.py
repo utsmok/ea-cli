@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from tortoise.queryset import QuerySet
 from xxhash import xxh64
 
-from easy_access.db.base import init
+from easy_access.db.base import ensure_db_inited
 from easy_access.db.ingest import load_pdfs
 from easy_access.db.models import PDF
 from easy_access.settings import SETTINGS, DirSetting, Settings
@@ -282,7 +282,7 @@ def ocr_with_paddle(
     if not pdf_dir or not pdf_dir.exists():
         pdf_dir = Path().cwd() / "pdfs"
     if not pdf_dir.exists():
-        print(f"[red]Directory {pdf_dir} does not exist.[/red]")
+        logger.warning(f"[red]Directory {pdf_dir} does not exist.[/red]")
         return
     if not outputdir or not outputdir.exists():
         outputdir = Path().cwd() / "paddle_output"
@@ -295,7 +295,7 @@ def ocr_with_paddle(
         pdf_name = pdf_path.stem
 
         if (outputdir / "{pdf_name}_paddle.txt").exists():
-            print(f"[red]skipping {pdf_name}[/red]")
+            logger.warning(f"[red]skipping {pdf_name}[/red]")
             continue
         imgs: list[Image.Image] = []
         full_text = []
@@ -314,7 +314,7 @@ def ocr_with_paddle(
                     except Exception:
                         continue
         except Exception as e:
-            print(f"[red]Error processing {pdf_name}: {e}[/red]")
+            logger.error(f"[red]Error processing {pdf_name}: {e}[/red]")
             continue
         if not imgs:
             continue
@@ -354,7 +354,7 @@ async def extract_metadata(pdf: PDF) -> PDF:
         The function will only set attributes for metadata fields that contain values.
         The PDF object is saved to persistence storage after metadata extraction.
     """
-    print(f"Extracting metadata from {pdf.path}")
+    logger.info(f"Extracting metadata from {pdf.path}")
     try:
         file_data = await asyncio.wait_for(
             asyncio.to_thread(pikepdf.open, pdf.path), TIMEOUT
@@ -381,7 +381,7 @@ async def extract_metadata(pdf: PDF) -> PDF:
         return None
     except Exception as e:
         logger.warning(f"Error extracting metadata from PDF: {e}")
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
         input("Press enter to continue...")
         return pdf
     if not metadata:
@@ -422,7 +422,6 @@ async def enrich_pdfs(
     input_mat_ids: list[int] | list[str] | None = None,
     max_pages: int | None = 15,
     str_limit: int | None = 20000,
-
 ) -> list[PDF]:
     """
     Deduplicates, and then extracts text & metadata from a list of PDF files, and updates the objects accordingly.
@@ -434,7 +433,7 @@ async def enrich_pdfs(
     Returns:
         list[PDF]: The same list of PDF objects, but updated with deduplication info, metadata & extracted text.
     """
-    await init(settings)
+    await ensure_db_inited(settings)
     if pdfs:
         input_mat_ids = [pdf.material_id for pdf in pdfs]
 

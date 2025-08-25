@@ -3,7 +3,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from rich import print
+from loguru import logger
 
 from easy_access.settings import SETTINGS, DirSetting
 
@@ -95,7 +95,7 @@ def get_entities(material_id: int) -> Entities | None:
         with open(entities_path, encoding="utf-8") as f:
             entities = Entities(json.load(f))
     except Exception as e:
-        print(f"Error processing entities file {entities_path}: {e}")
+        logger.error(f"Error processing entities file {entities_path}: {e}")
         return None
 
     return entities
@@ -118,7 +118,9 @@ def get_extracted_text(material_id: int) -> str:
     if not extracted_text_path.exists():
         return "No extracted text found."
 
-    print(f"retrieving extracted text for {material_id} from {extracted_text_path}")
+    logger.debug(
+        f"retrieving extracted text for {material_id} from {extracted_text_path}"
+    )
 
     text_element = f"Error loading text from {extracted_text_path.name}."
     if extracted_text_path.exists():
@@ -127,6 +129,6 @@ def get_extracted_text(material_id: int) -> str:
                 text_element = f.read()
 
         except Exception as e:
-            print(f"Error processing text file {extracted_text_path}: {e}")
+            logger.error(f"Error processing text file {extracted_text_path}: {e}")
 
     return text_element

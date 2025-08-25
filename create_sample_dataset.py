@@ -15,13 +15,13 @@ from sqlalchemy import Engine, create_engine
 from easy_access.classification.classifier_api import main
 from easy_access.classification.pdf_handling import enrich_pdfs
 from easy_access.classification.to_delete_downloader import Downloader
-from easy_access.db.base import init, set_db_path
+from easy_access.db.base import ensure_db_inited, set_db_path
 from easy_access.db.ingest import load_pdfs
 from easy_access.db.retrieve import retrieve_full_data
 from easy_access.db.update import update_copyright_relations
 from easy_access.main import EasyAccessTool
 from easy_access.settings import SAMPLESETTINGS, SETTINGS, EasyAccessSettings, Functions
-from easy_access.utils import cool, info, warn
+from easy_access.utils import info
 
 cli_app = typer.Typer()
 
@@ -128,14 +128,14 @@ def cli(
         if separate_db:
             db_path = Path("sample_db.sqlite3")
             set_db_path(db_path)
-            asyncio.get_event_loop().run_until_complete(init())
+            asyncio.get_event_loop().run_until_complete(ensure_db_inited())
             # asyncio.get_event_loop().run_until_complete(create())
             # asyncio.get_event_loop().run_until_complete(load_base_data())
             # asyncio.get_event_loop().run_until_complete(
             #    load_raw_copyright_data(File(data_from))
             # )
         else:
-            asyncio.get_event_loop().run_until_complete(init())
+            asyncio.get_event_loop().run_until_complete(ensure_db_inited())
 
         if any([osiris, download, classify, deduplicate]):
             info(
@@ -165,7 +165,7 @@ def cli(
     engine: Engine = create_engine("sqlite:///sample_db.sqlite3")
     db_path = Path("sample_db.sqlite3")
     set_db_path(db_path)
-    asyncio.get_event_loop().run_until_complete(init())
+    asyncio.get_event_loop().run_until_complete(ensure_db_inited())
     append = False
     create = True
 

@@ -15,7 +15,7 @@ from tortoise import Tortoise
 from easy_access.db.base import (
     copyright_item_from_dict,
     create,
-    init,
+    ensure_db_inited,
     standardize_dataframe,
 )
 from easy_access.db.models import (
@@ -51,7 +51,7 @@ async def load_osiris_data(settings: Settings) -> None:
     Creates Courses from the osiris_data.json file.
     Staff data is added later once people data has been loaded.
     """
-    await init(settings)
+    await ensure_db_inited(settings)
     if not settings.files[FileSetting.OSIRIS_DATA].exists:
         logger.warning("No osiris_data.json file found; data not loaded to DB.")
         return
@@ -120,7 +120,7 @@ async def load_org_data_from_settings(settings: Settings) -> None:
         },
         abbreviation="UT",
     )
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     for faculty in faculties:
         faculty_obj, _ = await Faculty.get_or_create(
             defaults={
@@ -184,7 +184,7 @@ async def load_person_data(settings: Settings) -> None:
     Adds Persons and Orgs, creates MissingCourses where necessary.
     """
 
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     if not settings.files[FileSetting.PERSON_DATA].exists:
         logger.warning("No person_data.json file found; data not loaded to DB.")
         return
@@ -268,7 +268,7 @@ async def load_linked_persons_for_courses(settings: Settings) -> Counter:
     """
     Link the Persons to the Courses they are involved in.
     """
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     # load osiris data
     if not settings.files[FileSetting.OSIRIS_DATA].exists:
         logger.warning("No osiris_data.json file found; data not loaded to DB.")
@@ -349,7 +349,7 @@ async def load_base_data(settings: Settings) -> None:
     """
     Load the base data into the db: orgs, courses, persons.
     """
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     await create()
     try:
         faculty_count = await Faculty.all().count()
@@ -516,7 +516,7 @@ async def load_raw_copyright_data(
     Loads in new items from a copyright export file.
     Either give a specific file to read in, or use the default (latest regular raw copyright export in raw_copyright_data dir) .
     """
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     error = None
     logger.info(
         f"# of items in db before loading raw items: {await CopyrightItem.all().count()}"
@@ -589,7 +589,7 @@ async def load_llm_classifications(settings: Settings) -> None:
     """
     load llm classifications from .json files in the classifications dir
     """
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     existing_classifications = await LLMClassification.all().values("used_material_id")
     existing_classifications = {
         int(m["used_material_id"]) for m in existing_classifications
@@ -723,7 +723,7 @@ async def load_pdfs(settings: Settings) -> None:
     Load pdfs from the pdfs dir into the db.
     """
 
-    await init(settings=settings)
+    await ensure_db_inited(settings)
     pdf_file_list: list[File] = settings.dirs[DirSetting.PDF_DOWNLOADS].files
     try:
         pdf_files: dict[str, File] = {

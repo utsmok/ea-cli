@@ -4,13 +4,14 @@ import asyncio
 import polars as pl
 
 from easy_access.classification.classifier_api import main
-from easy_access.db.base import init
 from easy_access.db.models import PDF, CopyrightItem
 
 
 async def compare_pdfs():
     delete = False
-    await init()
+    from easy_access.db.base import ensure_db_inited
+
+    await ensure_db_inited()
 
     all_pdfs = (
         await PDF.all()
@@ -81,7 +82,9 @@ async def compare_pdfs():
 
 
 async def run():
-    await init()
+    from easy_access.db.base import ensure_db_inited
+
+    await ensure_db_inited()
     await main()
 
 

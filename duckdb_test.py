@@ -8,6 +8,7 @@ app = marimo.App(width="full")
 def _():
     import duckdb
     import marimo as mo
+
     DATABASE_URL = "testing.duckdb"
     engine = duckdb.connect(DATABASE_URL, read_only=False)
     return engine, mo
@@ -31,7 +32,7 @@ def _(copyright_data, engine, mo, pdf_data, text_embeddings):
             TO 'copyright_data_with_pdf_embeddings.parquet' (FORMAT 'parquet');
 
         """,
-        engine=engine
+        engine=engine,
     )
     return
 
@@ -42,7 +43,7 @@ def _(engine, mo, pdf_data):
         f"""
         select count(material_id) from pdf_data
         """,
-        engine=engine
+        engine=engine,
     )
     return
 
@@ -51,7 +52,7 @@ def _(engine, mo, pdf_data):
 def _():
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer('all-MiniLM-L6-v2')
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
     def get_text_embedding_list(list_text: list[str]):
         """
@@ -59,16 +60,13 @@ def _():
         """
         return model.encode(list_text, normalize_embeddings=True)
 
-
     return (get_text_embedding_list,)
 
 
 @app.cell
 def _(engine, get_text_embedding_list):
     engine.create_function(
-        "get_text_embedding_list",
-        get_text_embedding_list,
-        return_type='FLOAT[384][]'
+        "get_text_embedding_list", get_text_embedding_list, return_type="FLOAT[384][]"
     )
 
     return
@@ -81,7 +79,7 @@ def _(engine, mo):
         -- split the text_embedding array
 
         """,
-        engine=engine
+        engine=engine,
     )
     return
 
@@ -103,21 +101,21 @@ def _(engine, mo):
         f"""
 
         """,
-        engine=engine
+        engine=engine,
     )
     return
 
 
 @app.cell
 def _(engine):
-    total=2131
+    total = 2131
     num_batches = 250
     batch_size = total // num_batches + 1
     for i in range(num_batches):
         selection_query = (
             engine.table("pdf_data")
             .order("material_id")
-            .limit(batch_size, offset=batch_size*i)
+            .limit(batch_size, offset=batch_size * i)
             .select("*")
         )
 
@@ -131,7 +129,6 @@ def _(engine):
                 unnest(text_emb_list) as text_embedding
             """)
         ).insert_into("text_embeddings")
-
 
     return
 

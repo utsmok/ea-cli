@@ -14,13 +14,36 @@ from tortoise import Model, Tortoise
 from easy_access.db.models import CopyrightItem, Faculty
 from easy_access.settings import Settings
 
+# Module-level flag to memoize initialization
+_DB_INITIALIZED: bool = False
+
+
+async def ensure_db_inited(settings: Settings | None = None) -> bool | None:
+    """Ensure Tortoise ORM is initialized once per process.
+
+    This is a thin wrapper around :func:`init` that memoizes the initialized
+    state so callers don't have to remember to call ``await init(...)``.
+    If the DB is already initialized this becomes a no-op.
+
+    Args:
+        settings: Optional Settings instance forwarded to ``init`` when
+            initialization is required.
+    """
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED:
+        return None
+    # If callers pass None, let the underlying init raise if it needs settings
+    if settings is None:
+        res = await init(settings)  # type: ignore[arg-type]
+    else:
+        res = await init(settings=settings)
+    _DB_INITIALIZED = True
+    return res
+
 
 def init_engine(settings: Settings) -> Engine:
-
     db_file_path = settings.db_path
     return create_engine(f"sqlite:///{str(db_file_path)}")
-
-
 
 
 async def init(settings: Settings) -> bool | None:
@@ -37,7 +60,8 @@ async def init(settings: Settings) -> bool | None:
         if models_py_mod_time > db_mod_time:
             create_tables = True
     await Tortoise.init(
-        db_url=f"sqlite://{str(db_file_path)}", modules={"models": ["easy_access.db.models"]}
+        db_url=f"sqlite://{str(db_file_path)}",
+        modules={"models": ["easy_access.db.models"]},
     )
     await Tortoise.generate_schemas(safe=True)
     if create_tables:
@@ -84,7 +108,9 @@ def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-async def copyright_item_from_dict(item: dict[str, str | Model | int | datetime | None]) -> CopyrightItem:
+async def copyright_item_from_dict(
+    item: dict[str, str | Model | int | datetime | None],
+) -> CopyrightItem:
     """
     Turns a dict with data for a CopyrightItem into a CopyrightItem object
     """
@@ -191,9 +217,9 @@ async def copyright_item_from_dict(item: dict[str, str | Model | int | datetime 
 
     except Exception as e:
         logger.warning(
-            f"Error while trying to create CopyrightItem with mat_id {item['material_id']}:{e}"
+            f"Error while trying to create CopyrightItem with mat_id {item.get('material_id')}:{e}"
         )
-        print(traceback.format_exc())
-        print(item)
+        logger.error(traceback.format_exc())
+        logger.debug(item)
 
         return None

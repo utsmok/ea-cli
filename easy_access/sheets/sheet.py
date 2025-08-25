@@ -1,8 +1,8 @@
-import os
 import contextlib
-import warnings
-import logging
 import json
+import logging
+import os
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -46,14 +46,19 @@ def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             with open(os.devnull, "w") as devnull:
-                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                with (
+                    contextlib.redirect_stdout(devnull),
+                    contextlib.redirect_stderr(devnull),
+                ):
                     return pl.read_excel(file_path, **kwargs)
     finally:
         for name, level in prev_levels.items():
             logging.getLogger(name).setLevel(level)
 
 
-def read_copyright_export(settings: Settings, file: File | None = None) -> tuple[str, pl.DataFrame]:
+def read_copyright_export(
+    settings: Settings, file: File | None = None
+) -> tuple[str, pl.DataFrame]:
     """
     Reads in data from the latest copyright export file in the copyright dir;
     or if a file is given, reads in that file.
@@ -114,7 +119,9 @@ def read_copyright_export(settings: Settings, file: File | None = None) -> tuple
         )
         return latest_file_date, copyright_data
     except FileNotFoundError:
-        logger.warning(f"No files found in {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}") # Use passed settings
+        logger.warning(
+            f"No files found in {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
+        )  # Use passed settings
         raise typer.Exit(code=1)
     except PermissionError:
         logger.warning(f"Permission denied to read {file}")
@@ -246,7 +253,9 @@ class DataEntrySheet:
         self.workbook.save(filename=self.file_path)
 
 
-def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_iter: int) -> int: # Added settings, changed return type
+def finalize_sheet(
+    settings: Settings, file: File, data: pl.DataFrame, style_iter: int
+) -> int:  # Added settings, changed return type
     """
     This function takes an excel file with 'Complete Data' and adds a data entry sheet +styling.
     Input: an excel file with the complete data, and a dataframe with that same data to be processed for the data entry sheet
@@ -254,8 +263,12 @@ def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_ite
     Adds the sheet to the workbook and saves it. Returns the incremented style_iter var.
     """
     wb = openpyxl.load_workbook(filename=str(file.path))
-    if settings.data_settings.complete_data_name not in wb.sheetnames and wb.active: # Use passed settings # Check if active sheet exists
-        wb.active.title = settings.data_settings.complete_data_name # Use passed settings
+    if (
+        settings.data_settings.complete_data_name not in wb.sheetnames and wb.active
+    ):  # Use passed settings # Check if active sheet exists
+        wb.active.title = (
+            settings.data_settings.complete_data_name
+        )  # Use passed settings
 
     tabstyle = TableStyleInfo(
         name=f"TableStyleMedium{style_iter}",
@@ -264,8 +277,8 @@ def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_ite
     style_iter = style_iter + 1
     sheet = DataEntrySheet(
         workbook=wb,
-        sheet_name=settings.data_settings.data_entry_name, # Use passed settings
-        cols=settings.data_settings.data_entry_cols, # Use passed settings
+        sheet_name=settings.data_settings.data_entry_name,  # Use passed settings
+        cols=settings.data_settings.data_entry_cols,  # Use passed settings
         table_style=tabstyle,
         file_path=str(file.path),
     )
@@ -275,13 +288,15 @@ def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_ite
     # llm_classification_data = enrich_with_llm_classifications(settings=settings, data=data) # enrich_with_llm_classifications is disabled
     if "overview" in file.path.stem:
         # only add the llm classification data if the file is an overview file
-        llm_classification_data = enrich_with_llm_classifications(settings=settings, data=data) # Pass settings and data
-        if llm_classification_data.is_empty(): # So this will likely be true
+        llm_classification_data = enrich_with_llm_classifications(
+            settings=settings, data=data
+        )  # Pass settings and data
+        if llm_classification_data.is_empty():  # So this will likely be true
             return style_iter
         llm_sheet_path = (
             file.path.parent / f"{file.path.stem}_llm_classification_data.xlsx"
         )
-        llm_classification_data.write_excel( # This part might not be reached if enrich_with_llm_classifications stays disabled
+        llm_classification_data.write_excel(  # This part might not be reached if enrich_with_llm_classifications stays disabled
             workbook=llm_sheet_path,
             worksheet="llm_classification_data",
             table_name="llm_classification_data",
@@ -293,7 +308,9 @@ def finalize_sheet(settings: Settings, file: File, data: pl.DataFrame, style_ite
     return style_iter
 
 
-def store_complete_data(settings: Settings, file: File | Path, data: pl.DataFrame) -> None: # Added settings
+def store_complete_data(
+    settings: Settings, file: File | Path, data: pl.DataFrame
+) -> None:  # Added settings
     """
     Stores the given data in an excel file with 1 sheet named SETTINGS.data_settings.complete_data_name
     using the col order in SETTINGS.data_settings.final_data_col_order
@@ -308,22 +325,24 @@ def store_complete_data(settings: Settings, file: File | Path, data: pl.DataFram
             File(file).delete()
     selectcols = [
         col
-        for col in settings.data_settings.final_data_col_order # Use passed settings
+        for col in settings.data_settings.final_data_col_order  # Use passed settings
         if col in data.columns
     ]
     data = data.select(selectcols)
     data = data.unique("material_id")
-    data.write_excel(file, worksheet=settings.data_settings.complete_data_name) # Use passed settings
+    data.write_excel(
+        file, worksheet=settings.data_settings.complete_data_name
+    )  # Use passed settings
     logger.info(f"Stored {data.shape[0]} rows to {file}")
 
 
-def read_export_sheets(settings: Settings) -> pl.DataFrame: # Added settings
+def read_export_sheets(settings: Settings) -> pl.DataFrame:  # Added settings
     """
     Read in the export sheets from the EXPORT_TO_SURF dir
     return as concatenated dataframe
     """
     returndata = pl.DataFrame()
-    for file in settings.dirs[DirSetting.EXPORT_TO_SURF].files: # Use passed settings
+    for file in settings.dirs[DirSetting.EXPORT_TO_SURF].files:  # Use passed settings
         if file.extension in [".xls", ".xlsx"]:
             returndata = pl.concat(
                 [returndata, _read_excel_quiet(file.path, sheet_name=None)],
@@ -336,7 +355,7 @@ def read_export_sheets(settings: Settings) -> pl.DataFrame: # Added settings
     return returndata
 
 
-def create_export_sheet( # Added settings
+def create_export_sheet(  # Added settings
     settings: Settings,
     data: pl.DataFrame | None = None,
     faculty: str | None = None,
@@ -372,7 +391,7 @@ def create_export_sheet( # Added settings
     ]
     TODAY: str = datetime.now().strftime(format="%Y-%m-%d_%H-%M-%S")
     if not isinstance(data, pl.DataFrame):
-        data = retrieve_copyright_items(settings=settings) # Pass settings
+        data = retrieve_copyright_items(settings=settings)  # Pass settings
         if faculty:
             data = data.filter(pl.col("faculty") == faculty)
 
@@ -381,9 +400,13 @@ def create_export_sheet( # Added settings
         logger.warning("No data to export")
         return
     if not faculty:
-        dir = Directory(settings.dirs[DirSetting.EXPORT_TO_SURF].full) # Use passed settings
+        dir = Directory(
+            settings.dirs[DirSetting.EXPORT_TO_SURF].full
+        )  # Use passed settings
     else:
-        dir = Directory(settings.dirs[DirSetting.EXPORT_TO_SURF].full / faculty) # Use passed settings
+        dir = Directory(
+            settings.dirs[DirSetting.EXPORT_TO_SURF].full / faculty
+        )  # Use passed settings
 
     export_file_path: Path = (
         dir.full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
@@ -398,10 +421,14 @@ def create_export_sheet( # Added settings
 
     # store formatted / styled export file with all details
     full_export_file = File(full_details_file_path)
-    store_complete_data(settings=settings, file=full_export_file, data=data) # Pass settings
+    store_complete_data(
+        settings=settings, file=full_export_file, data=data
+    )  # Pass settings
 
 
-def enrich_with_llm_classifications(settings: Settings, data: pl.DataFrame) -> pl.DataFrame: # Added settings
+def enrich_with_llm_classifications(
+    settings: Settings, data: pl.DataFrame
+) -> pl.DataFrame:  # Added settings
     """
     Create a dataframe with llm classification data for a set of material ids(see classifier_api or classifier_local for more details).
     call retrieve_all_classifications first
@@ -410,14 +437,18 @@ def enrich_with_llm_classifications(settings: Settings, data: pl.DataFrame) -> p
     return the joined dataframe
     """
     logger.warning("Enriching data with llm classification data currently disabled")
-    return pl.DataFrame() # Returns empty DF, so the code below this is currently not executed.
+    return (
+        pl.DataFrame()
+    )  # Returns empty DF, so the code below this is currently not executed.
 
     # The code below would be active if the above return was removed.
-    llm_data = retrieve_all_classifications(settings=settings) # Corrected call
+    llm_data = retrieve_all_classifications(settings=settings)  # Corrected call
 
     if not isinstance(llm_data, pl.DataFrame) or llm_data.is_empty():
-        logger.warning("No llm classification data found or llm_data is not a DataFrame.")
-        return data # Return original data if no llm data
+        logger.warning(
+            "No llm classification data found or llm_data is not a DataFrame."
+        )
+        return data  # Return original data if no llm data
 
     joined_data = data.join(llm_data, on="material_id", how="left")
     # set col_order
@@ -459,11 +490,13 @@ def enrich_with_llm_classifications(settings: Settings, data: pl.DataFrame) -> p
     # print missing expected columns
     missing_cols = [col for col in col_order if col not in joined_data.columns]
     if missing_cols:
-        logger.warning(f"Missing expected columns in llm classification data: {missing_cols}")
+        logger.warning(
+            f"Missing expected columns in llm classification data: {missing_cols}"
+        )
     return joined_data.select(existing_cols_in_order)
 
 
-def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added settings
+def retrieve_all_classifications(settings: Settings) -> pl.DataFrame:  # Added settings
     """
     -> read all .json files in script_data / classifications /
     -> each json file has name {material_id}_.......json
@@ -480,7 +513,9 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
     # all_files = Directory(settings.dirs[DirSetting.CLASSIFICATIONS].full).files
     # logger.warning("retrieve_all_classifications is called but uses global SETTINGS which should be refactored if this function is enabled.") # Comment out warning as it's now fixed
     # The following line will error if SETTINGS is not available globally. # Comment out as it's now fixed
-    all_files = Directory(settings.dirs[DirSetting.CLASSIFICATIONS].full).files # Use passed settings - This is correct
+    all_files = Directory(
+        settings.dirs[DirSetting.CLASSIFICATIONS].full
+    ).files  # Use passed settings - This is correct
     all_jsons = [
         file
         for file in all_files
@@ -498,7 +533,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
         if file.extension == ".replace"
     ]
     logger.info(
-        f"Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {settings.dirs[DirSetting.CLASSIFICATIONS].full}" # Use passed settings
+        f"Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {settings.dirs[DirSetting.CLASSIFICATIONS].full}"  # Use passed settings
     )
     # rename all jsons to {material_id}.json --> split filename on _ and take first part
 
@@ -521,7 +556,9 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
     final_data_dict = {}
     for mat_id, mat_data in data.items():
         if not str(mat_id).isdigit():
-            logger.warning(f"Skipping llm data for {mat_id} as it is not a valid material_id")
+            logger.warning(
+                f"Skipping llm data for {mat_id} as it is not a valid material_id"
+            )
             continue
         mat_id = int(mat_id)
         tmp = {}
@@ -550,5 +587,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame: # Added se
             replace_data["material_id"] = old
             final_data.append(replace_data)
 
-    return pl.from_dicts(final_data, infer_schema_length=None) # Correctly indented
+    return pl.from_dicts(final_data, infer_schema_length=None)  # Correctly indented
+
+
 # Deleting the duplicated/malformed content from here to the end of the file

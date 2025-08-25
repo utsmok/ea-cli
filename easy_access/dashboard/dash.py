@@ -11,8 +11,8 @@ import polars as pl
 from fastcore.utils import *
 from fasthtml.common import *
 from fasthtml.components import Button
+from loguru import logger
 from monsterui.all import *
-from rich import print
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 
@@ -90,7 +90,7 @@ async def save_item_details(
     """
     Route to store edited remarks back to the database
     """
-    print(f"Saving remarks for material_id: {material_id}")
+    logger.info(f"Saving remarks for material_id: {material_id}")
     update_data = {
         "material_id": material_id,
         "remarks": remarks,
@@ -103,7 +103,7 @@ async def save_item_details(
         )
 
     except Exception as e:
-        print(f"Error saving remarks for {material_id}: {e}")
+        logger.error(f"Error saving remarks for {material_id}: {e}")
         traceback.print_exc()
         add_toast(session, f"Error saving remarks for {material_id}: {e}", "error")
         return Response(status_code=500)
@@ -120,7 +120,7 @@ async def update_single_field(
     Route to update a single field for an item.
     Used by editable pills for immediate updates.
     """
-    print(f"Updating single field for {material_id}: {field_name} = {value}")
+    logger.debug(f"Updating single field for {material_id}: {field_name} = {value}")
     update_data = {
         "material_id": material_id,
         field_name: value if value.lower() != "none" else None,
@@ -130,8 +130,7 @@ async def update_single_field(
         # Return 200 OK, no content needed, HTMX swap='none' will be used client-side
         return Response(status_code=200)
     except Exception as e:
-        print(f"Error updating single field for {material_id}: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error updating single field for {material_id}: {e}")
         # Optionally add a toast message for the error
         add_toast(session, f"Error updating {field_name}", "error")
         # Return an error status code
@@ -160,7 +159,7 @@ async def get_pdf_element(material_id: int):
     """
 
     pdf_file_path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / f"{material_id}.pdf"
-    print(f"PDF file path: {pdf_file_path}")
+    logger.debug(f"PDF file path: {pdf_file_path}")
     pdf_element = None
     if not pdf_file_path.exists():
         pdf_element = Div("PDF file not found", cls="text-red-500")
@@ -181,7 +180,7 @@ async def get_file(material_id: int):
     Directly returns the PDF file for the given material_id.
     """
     file_path = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / f"{material_id}.pdf"
-    print(f"requested file: {file_path}")
+    logger.debug(f"requested file: {file_path}")
     if not file_path.exists():
         return HTMLResponse("File not found", status_code=404)
     return FileResponse(file_path)
@@ -299,12 +298,12 @@ async def data_grid(session: dict, request: Request):
         except Exception as e:
             # Gracefully handle cases like GET requests with unexpected content-type,
             # or malformed form data. Log the error.
-            print(f"Warning: Could not parse form data (maybe GET request?): {e}")
+            logger.warning(f"Could not parse form data (maybe GET request?): {e}")
             form_data_dict = {}  # Ensure it's an empty dict
 
     request_params = {**dict(request.query_params), **form_data_dict}
-    print("--- Request to /data ---")
-    print(f"Method: {request.method}, Params: {request_params}")
+    logger.debug("--- Request to /data ---")
+    logger.debug(f"Method: {request.method}, Params: {request_params}")
 
     # 2. Process state based on request (updates session['app_state'])
     # process_state handles loading, applying changes, and saving back to session
@@ -317,7 +316,7 @@ async def data_grid(session: dict, request: Request):
     # 4. Update session *again* only if page validation changed the state
     # This ensures the session reflects the *actual* page being displayed
     if processed_data.app_state.page != requested_app_state.page:
-        print("Updating session state again due to page validation.")
+        logger.debug("Updating session state again due to page validation.")
         session["app_state"] = asdict(processed_data.app_state)
 
     # 5. Render the main grid component using processed data
@@ -351,7 +350,7 @@ async def data_grid(session: dict, request: Request):
         )
 
     current_total = processed_data.total_filtered_rows
-    print(
+    logger.debug(
         f"Current total in data_grid when starting to render checkbox groups: {current_total}"
     )
     for key, label, options_map in checkbox_groups_to_render:
@@ -369,17 +368,19 @@ async def data_grid(session: dict, request: Request):
         if hasattr(rendered_group, "attrs"):
             rendered_group.attrs["hx-swap-oob"] = f"outerHTML:#{group_id}"
         else:
-            print(f"Warning: Cannot add OOB swap to non-FT object for key {key}")
+            logger.warning(f"Cannot add OOB swap to non-FT object for key {key}")
         oob_filter_fragments.append(rendered_group)
 
     # 7. Determine Return Value (HTMX vs Full Page)
     is_htmx = request.headers.get("hx-request", "false").lower() == "true"
 
     if is_htmx:
-        print("--- HTMX Request: Returning Grid + OOB Filters ---")
+        logger.debug("--- HTMX Request: Returning Grid + OOB Filters ---")
         return (grid_component, *oob_filter_fragments)
     else:
-        print("--- Full Page Request: Rendering Header + Grid + Modals + Scripts ---")
+        logger.debug(
+            "--- Full Page Request: Rendering Header + Grid + Modals + Scripts ---"
+        )
 
         header_component = page_header_component(
             auth_details,
@@ -433,13 +434,13 @@ async def show_item_details(session: dict, material_id: int):
         current_index = ordered_ids.index(material_id)
     except (ValueError, pl.exceptions.ColumnNotFoundError):
         # Handle case where item not found in current view or ID column missing
-        print(
-            f"Warning: Material ID {material_id} not found in current filtered/sorted view."
+        logger.warning(
+            f"Material ID {material_id} not found in current filtered/sorted view."
         )
         current_index = -1
         ordered_ids = []  # Ensure list is empty
     except Exception as e:
-        print(f"Error getting ordered IDs for modal prev/next: {e}")
+        logger.error(f"Error getting ordered IDs for modal prev/next: {e}")
         current_index = -1
         ordered_ids = []
 
@@ -781,8 +782,7 @@ async def show_item_details(session: dict, material_id: int):
         return response_content, HtmxResponseHeaders(trigger="openModalEvent")
 
     except Exception as e:
-        print(f"Error generating modal content for ID {material_id}: {e}")
-        print(traceback.format_exc())
+        logger.exception(f"Error generating modal content for ID {material_id}: {e}")
         modal_box_content = Div(cls="modal-box")(
             H3("Error"),
             P(f"Could not load details for item {material_id}."),
@@ -862,14 +862,14 @@ def post(login: Login, sess):  # login uses dataclass binding
         if not u:
             raise NotFoundError  # If user dict is empty/None
     except NotFoundError:
-        print(f"Login attempt failed: User '{login.email}' not found.")
+        logger.warning(f"Login attempt failed: User '{login.email}' not found.")
         # Optional: Add toast message for user feedback
         add_toast(sess, "Invalid email or password", "error")  # Requires setup_toasts
         return login_redir  # Redirect back to login on failure
 
     # Verify password
     if not compare_digest(u.get("pwd", "").encode("utf-8"), login.pwd.encode("utf-8")):
-        print(f"Login attempt failed: Incorrect password for '{login.email}'.")
+        logger.warning(f"Login attempt failed: Incorrect password for '{login.email}'.")
         add_toast(sess, "Invalid email or password", "error")
         return login_redir  # Redirect back to login on failure
 
@@ -882,7 +882,7 @@ def post(login: Login, sess):  # login uses dataclass binding
     }
     if "app_state" in sess:
         del sess["app_state"]
-    print(f"Login successful for '{login.email}'. Redirecting to data grid.")
+    logger.info(f"Login successful for '{login.email}'. Redirecting to data grid.")
     add_toast(sess, f"Login successful! Welcome, {u.get('name')}!", "success")
     return RedirectResponse(data_grid.to(), status_code=303)
 
@@ -924,7 +924,7 @@ def start():
     Start the FastHTML server with the defined routes.
     """
 
-    print("Starting the FastHTML server...")
+    logger.info("Starting the FastHTML server...")
     serve(
         app=app,
         port=PORT,

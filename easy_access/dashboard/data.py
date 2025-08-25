@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Any
 
 import polars as pl
-from rich import print
+from loguru import logger
 
 from easy_access.dashboard.constants import (
     BADGE_STYLES,
@@ -56,7 +56,9 @@ def process_state(
     Returns:
         A tuple containing the (potentially updated) session dictionary and the AppState instance.
     """
-    print(f"Processing state with params: {request_params}")  # Debug incoming params
+    logger.debug(
+        f"Processing state with params: {request_params}"
+    )  # Debug incoming params
 
     # 1. Load initial state
     app_state = load_app_state(session)
@@ -71,7 +73,7 @@ def process_state(
             app_state.set_page(1)
             filter_change_occurred = True  # Resetting filters counts
         else:
-            print("No change needed for reset.")
+            logger.debug("No change needed for reset.")
 
     elif "page" in request_params:
         try:
@@ -79,8 +81,8 @@ def process_state(
             if page != app_state.page:
                 app_state.set_page(page)
         except (ValueError, TypeError):
-            print(
-                f"Warning: Invalid page parameter '{request_params['page']}'. Ignoring."
+            logger.warning(
+                f"Invalid page parameter '{request_params['page']}'. Ignoring."
             )
     elif "sort_by" in request_params:
         sort_by = request_params.get("sort_by")
@@ -95,8 +97,8 @@ def process_state(
                 app_state.set_per_page(per_page)
                 app_state.set_page(1)  # Reset page when per_page changes
         except (ValueError, TypeError):
-            print(
-                f"Warning: Invalid per_page parameter '{request_params['per_page']}'. Ignoring."
+            logger.warning(
+                f"Invalid per_page parameter '{request_params['per_page']}'. Ignoring."
             )
 
     else:  # Check for filter changes by comparing with current state
@@ -109,7 +111,7 @@ def process_state(
                 filter_key = param_key[len("filter_") :]
 
                 if filter_key not in FILTERABLE_COLUMNS:
-                    # print(f"  Skipping unknown filter key '{filter_key}' from params.")
+                    # skipping unknown filter key
                     continue  # Silently ignore unknown keys
 
                 current_value_str = current_filters.get(filter_key, "")
@@ -165,10 +167,10 @@ def process_state(
     # 3. Save potentially modified state back to session *if* a change occurred
     final_state_dict = asdict(app_state)
     if final_state_dict != initial_state_dict:
-        print("Saving updated state to session.")
+        logger.debug("Saving updated state to session.")
         session["app_state"] = final_state_dict
     else:
-        print("No state change detected, session not updated.")
+        logger.debug("No state change detected, session not updated.")
 
     # 4. Return the session and the AppState reflecting the request intent
     return session, app_state
@@ -317,7 +319,7 @@ def calculate_counts_for_ui(
                     result.append({col: option, "len": 0})
         results[col] = {x[col]: x["len"] for x in result}
 
-    # print(f"Final Counts: {all_counts}")
+    # logger.debug(f"Final Counts: {all_counts}")
     return results
 
 
@@ -354,7 +356,7 @@ def _create_filter_expression(
     for col, value in user_filters.items():
         actual_col = col  # Assume col name matches DataFrame column directly
         if actual_col not in df.columns:
-            print(f"Warning: Filter column '{actual_col}' not in DataFrame. Skipping.")
+            logger.warning(f"Filter column '{actual_col}' not in DataFrame. Skipping.")
             continue
         if value is None or value == "":  # Skip empty filter values explicitly
             continue
@@ -420,12 +422,12 @@ def _create_filter_expression(
                 filter_expressions.append(or_expressions[0])
 
         except Exception as e:
-            print(f"Filter warning processing '{actual_col}'='{value}': {e}")
+            logger.warning(f"Filter warning processing '{actual_col}'='{value}': {e}")
 
     if extra_constraints:
         for col, value in extra_constraints.items():
             if col not in df.columns:
-                print(f"Warning: Constraint column '{col}' not in DataFrame. Skipping.")
+                logger.warning(f"Constraint column '{col}' not in DataFrame. Skipping.")
                 continue
             if value:  # Only apply if constraint value is non-empty
                 # Assuming simple equality constraint for now (e.g., faculty)
@@ -463,7 +465,7 @@ def get_filtered_sorted_df(
     try:
         df = df.filter(expression)
     except Exception as e:
-        print(f"Error applying filters: {e}")
+        logger.error(f"Error applying filters: {e}")
         # Fallback: return empty DataFrame on error? Or original?
         return df.clear()
 
@@ -472,10 +474,10 @@ def get_filtered_sorted_df(
         try:
             df = df.sort(by=sort_by, descending=sort_desc, nulls_last=True)
         except Exception as e:
-            print(f"Sort warning on '{sort_by}': {e}")
+            logger.warning(f"Sort warning on '{sort_by}': {e}")
     elif sort_by:
-        print(
-            f"Warning: Sort column '{sort_by}' not found in DataFrame. Skipping sort."
+        logger.warning(
+            f"Sort column '{sort_by}' not found in DataFrame. Skipping sort."
         )
     return df
 
@@ -503,7 +505,7 @@ def _apply_filters_for_count(filters: dict[str, str]) -> int:
         count = df.lazy().filter(filter_expr).select(pl.len()).collect().item()
         return count
     except Exception as e:
-        print(f"Count Filter error applying filters {filters}: {e}")
+        logger.error(f"Count Filter error applying filters {filters}: {e}")
         return 0  # Return 0 on error
 
 
@@ -600,7 +602,7 @@ async def store_item_changes(
                 get_item_df().filter(pl.col("material_id") == material_id).to_dicts()
             )
             if full_item_data:
-                print(f"Updating material_id {material_id}")
+                logger.info(f"Updating material_id {material_id}")
                 full_item_data = full_item_data[0]
                 # update fields that are in the input item
                 for key, value in item.items():
@@ -613,7 +615,9 @@ async def store_item_changes(
                         continue
                     if key in full_item_data:
                         if value != full_item_data[key]:
-                            print(f"Updating {key}: {full_item_data[key]} --> {value}")
+                            logger.info(
+                                f"Updating {key}: {full_item_data[key]} --> {value}"
+                            )
                         full_item_data[key] = value
                 full_data_list.append(full_item_data)
 

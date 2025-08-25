@@ -4,7 +4,7 @@ from enum import Enum
 from loguru import logger
 
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import Directory, print
+from easy_access.utils import Directory
 
 
 class BackupFlag(Enum):
@@ -69,13 +69,11 @@ class Backupper:
                 f"Found {len(backup_location_dirs)} backups, making room by deleting oldest backup(s)."
             )
             while len(backup_location_dirs) >= max_backups:
-                dir_by_date = {d.created:d for d in backup_location_dirs if d.created}
+                dir_by_date = {d.created: d for d in backup_location_dirs if d.created}
                 dates = list(dir_by_date.keys())
                 dates.sort()
                 dir_by_date[dates[0]].delete()
                 backup_location_dirs = backup_location.dirs()
-
-
 
         logger.info(
             f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}"
@@ -140,11 +138,11 @@ class Backupper:
         elif select == RestoreOptions.OLDEST:
             selected_backup_dir = min(backup_dir.dirs(), key=lambda x: x.created)
         elif select == RestoreOptions.MANUAL:
-            print(f"  Select backup to restore from {backup_dir.full}:")
-            print("------------------------------------------------------\n")
+            logger.info(f"  Select backup to restore from {backup_dir.full}:")
+            logger.info("------------------------------------------------------\n")
             for num, dir in enumerate(backup_dir.dirs()):
-                print(f"    {num}: {dir.full}")
-            print("\n")
+                logger.info(f"    {num}: {dir.full}")
+            logger.info("\n")
             while not selected_backup_dir:
                 try:
                     selected_backup_dir = backup_dir.dirs()[
@@ -155,7 +153,9 @@ class Backupper:
                         )
                     ]
                 except Exception as e:
-                    logger.warning(f"Invalid input. Please select a valid backup. ({e})")
+                    logger.warning(
+                        f"Invalid input. Please select a valid backup. ({e})"
+                    )
 
         if not selected_backup_dir:
             logger.warning("No valid backup selected, cannot restore.")
@@ -175,4 +175,6 @@ class Backupper:
         else:
             logger.warning(f"Unrecognized strategy: {strategy}. Cannot restore backup.")
             return
-        logger.success(f"Backup restored to {target_dir.full} using strategy: {strategy}")
+        logger.success(
+            f"Backup restored to {target_dir.full} using strategy: {strategy}"
+        )

@@ -16,7 +16,7 @@ from sqlalchemy import Engine, text
 from tortoise import Tortoise
 from tortoise.expressions import Q
 
-from easy_access.db.base import init, init_engine
+from easy_access.db.base import ensure_db_inited, init_engine
 from easy_access.db.models import PDF, CopyrightItem, ItemUpdate
 from easy_access.settings import Settings  # Import Settings for type hint
 
@@ -288,11 +288,10 @@ def retrieve_full_data(
                 logger.warning(
                     f"Error {e} while processing {colname} with type {df[colname].dtype} in retrieve_full_data"
                 )
-                print(colname)
-                print(len(df[colname]))
-                print(df[colname])
-                print(df[colname].dtype)
-                input("Press key to continue")
+                logger.debug(f"Column: {colname}")
+                logger.debug(f"Length: {len(df[colname])}")
+                logger.debug(f"Column values: {df[colname]}")
+                logger.debug(f"Dtype: {df[colname].dtype}")
 
     # add droplist cols back in with empty values
     if droplist:
@@ -633,7 +632,7 @@ async def retrieve_item_history(
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_item_history")
-    await init(settings=settings)  # Pass settings
+    await ensure_db_inited(settings)
 
     if not material_ids:
         logger.warning("No material IDs provided. Returning empty list.")
@@ -661,23 +660,23 @@ async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightI
     if not settings:
         raise ValueError("Settings must be provided to retrieve_failed_downloads")
     # Ensure Tortoise ORM is initialized before using ORM models
-    await init(settings=settings)
+    await ensure_db_inited(settings)
 
     if not engine:
         engine = init_engine(settings=settings)  # Pass settings
 
     # Retrieve material_ids as a flat list of ints so it can be used in __in filters
     deleted_pdfs = await PDF.filter(download_succeeded=False).values()
-    print(deleted_pdfs[0:5])
+    logger.debug(deleted_pdfs[0:5])
     logger.info(
         f'Retrieved {len(deleted_pdfs)} PDFs with "download_succeeded" set to False'
     )
-    print(deleted_pdfs)
+    logger.debug(deleted_pdfs)
     copyright_items = await CopyrightItem.filter(
         Q(material_id__in=deleted_pdfs)
     ).values()
-    print([item.get("status") for item in copyright_items])
-    print(
+    logger.debug([item.get("status") for item in copyright_items])
+    logger.info(
         f"Retrieved {len(copyright_items)} copyright items associated with non-downloadable PDFs"
     )
     await Tortoise.close_connections()

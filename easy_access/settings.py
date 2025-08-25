@@ -881,11 +881,11 @@ class Settings:
             if self.classification_options and set(options_list) != set(
                 self.classification_options
             ):
-                #logger.debug(
+                # logger.debug(
                 #    "Overriding 'classification_options' with those from "
                 #    "'data_settings.data_entry_cols.manual_classification.dropdown_options'."
                 #    f"Selected options: {options_list}"
-                #)
+                # )
                 self.classification_options = options_list
         elif (
             not self.classification_options
@@ -1191,6 +1191,7 @@ def load_osiris_data() -> dict[str, Any] | None:
         )
         return None
 
+
 # Global settings
 
 # Set up logging configuration
@@ -1200,7 +1201,7 @@ install(show_locals=True)
 # initialize settings from (default: read from 'settings.yaml')
 
 SETTINGS: Settings = Settings()
-#SAMPLESETTINGS: SampleSettings = SampleSettings()
+# SAMPLESETTINGS: SampleSettings = SampleSettings()
 
 # create global variables from certain settings for easier access [NOTE: remove these and replace with SETTINGS.<attr> in the future for consistency/robustness]
 DEPARTMENT_MAPPING: dict[str, str] = SETTINGS.university_settings.department_mapping

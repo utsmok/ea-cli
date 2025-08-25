@@ -11,14 +11,14 @@ from functools import partial
 import pikepdf
 from aiometer import amap
 from google import genai
+from loguru import logger
 
 from easy_access.classification.classifier_models import Classification
 from easy_access.classification.pdf_handling import extract_pdf_text
-from easy_access.db.base import init
+from easy_access.db.base import ensure_db_inited
 from easy_access.db.ingest import load_llm_classifications
 from easy_access.db.models import PDF, CopyrightItem
 from easy_access.settings import SETTINGS, DirSetting
-from loguru import logger
 
 client = None
 prompt = """From the included document, first extract and determine a list of metadata, then determine the copyright status and item type for this item.
@@ -126,8 +126,10 @@ async def classify_pdf(
         if not full_pdf and not pdf.extracted_text:
             logger.warning("pdf has no extracted text. Trying to extract.")
             await extract_pdf_text(pdf)
-            pdf = await PDF.get(material_id=mat_id) # Re-fetch pdf after potential modification
-            if not pdf.extracted_text: # Check again after trying to extract
+            pdf = await PDF.get(
+                material_id=mat_id
+            )  # Re-fetch pdf after potential modification
+            if not pdf.extracted_text:  # Check again after trying to extract
                 logger.warning(
                     f"pdf still has no extracted text. Sending full pdf instead for {pdf.current_file_name}"
                 )
@@ -167,7 +169,9 @@ async def classify_pdf(
 
         logger.debug(f"sent request for {mat_id}")
         if not mat_id:
-            logger.warning(f"Could not extract material id from {pdf.current_file_name}")
+            logger.warning(
+                f"Could not extract material id from {pdf.current_file_name}"
+            )
             return pdf, None
         response = client.models.generate_content(
             model="gemini-2.0-flash",
@@ -264,7 +268,7 @@ async def main(subset: list[int] | list[str] | None = None):
     #     with open(file.path, "rb") as f:
     #         return len(regex.findall(f.read()))
 
-    await init()
+    await ensure_db_inited()
     activate_client()
     if not subset:
         all_copyright_items = (
@@ -297,7 +301,7 @@ async def main(subset: list[int] | list[str] | None = None):
 
     pdf_batch = []
     batch_start_time = time.time()
-    for total, pdf in enumerate(pdfs, 1): # Start enumeration from 1
+    for total, pdf in enumerate(pdfs, 1):  # Start enumeration from 1
         pdf_batch.append(pdf)
         if len(pdf_batch) == 10:  # rate limit to 10 requests per minute
             logger.debug("awaiting results for a batch of 10 files...")

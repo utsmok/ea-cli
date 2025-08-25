@@ -9,8 +9,8 @@ from loguru import logger
 from tortoise.expressions import Q, Subquery
 from tortoise.transactions import in_transaction
 
-from easy_access.db.base import CopyrightItem, init
-from easy_access.db.models import PDF
+from easy_access.db.base import ensure_db_inited
+from easy_access.db.models import PDF, CopyrightItem
 from easy_access.settings import SETTINGS, DirSetting, Settings
 
 SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
@@ -289,7 +289,7 @@ async def main_download_all(settings: Settings, max_concurrent: int = 10):
 
         semaphore = asyncio.Semaphore(max_concurrent)
         tasks = []
-        await init(settings=settings)
+        await ensure_db_inited(settings)
 
         async def download_with_semaphore(url, copyright_material_id):
             async with semaphore:
@@ -473,7 +473,7 @@ async def replace_canvas_id_with_material_id() -> None:
     and replace each occurrence of the canvas_id in any filename with the material_id
     """
 
-    await init(settings=SETTINGS)
+    await ensure_db_inited(SETTINGS)
     all_items = await CopyrightItem.all().values("material_id", "url")
 
     download_dir = SETTINGS.dirs[DirSetting.PDF_DOWNLOADS]
