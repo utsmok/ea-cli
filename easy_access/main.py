@@ -36,6 +36,8 @@ from easy_access.sheets.sheet import (
     store_complete_data,
 )
 from easy_access.utils import Directory, File
+from easy_access.utilities.file_exists import check_file_exists
+from easy_access.api_keys import canvas as api_token
 
 # Existing TODO block remains as it's a design/task list, not a module docstring.
 """
@@ -319,6 +321,8 @@ class EasyAccessTool:
         logger.info(
             f"{len(mat_ids)} material_ids found in faculty sheets, {len(self.copyright_data)} items currently in copyright_data."
         )
+
+        asyncio.get_event_loop().run_until_complete(self.add_file_exists())
 
         if mat_ids:
             self.mat_ids_on_disk = mat_ids
@@ -645,7 +649,7 @@ class EasyAccessTool:
             int_mat_ids = [int(x) for x in self.mat_ids_on_disk if x.isdigit()]
 
         filtered_data: pl.DataFrame = retrieve_full_data(
-            excluded_material_ids=int_mat_ids
+            excluded_material_ids=int_mat_ids, settings=self.settings
         )
         if filtered_data.is_empty() and self.only_changes:
             logger.warning("No new items found to export to faculty sheets.")
@@ -1020,6 +1024,33 @@ class EasyAccessTool:
                 continue
             logger.info(f"Creating export sheet for {faculty}")
             create_export_sheet(settings=self.settings, faculty=faculty)
+
+    async def add_file_exists(self, refresh_all: bool = False) -> None:
+        """
+        Adds the 'file_exists' field to the copyright items in the database.
+        """
+        all_items = retrieve_copyright_items(
+            settings=self.settings, additional_cols=["file_exists"]
+        )  # get fresh data from DB
+        print(f"number of items total: {all_items.shape[0]}")
+        if refresh_all:
+            item_selection = all_items
+        else:
+            item_selection = all_items.filter(pl.col("file_exists") == "")
+            print(
+                f"Remaining items after filtering out rows with file_exists values: {item_selection.shape[0]} ({-all_items.shape[0] + item_selection.shape[0]})"
+            )
+
+        logger.debug(
+            item_selection.select(["file_exists", "title", "material_id"]).head(20)
+        )
+        logger.warning(f'sampling 200 items for testing, remove in prod')
+        with_file_exists = await check_file_exists(api_token, item_selection.sample(200))
+        print(
+            f"All types in result: {set([type(x) for x in with_file_exists.select('file_exists').to_series().to_list()])}"
+        )
+        print(f"now updating db")
+        await update_copyright_items(settings=self.settings, data=with_file_exists)
 
     def _get_unique_filepath(
         self, directory: Directory, filename_base: str, extension: str = ".xlsx"

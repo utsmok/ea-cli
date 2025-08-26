@@ -213,7 +213,9 @@ async def update_copyright_items(
     def change(
         changes: dict, field: str, new_value: Any, old_value: Any, reason: str
     ) -> dict:
-        logger.debug(f"[{reason}] [{field}] {old_value} --> {new_value}")
+        logger.debug(
+            f"[{reason}] [{field}] {old_value}  {type(old_value)}) --> {new_value} ({type(new_value)})"
+        )
         changes[field] = {"old": str(old_value), "new": str(new_value)}
         setattr(db_item, field, new_value)
         return changes
@@ -230,6 +232,22 @@ async def update_copyright_items(
             new_value = new_item.get(field)
             old_value = getattr(db_item, field)
             try:
+                if field == "file_exists":
+                    if not isinstance(new_value, bool) and not isinstance(
+                        new_value, int
+                    ):
+                        continue
+                    else:
+                        changes = change(
+                            changes,
+                            field,
+                            new_value,
+                            old_value,
+                            "file_exists value received, always update",
+                        )
+
+                        continue
+
                 if isinstance(old_value, datetime):
                     new_value = None
                     try:
@@ -265,7 +283,8 @@ async def update_copyright_items(
                     new_value = round(float(new_value), 2) if new_value else None
                     old_value = round(old_value, 2)
                 if isinstance(old_value, int):
-                    new_value = int(new_value) if new_value else None
+                    new_value = int(new_value) if (new_value or new_value==0) else None
+
             except Exception as e:
                 logger.debug(
                     f"error {e} while typecasting data for field comparison of {field}"
@@ -336,6 +355,7 @@ async def update_copyright_items(
             Infringement.NO.value,
             Infringement.UNDETERMINED.value,
         ],
+        "file_exists": [False, 0, True, 1],
     }
 
     # fields changable by checkers. See above for details

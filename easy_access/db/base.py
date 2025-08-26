@@ -150,6 +150,7 @@ async def copyright_item_from_dict(
         "possible_fine",
         "infringement",
         "faculty",
+        "file_exists",
     }
     try:
         if item.get("faculty") == "Unmapped" or not item.get("faculty"):
@@ -207,6 +208,10 @@ async def copyright_item_from_dict(
             item["department"] = item.get("programme_canvas")
         if not item.get("course_name"):
             item["course_name"] = item.get("course_name_canvas")
+
+        if not item.get("file_exists"):
+            item["file_exists"] = None
+
         final_dict = {}
         for key in item:
             if key in copyright_item_keys:

@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from huggingface_hub import file_exists
 from tortoise import fields
 from tortoise.models import Model
 
@@ -155,6 +156,9 @@ class CopyrightItem(Model, TimestampMixin):
     infringement = fields.CharEnumField(
         enum_type=Infringement, max_length=255, default=Infringement.UNDETERMINED
     )
+    file_exists = fields.BooleanField(
+        null=True, default=None
+    )  # whether the file exists on Canvas. Null = unchecked.
 
     # relations
 

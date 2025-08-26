@@ -586,9 +586,7 @@ async def update_osiris_data(
     osiris_data_w_contacts_file = {}
     with contextlib.suppress(Exception):
         with open(
-            settings.files[
-                FileSetting.OSIRIS_DATA_W_CONTACTS
-            ].path,  # Use passed settings
+            settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
             encoding="utf-8",
         ) as f:
             osiris_data_w_contacts_file = json.load(f)
@@ -596,9 +594,7 @@ async def update_osiris_data(
     course_codes_already_retrieved = set(osiris_data_w_contacts_file.keys())
     retrieve_course_data = True
     if only_retrieve_missing:
-        with open(
-            settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8"
-        ) as f:  # Use passed settings
+        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f:
             cur_osiris_data = json.load(f)
         cur_osiris_data = {k: v for k, v in cur_osiris_data.items() if v}
         lookup_values = lookup_values - course_codes_already_retrieved
@@ -660,9 +656,7 @@ async def update_osiris_data(
         # store course_data_dict as a json file
         if only_retrieve_missing:
             course_data_dict.update(cur_osiris_data)
-        with open(
-            settings.files[FileSetting.OSIRIS_DATA].path, "w"
-        ) as f:  # Use passed settings
+        with open(settings.files[FileSetting.OSIRIS_DATA].path, "w") as f:
             json.dump(course_data_dict, f, indent=4)
         if len(not_found) > 0:
             logger.info(f"{len(not_found)} course codes not found: ")
@@ -684,7 +678,7 @@ async def update_osiris_data(
         try:
             with open(
                 settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8"
-            ) as f:  # Use passed settings
+            ) as f:
                 cur_person_data = json.load(f)
             cur_persons = {x.get("input_name") for x in cur_person_data}
             persons_to_retrieve = persons_to_retrieve - set(cur_persons)
@@ -696,7 +690,7 @@ async def update_osiris_data(
             )
         except Exception as e:
             logger.warning(
-                f"error while loading {settings.files[FileSetting.PERSON_DATA].path}: {e}"  # Use passed settings
+                f"error while loading {settings.files[FileSetting.PERSON_DATA].path}: {e}"
             )
             ...
     if len(persons_to_retrieve) > 0:
@@ -728,14 +722,14 @@ async def update_osiris_data(
             if only_retrieve_missing:
                 with open(
                     settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8"
-                ) as f:  # Use passed settings
+                ) as f:
                     current_person_data = json.load(f)
                 person_data.extend(current_person_data)
 
             with open(
                 settings.files[FileSetting.PERSON_DATA].path,
                 "w",
-                encoding="utf-8",  # Use passed settings
+                encoding="utf-8",
             ) as f:
                 json.dump(
                     person_data,
@@ -750,12 +744,12 @@ async def update_osiris_data(
         try:
             with open(
                 settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8"
-            ) as f:  # Use passed settings
+            ) as f:
                 person_data = json.load(f)
         except Exception as e:
             logger.warning(
                 f"couldnt load {settings.files[FileSetting.PERSON_DATA].path}: {e}"
-            )  # Use passed settings
+            )
             person_dict = {}
 
     person_dict = {a.get("input_name"): a for a in person_data}
@@ -800,17 +794,13 @@ async def update_osiris_data(
     with contextlib.suppress(Exception):
         if only_retrieve_missing:
             with open(
-                settings.files[
-                    FileSetting.OSIRIS_DATA_W_CONTACTS
-                ].path,  # Use passed settings
+                settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
                 encoding="utf-8",
             ) as f:
                 current_osiris_data_w_contacts = json.load(f)
             osiris_data_w_contacts.update(current_osiris_data_w_contacts)
         with open(
-            settings.files[
-                FileSetting.OSIRIS_DATA_W_CONTACTS
-            ].path,  # Use passed settings
+            settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
             "w",
             encoding="utf-8",
         ) as f:
@@ -821,7 +811,7 @@ async def update_osiris_data(
             )
 
     logger.info(
-        f"Done. Stored data in json files:\n    {settings.files[FileSetting.OSIRIS_DATA]}\n    {settings.files[FileSetting.PERSON_DATA]}\n    {settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}"  # Use passed settings
+        f"Done. Stored data in json files:\n    {settings.files[FileSetting.OSIRIS_DATA]}\n    {settings.files[FileSetting.PERSON_DATA]}\n    {settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS]}"
     )
 
     # now update the database with the new data

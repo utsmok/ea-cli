@@ -25,7 +25,7 @@ def create_programme_overviews(
     """
     course_to_group: dict[str, str] = settings.university_settings.course_mapping[
         faculty
-    ]  # Use passed settings
+    ]
     data: dict[str, pl.DataFrame] = defaultdict(pl.DataFrame)
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -43,9 +43,7 @@ def create_programme_overviews(
                     .then(
                         pl.col("pages_x_students")
                         .cast(pl.Int32)
-                        .mul(
-                            settings.fine_amount
-                        )  # Use passed settings (corrected path)
+                        .mul(settings.fine_amount)
                         .alias("possible_fine")
                     )
                     .otherwise(pl.col("possible_fine"))
@@ -54,7 +52,7 @@ def create_programme_overviews(
                 programme_data = programme_data.with_columns(
                     possible_fine=pl.col("pages_x_students")
                     .cast(pl.Int32)
-                    .mul(settings.fine_amount)  # Use passed settings (corrected path)
+                    .mul(settings.fine_amount)
                 )
             programme_data = programme_data.with_columns(
                 infringement=pl.when(
@@ -85,15 +83,11 @@ def create_programme_overviews(
         logger.info(f"group: {group}: {item.shape[0]} items")
 
     overview_fac_programme_dir = Directory(
-        settings.dirs[DirSetting.OVERVIEWS_BACKUP].full
-        / faculty
-        / "per_programme"  # Use passed settings
+        settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty / "per_programme"
     )
     for groupname, df in data.items():
         for file in Directory(
-            settings.dirs[DirSetting.FACULTIES_DIR].full
-            / faculty
-            / "per_programme"  # Use passed settings
+            settings.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme"
         ).files:
             if file.extension not in [".xls", ".xlsx"]:
                 continue
@@ -102,7 +96,7 @@ def create_programme_overviews(
                 continue
         logger.info(f"{groupname} has {df.shape[0]} items")
         programme_file = File(
-            settings.dirs[DirSetting.FACULTIES_DIR].full  # Use passed settings
+            settings.dirs[DirSetting.FACULTIES_DIR].full
             / faculty
             / "per_programme"
             / f"{groupname}_total_overview_updated_{today}.xlsx"
@@ -143,9 +137,9 @@ def create_faculty_overviews(
         if (
             faculty in settings.university_settings.course_mapping
             and not disable_writes
-        ):  # Use passed settings
+        ):
             style_iter = create_programme_overviews(
-                settings=settings,  # Pass settings
+                settings=settings,
                 all_faculty_data=all_faculty_data,
                 faculty=faculty,
                 style_iter=style_iter,
@@ -156,34 +150,33 @@ def create_faculty_overviews(
 
         if not disable_writes:
             fac_file = File(
-                path=settings.dirs[DirSetting.FACULTIES_DIR].full  # Use passed settings
+                path=settings.dirs[DirSetting.FACULTIES_DIR].full
                 / faculty
                 / f"{faculty}_total_overview_updated_{today}.xlsx"
             )
             logger.info(
                 f"saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}"
             )
-            store_complete_data(
-                settings=settings, file=fac_file, data=all_faculty_data
-            )  # Pass settings
+            store_complete_data(settings=settings, file=fac_file, data=all_faculty_data)
+
             style_iter = finalize_sheet(
                 settings=settings,
                 file=fac_file,
                 data=all_faculty_data,
                 style_iter=style_iter,
-            )  # Pass settings
+            )
         data_to_update.append(all_faculty_data)
 
     asyncio.get_event_loop().run_until_complete(
         update_db(settings=settings, datalist=data_to_update)
-    )  # Pass settings
+    )
     return style_iter
 
 
 async def update_db(settings: Settings, datalist: list[pl.DataFrame]):  # Added settings
     logger.info("Moving updates into database.")
 
-    await load_base_data(settings=settings)  # Pass settings
+    await load_base_data(settings=settings)
 
     # concat all dfs
     df = pl.concat(datalist, how="diagonal_relaxed")

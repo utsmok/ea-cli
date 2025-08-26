@@ -23,7 +23,9 @@ from easy_access.settings import Settings  # Import Settings for type hint
 engine: Engine | None = None
 
 
-def retrieve_copyright_items(settings: Settings) -> pl.DataFrame:  # Added settings
+def retrieve_copyright_items(
+    settings: Settings, additional_cols: list[str] | None = None
+) -> pl.DataFrame:  # Added settings
     """
     Retrieve all copyright items currently in db
     returns a flat dataframe with the core fields
@@ -33,9 +35,7 @@ def retrieve_copyright_items(settings: Settings) -> pl.DataFrame:  # Added setti
     if not engine:
         engine = init_engine(settings=settings)  # Pass settings
 
-    col_order: set[str] = set(
-        settings.data_settings.raw_data_col_order
-    )  # Use passed settings
+    col_order: set[str] = set(settings.data_settings.raw_data_col_order)
 
     if "google_search_file" in col_order:
         col_order.remove("google_search_file")
@@ -47,15 +47,22 @@ def retrieve_copyright_items(settings: Settings) -> pl.DataFrame:  # Added setti
     else:
         select_cols = col_order
 
-    query: str = "SELECT " + ", ".join(select_cols) + " FROM copyright_data cd"
-    query_start = time()
-    df: pl.DataFrame = pl.read_database(
-        query=query, connection=engine.connect(), infer_schema_length=None
-    )
-    end = time()
-    logger.info(f"db.retrieve.retrieve_copyright_items returned {len(df)} rows")
-    logger.info(f"query took {end - query_start} seconds")
-    logger.info(f"full function took {end - full_start} seconds")
+    if additional_cols:
+        select_cols.update(additional_cols)
+    try:
+        query: str = "SELECT " + ", ".join(select_cols) + " FROM copyright_data cd"
+        query_start = time()
+        df: pl.DataFrame = pl.read_database(
+            query=query, connection=engine.connect(), infer_schema_length=None
+        )
+        end = time()
+        logger.info(f"db.retrieve.retrieve_copyright_items returned {len(df)} rows")
+        logger.info(f"query took {end - query_start} seconds")
+        logger.info(f"full function took {end - full_start} seconds")
+    except Exception as e:
+        logger.error(f"Error retrieving copyright items: {e}")
+        logger.debug(traceback.format_exc())
+        raise e
     return df
 
 

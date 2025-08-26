@@ -121,7 +121,7 @@ def read_copyright_export(
     except FileNotFoundError:
         logger.warning(
             f"No files found in {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
-        )  # Use passed settings
+        )
         raise typer.Exit(code=1)
     except PermissionError:
         logger.warning(f"Permission denied to read {file}")
@@ -263,12 +263,8 @@ def finalize_sheet(
     Adds the sheet to the workbook and saves it. Returns the incremented style_iter var.
     """
     wb = openpyxl.load_workbook(filename=str(file.path))
-    if (
-        settings.data_settings.complete_data_name not in wb.sheetnames and wb.active
-    ):  # Use passed settings # Check if active sheet exists
-        wb.active.title = (
-            settings.data_settings.complete_data_name
-        )  # Use passed settings
+    if settings.data_settings.complete_data_name not in wb.sheetnames and wb.active:
+        wb.active.title = settings.data_settings.complete_data_name
 
     tabstyle = TableStyleInfo(
         name=f"TableStyleMedium{style_iter}",
@@ -277,8 +273,8 @@ def finalize_sheet(
     style_iter = style_iter + 1
     sheet = DataEntrySheet(
         workbook=wb,
-        sheet_name=settings.data_settings.data_entry_name,  # Use passed settings
-        cols=settings.data_settings.data_entry_cols,  # Use passed settings
+        sheet_name=settings.data_settings.data_entry_name,
+        cols=settings.data_settings.data_entry_cols,
         table_style=tabstyle,
         file_path=str(file.path),
     )
@@ -325,14 +321,12 @@ def store_complete_data(
             File(file).delete()
     selectcols = [
         col
-        for col in settings.data_settings.final_data_col_order  # Use passed settings
+        for col in settings.data_settings.final_data_col_order
         if col in data.columns
     ]
     data = data.select(selectcols)
     data = data.unique("material_id")
-    data.write_excel(
-        file, worksheet=settings.data_settings.complete_data_name
-    )  # Use passed settings
+    data.write_excel(file, worksheet=settings.data_settings.complete_data_name)
     logger.info(f"Stored {data.shape[0]} rows to {file}")
 
 
@@ -342,7 +336,7 @@ def read_export_sheets(settings: Settings) -> pl.DataFrame:  # Added settings
     return as concatenated dataframe
     """
     returndata = pl.DataFrame()
-    for file in settings.dirs[DirSetting.EXPORT_TO_SURF].files:  # Use passed settings
+    for file in settings.dirs[DirSetting.EXPORT_TO_SURF].files:
         if file.extension in [".xls", ".xlsx"]:
             returndata = pl.concat(
                 [returndata, _read_excel_quiet(file.path, sheet_name=None)],
@@ -400,13 +394,9 @@ def create_export_sheet(  # Added settings
         logger.warning("No data to export")
         return
     if not faculty:
-        dir = Directory(
-            settings.dirs[DirSetting.EXPORT_TO_SURF].full
-        )  # Use passed settings
+        dir = Directory(settings.dirs[DirSetting.EXPORT_TO_SURF].full)
     else:
-        dir = Directory(
-            settings.dirs[DirSetting.EXPORT_TO_SURF].full / faculty
-        )  # Use passed settings
+        dir = Directory(settings.dirs[DirSetting.EXPORT_TO_SURF].full / faculty)
 
     export_file_path: Path = (
         dir.full / f"utwente_{TODAY}_{data.shape[0]}_items_copyright_import.xlsx"
@@ -513,9 +503,10 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame:  # Added s
     # all_files = Directory(settings.dirs[DirSetting.CLASSIFICATIONS].full).files
     # logger.warning("retrieve_all_classifications is called but uses global SETTINGS which should be refactored if this function is enabled.") # Comment out warning as it's now fixed
     # The following line will error if SETTINGS is not available globally. # Comment out as it's now fixed
-    all_files = Directory(
-        settings.dirs[DirSetting.CLASSIFICATIONS].full
-    ).files  # Use passed settings - This is correct
+    all_files = (
+        Directory(settings.dirs[DirSetting.CLASSIFICATIONS].full).files - This
+        is correct
+    )
     all_jsons = [
         file
         for file in all_files
@@ -533,7 +524,7 @@ def retrieve_all_classifications(settings: Settings) -> pl.DataFrame:  # Added s
         if file.extension == ".replace"
     ]
     logger.info(
-        f"Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {settings.dirs[DirSetting.CLASSIFICATIONS].full}"  # Use passed settings
+        f"Found {len(all_jsons)} json files with llm classifications, and {len(all_replacements)} replacement files in {settings.dirs[DirSetting.CLASSIFICATIONS].full}"
     )
     # rename all jsons to {material_id}.json --> split filename on _ and take first part
 

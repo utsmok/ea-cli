@@ -69,6 +69,7 @@ data_settings:
     - name: "replacement_id"
     - name: "url"
       is_url: true
+    - name: "file_exists"
     - name: "workflow_status"
       is_new: true
       is_editable: true
@@ -147,6 +148,7 @@ data_settings:
     course_code,
     course_name,
     url,
+    file_exists,
     filename,
     title,
     owner,
@@ -186,6 +188,7 @@ data_settings:
     cursuscodes,
     osiris_catalogue_url,
     programmes,
+
   ]
 
 
