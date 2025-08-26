@@ -5,8 +5,8 @@ ORM models for the database.
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from loguru import logger
 
-from huggingface_hub import file_exists
 from tortoise import fields
 from tortoise.models import Model
 
@@ -159,6 +159,7 @@ class CopyrightItem(Model, TimestampMixin):
     file_exists = fields.BooleanField(
         null=True, default=None
     )  # whether the file exists on Canvas. Null = unchecked.
+    last_canvas_check = fields.DatetimeField(null=True) # when was the file existence last checked on Canvas
 
     # relations
 
@@ -178,8 +179,33 @@ class CopyrightItem(Model, TimestampMixin):
         null=True, db_index=True
     )  # if this item is a duplicate, this field has the material_id of the original item
 
+
+
     class Meta:
         table = "copyright_data"
+
+    def actual_status(self) -> Status:
+        if not self.url or self.url.strip() == "":
+            return Status.DELETED
+        elif self.file_exists in [True, 1, "1"]:
+            return self.status
+        else:
+            return Status.DELETED
+
+
+    def misaligned_status(self) -> bool:
+        return self.status != self.actual_status()
+
+    def status_details(self) -> dict[str, str | bool | datetime | int | Status]:
+        return {
+            "material_id": self.material_id,
+            "filename": self.filename,
+            "url": self.url,
+            "status": self.status,
+            "actual_status": self.actual_status(),
+            "file_exists": self.file_exists,
+            "last_canvas_check": self.last_canvas_check,
+        }
 
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"

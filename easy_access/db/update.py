@@ -7,7 +7,7 @@ import traceback
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from typing import Any
-
+from itertools import batched
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
@@ -213,10 +213,16 @@ async def update_copyright_items(
     def change(
         changes: dict, field: str, new_value: Any, old_value: Any, reason: str
     ) -> dict:
-        logger.debug(
-            f"[{reason}] [{field}] {old_value}  {type(old_value)}) --> {new_value} ({type(new_value)})"
-        )
+
+        if field == "file_exists":
+            db_item.last_canvas_check = datetime.now()
+            changes["last_canvas_check"] = {"old": str(old_value), "new": str(new_value)}
+        else:
+            logger.debug(
+                f"[{reason}] [{field}] {old_value}  {type(old_value)}) --> {new_value} ({type(new_value)})"
+            )
         changes[field] = {"old": str(old_value), "new": str(new_value)}
+
         setattr(db_item, field, new_value)
         return changes
 
@@ -236,15 +242,13 @@ async def update_copyright_items(
 
                     match new_value:
                         case True | 1 | "1" | "true" | "True":
-                            print(f'{new_value=} --> True')
                             new_value = True
                         case False | 0 | "0" | "false" | "False":
-                            print(f'{new_value=} --> False')
                             new_value = False
                         case None | '':
                             new_value = None
                         case _:
-                            print(f"[skip][file_exists] unexpected value: {new_value}")
+                            logger.warning(f"[skip][file_exists] unexpected value: {new_value}")
                             continue
 
                     if not isinstance(new_value, bool):
@@ -553,36 +557,46 @@ async def update_copyright_items(
         # then get list of all distinct keys from all those dicts
         # then drop keys 'material_id' and 'update_time'
         # then add all those keys to the fields to update
+
         all_keys = {key for item in updates.values() for key in item}
         all_keys.discard("material_id")
         all_keys.discard("update_time")
         changed_fields = list(all_keys)
         changed_fields.append("modified_at")
-        logger.info(
-            f"Updating {len(changelist)} items in db for fields {changed_fields}."
-        )
-        logger.info(f"Updating {len(updates)} changelog items in db.")
-        await CopyrightItem.bulk_update(changelist, fields=changed_fields)
+
+        # process in batches of max 50:
+
+        for change_batch in batched(changelist, 50):
+            logger.info(
+                f"Updating fields {changed_fields} for {len(change_batch)} items that were changed."
+            )
+
+            await CopyrightItem.bulk_update(change_batch, fields=changed_fields)
+
         if user_info:
             [changes.update({"modified_by": cur_user}) for changes in updates.values()]
             logger.info(f"items modified by {cur_user}")
 
-        await ItemUpdate.bulk_create(
-            [
-                ItemUpdate(change_details=changes, material_id=mat_id)
-                for mat_id, changes in updates.items()
-            ]
-        )
+        for update_batch in batched([(mat_id, changes) for mat_id, changes in updates.items()], 50):
+            logger.info(f"Updating {len(update_batch)} changelog items in db.")
 
-        # now add each ItemUpdate as a m2m relation to the corresponding CopyrightItem
-        for mat_id in updates:
-            item = await CopyrightItem.get(material_id=mat_id)
-            update = (
-                await ItemUpdate.filter(material_id=mat_id)
-                .order_by("-created_at")
-                .first()
+            mat_ids = [mat_id for mat_id, _ in update_batch]
+            await ItemUpdate.bulk_create(
+                [
+                    ItemUpdate(change_details=changes, material_id=mat_id)
+                    for mat_id, changes in update_batch
+                ]
             )
-            await item.changes.add(update)
+
+            # now add each ItemUpdate as a m2m relation to the corresponding CopyrightItem
+            for mat_id in mat_ids:
+                item = await CopyrightItem.get(material_id=mat_id)
+                update = (
+                    await ItemUpdate.filter(material_id=mat_id)
+                    .order_by("-created_at")
+                    .first()
+                )
+                await item.changes.add(update)
 
     if (changelist or new_objects) and update_relations:
         logger.success("Updating relations for all CopyrightItems.")

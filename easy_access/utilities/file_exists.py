@@ -47,7 +47,7 @@ async def check_file_exists(
             return data
         except Exception as e:
             logger.error(f"Error checking file existence for {file_url}: {e}")
-            raise e
+            return {"material_id": data["material_id"], "file_exists": False}
 
     if not isinstance(df, pl.DataFrame):
         if excel_file:
@@ -98,11 +98,10 @@ async def check_file_exists(
         async with aiometer.amap(
             partial(check_file_exists, session=session),
             files_to_check,
-            max_at_once=10,
-            max_per_second=10,
+            max_at_once=100,
+            max_per_second=200,
         ) as temp_results:
             async for result in temp_results:
-                print(counter := counter + 1)
                 if not isinstance(result, BaseException):
                     processed_results.append(result)
                     if result.get("file_exists") is True:

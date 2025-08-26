@@ -11,6 +11,7 @@ coordinating the various data processing workflows, including:
 
 import asyncio
 import contextlib
+import datetime
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -1030,26 +1031,43 @@ class EasyAccessTool:
         Adds the 'file_exists' field to the copyright items in the database.
         """
         all_items = retrieve_copyright_items(
-            settings=self.settings, additional_cols=["file_exists"]
+            settings=self.settings, additional_cols=["file_exists", "last_canvas_check"]
         )  # get fresh data from DB
         print(f"number of items total: {all_items.shape[0]}")
         if refresh_all:
-            item_selection = all_items
+            item_selection = pl.DataFrame()
+            for_check = all_items
         else:
             item_selection = all_items.filter(pl.col("file_exists") == "")
             print(
                 f"Remaining items after filtering out rows with file_exists values: {item_selection.shape[0]} ({-all_items.shape[0] + item_selection.shape[0]})"
             )
+            # for each item in 'all_items', if 'status' == 'Deleted',
+            # set 'file_exists' to False, and `last_canvas_check` to now
+            item_selection = item_selection.with_columns(
+                pl.when(pl.col("status") == "Deleted")
+                .then(pl.lit(False))
+                .otherwise(pl.col("file_exists"))
+                .alias("file_exists"),
+                pl.when(pl.col("status") == "Deleted")
+                .then(pl.lit(datetime.datetime.now()))
+                .otherwise(pl.col("last_canvas_check"))
+                .alias("last_canvas_check"),
+            )
+            # pop rows with empty file_exists to for_check
+            for_check = item_selection.filter(pl.col("file_exists") == "")
+            item_selection = item_selection.filter(pl.col("file_exists") != "")
+        if for_check.is_empty():
+            logger.info("No items need file existence checking.")
+        else:
+            with_file_exists = await check_file_exists(api_token, for_check)
+            print(with_file_exists.head(10))
 
-        logger.debug(
-            item_selection.select(["file_exists", "title", "material_id"]).head(20)
-        )
-        with_file_exists = await check_file_exists(api_token, item_selection)
-        print(
-            f"All types in result: {set([type(x) for x in with_file_exists.select('file_exists').to_series().to_list()])}"
-        )
-        print(f"now updating db")
-        await update_copyright_items(settings=self.settings, data=with_file_exists)
+            # append with_file_exists to item_selection
+            item_selection = item_selection.vstack(with_file_exists)
+
+            print(f"now updating db")
+            await update_copyright_items(settings=self.settings, data=item_selection)
 
     def _get_unique_filepath(
         self, directory: Directory, filename_base: str, extension: str = ".xlsx"
