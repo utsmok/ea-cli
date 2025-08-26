@@ -83,6 +83,11 @@ async def check_file_exists(
     # Use API to check file existence
     header = {"Authorization": f"Bearer {api_token}"}
     processed_results = []
+    counterdict = {
+        'true': 0,
+        'false': 0,
+        'none': 0
+    }
     async with httpx.AsyncClient(
         headers=header, follow_redirects=True, timeout=20
     ) as session:
@@ -100,10 +105,21 @@ async def check_file_exists(
                 print(counter := counter + 1)
                 if not isinstance(result, BaseException):
                     processed_results.append(result)
+                    if result.get("file_exists") is True:
+                        counterdict['true'] += 1
+                    elif result.get("file_exists") is False:
+                        counterdict['false'] += 1
+                    else:
+                        counterdict['none'] += 1
+                else:
+                    counterdict['none'] += 1
     logger.info(
         f"Received data for {len(processed_results)} URLs after checking {len(files_to_check)} items in {time.time() - start_time:.2f} seconds."
     )
+    logger.info(f"File existence check results: {counterdict}")
     results = pl.from_dicts(processed_results)
+    results.write_excel("file_existence_check_results.xlsx")
+    df = df.drop("file_exists")
     df = df.join(results, on="material_id", how="left")
 
     if excel_file:

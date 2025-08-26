@@ -233,20 +233,32 @@ async def update_copyright_items(
             old_value = getattr(db_item, field)
             try:
                 if field == "file_exists":
-                    if not isinstance(new_value, bool) and not isinstance(
-                        new_value, int
-                    ):
-                        continue
-                    else:
-                        changes = change(
-                            changes,
-                            field,
-                            new_value,
-                            old_value,
-                            "file_exists value received, always update",
-                        )
 
+                    match new_value:
+                        case True | 1 | "1" | "true" | "True":
+                            print(f'{new_value=} --> True')
+                            new_value = True
+                        case False | 0 | "0" | "false" | "False":
+                            print(f'{new_value=} --> False')
+                            new_value = False
+                        case None | '':
+                            new_value = None
+                        case _:
+                            print(f"[skip][file_exists] unexpected value: {new_value}")
+                            continue
+
+                    if not isinstance(new_value, bool):
                         continue
+
+                    changes = change(
+                        changes,
+                        field,
+                        new_value,
+                        old_value,
+                        "file_exists value received, always update",
+                    )
+
+                    continue
 
                 if isinstance(old_value, datetime):
                     new_value = None
@@ -283,7 +295,9 @@ async def update_copyright_items(
                     new_value = round(float(new_value), 2) if new_value else None
                     old_value = round(old_value, 2)
                 if isinstance(old_value, int):
-                    new_value = int(new_value) if (new_value or new_value==0) else None
+                    new_value = (
+                        int(new_value) if (new_value or new_value == 0) else None
+                    )
 
             except Exception as e:
                 logger.debug(

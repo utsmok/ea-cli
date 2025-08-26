@@ -1044,8 +1044,7 @@ class EasyAccessTool:
         logger.debug(
             item_selection.select(["file_exists", "title", "material_id"]).head(20)
         )
-        logger.warning(f'sampling 200 items for testing, remove in prod')
-        with_file_exists = await check_file_exists(api_token, item_selection.sample(200))
+        with_file_exists = await check_file_exists(api_token, item_selection)
         print(
             f"All types in result: {set([type(x) for x in with_file_exists.select('file_exists').to_series().to_list()])}"
         )
