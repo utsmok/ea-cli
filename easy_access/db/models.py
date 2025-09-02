@@ -534,6 +534,7 @@ class StagedCopyrightItem(Model, TimestampMixin):
     retrieved_from_copyright_on = fields.DatetimeField(null=True)
     workflow_status = fields.CharField(max_length=255, null=True)
     faculty = fields.CharField(max_length=255, null=True)
+    file_exists = fields.CharField(max_length=255, null=True)
 
 
 

@@ -76,7 +76,7 @@ async def create() -> None:
 
 async def copyright_item_from_dict(
     item: dict[str, str | Model | int | datetime | None],
-) -> CopyrightItem:
+) -> CopyrightItem | None:
     """
     Turns a dict with data for a CopyrightItem into a CopyrightItem object
     """
@@ -128,6 +128,8 @@ async def copyright_item_from_dict(
         faculty = await Faculty.get(abbreviation=abbr)
     except Exception as e:
         logger.warning(f"Error getting faculty with {item.get('faculty')}: {e}")
+        faculty = None  # Initialize faculty to None on error
+
     try:
         if not faculty:
             faculty = await Faculty.get(abbreviation="UNM")
@@ -141,38 +143,39 @@ async def copyright_item_from_dict(
         if not item.get("status"):
             item["status"] = Status.PUBLISHED.value
 
-        item["material_id"] = int(item.get("material_id"))
+        item["material_id"] = int(item.get("material_id")) if isinstance(item.get("material_id"), (str, int)) else 0  # type: ignore[arg-type]
+
+        # Validate that material_id is present and valid
+        if not item.get("material_id") or item["material_id"] == 0:
+            logger.warning(f"Invalid or missing material_id: {item.get('material_id')}")
+            return None
+        last_change_val = item.get("last_change")
         item["last_change"] = (
-            datetime.strptime(item.get("last_change", ""), "%Y-%m-%d")
-            if isinstance(item.get("last_change"), str)
+            datetime.strptime(last_change_val, "%Y-%m-%d")
+            if isinstance(last_change_val, str) and last_change_val
             else None
         )
 
+        retrieved_val = item.get("retrieved_from_copyright_on")
         item["retrieved_from_copyright_on"] = (
-            (
-                datetime.strptime(
-                    item["retrieved_from_copyright_on"].split(" ")[0], "%Y-%m-%d"
-                )
-            )
-            if item.get("retrieved_from_copyright_on")
+            datetime.strptime(retrieved_val.split(" ")[0], "%Y-%m-%d")
+            if isinstance(retrieved_val, str) and retrieved_val
             else None
         )
 
-        item["pagecount"] = int(item.get("pagecount")) if item.get("pagecount") else 0
-        item["wordcount"] = int(item.get("wordcount")) if item.get("wordcount") else 0
+        item["pagecount"] = int(item.get("pagecount")) if isinstance(item.get("pagecount"), (str, int)) else 0  # type: ignore[arg-type]
+        item["wordcount"] = int(item.get("wordcount")) if isinstance(item.get("wordcount"), (str, int)) else 0  # type: ignore[arg-type]
         item["picturecount"] = (
-            int(item.get("picturecount")) if item.get("picturecount") else 0
+            int(item.get("picturecount")) if isinstance(item.get("picturecount"), (str, int)) else 0  # type: ignore[arg-type]
         )
         item["reliability"] = (
-            int(item.get("reliability")) if item.get("reliability") else 0
+            int(item.get("reliability")) if isinstance(item.get("reliability"), (str, int)) else 0  # type: ignore[arg-type]
         )
         item["pages_x_students"] = (
-            int(item.get("pages_x_students")) if item.get("pages_x_students") else 0
+            int(item.get("pages_x_students")) if isinstance(item.get("pages_x_students"), (str, int)) else 0  # type: ignore[arg-type]
         )
         item["count_students_registered"] = (
-            int(item.get("count_students_registered"))
-            if item.get("count_students_registered")
-            else 0
+            int(item.get("count_students_registered")) if isinstance(item.get("count_students_registered"), (str, int)) else 0  # type: ignore[arg-type]
         )
         item["filetype"] = (
             item.get("filetype", "unknown") if item.get("filetype") else "unknown"
@@ -183,15 +186,26 @@ async def copyright_item_from_dict(
         if not item.get("course_name"):
             item["course_name"] = item.get("course_name_canvas")
 
-        if not item.get("file_exists"):
+        # Normalize file_exists before checking if it's falsy
+        from easy_access.db.update import _normalize_file_exists
+        original_file_exists = item.get("file_exists")
+
+        # Only set to None if the original value was None or empty string
+        # After normalization, we want to preserve True/False values
+        if original_file_exists is None or original_file_exists == "":
             item["file_exists"] = None
+        else:
+            normalized_file_exists = _normalize_file_exists(original_file_exists)
+            item["file_exists"] = normalized_file_exists
 
         final_dict = {}
         # Only include keys that are in the allowed set and have non-None values.
         # Passing explicit None for non-nullable fields causes model construction errors.
+        # However, file_exists should always be included even if None (null=True in model)
         for key, val in item.items():
-            if key in copyright_item_keys and val is not None:
-                final_dict[key] = val
+            if key in copyright_item_keys:
+                if key == "file_exists" or val is not None:
+                    final_dict[key] = val
 
         final_item = CopyrightItem(**final_dict)
         return final_item

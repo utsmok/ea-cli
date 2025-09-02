@@ -1,5 +1,6 @@
 import pytest
-from easy_access.db.update import safe_int, safe_float, safe_date, safe_enum, safe_compare_greater
+from easy_access.db.update import safe_int, safe_float, safe_enum, safe_compare_greater
+from easy_access.utils import safe_date
 from easy_access.db.models import Status
 from datetime import datetime, date
 

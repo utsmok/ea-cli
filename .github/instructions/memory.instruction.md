@@ -45,6 +45,15 @@ Notes for future interactions
 - `.github/changelog.md` contains a changelog for this project; when you log changes here in your memory also update the changelog with a more detailed update
 - `.github/todo.md` contains a detailed todo list that should be kept updated alongside your memory
  - `.github/critical-review.md` contains the per-file findings and concrete follow-ups produced during the 2025-09-02 review.
+ - New (2025-09-02 Final): Code review confirms export functions completely removed from refactor; relations functions exist but need N+1 optimization & pipeline integration; export stage stubbed in pipeline. Updated plan reflects legacy `old_main.py` patterns: faculty/program/overview/all_items sheets with file uniqueness, mature `DataEntrySheet` formatting. Phase A critical path: recreate export orchestrator + optimize relations.
 - Repo-wide safety sweep completed 2025-09-02: replaced `__dict__` with `vars()`, ad-hoc casts with `safe_*` helpers in key files; no new tests needed as existing ones cover.
+- Phase 2 refactor completed 2025-09-02: `update_copyright_items` broken down into modular functions with strategy pattern, custom exceptions, and Settings integration.
+- Phase 4 completed 2025-03-09: Added DateFieldStrategy and EnumFieldStrategy for enhanced field comparisons, implemented comprehensive unit test coverage (50 tests in `tests/test_update_refactor.py`), and validated all refactored functions with real data processing. All 63 tests pass.
+- **MAJOR MILESTONE**: Complete `update_copyright_items` refactor finished 2025-03-09: All 5 phases implemented including comprehensive integration tests with real data (7 tests in `tests/test_integration_real_data.py`), 50 unit tests covering all refactored components, strategy pattern for field comparisons, custom exceptions, Settings integration, and full validation. The 400+ line monolithic function has been successfully broken down into modular, testable components.
+- 2025-09-02: Implemented comprehensive admin CLI for `StagedProcessingFailure` management with commands: `inspect-failures`, `failure-stats`, `retry-failures`, `cleanup-failures`; includes Trogon TUI support for enhanced user experience.
+- 2025-09-02: Added CLI flags for individual pipeline stages: `--ingest-only`, `--process-only`, `--export-only` to `run.py process` command, allowing developers to run specific stages of the data processing pipeline.
+- 2025-09-02: Converted `easy_access/pipeline.py` to provide async entrypoints (`run_async`, `ingest_raw_data_async`, etc.) and thin sync wrappers; removed `asyncio.run` from library-level code for better async compatibility.
+
+(End of memory)
 
 (End of memory)

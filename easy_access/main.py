@@ -11,6 +11,8 @@ coordinating the various data processing workflows, including:
 
 
 
+from loguru import logger
+
 from easy_access.pipeline import DataPipeline
 from easy_access.settings import (
     EasyAccessSettings,
@@ -47,3 +49,18 @@ class EasyAccessTool:
         """
         pipeline = DataPipeline(settings=self.settings)
         pipeline.run()
+
+    def run_ingest(self) -> None:
+        """
+        Executes only the data ingestion stages.
+        """
+        pipeline = DataPipeline(settings=self.settings)
+        pipeline.ingest_raw_data()
+        pipeline.ingest_faculty_updates()
+
+    def run_process(self) -> None:
+        """
+        Executes only the data processing stage.
+        """
+        pipeline = DataPipeline(settings=self.settings)
+        pipeline.process_data()
