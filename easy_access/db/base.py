@@ -72,6 +72,11 @@ async def create() -> None:
     await Tortoise.generate_schemas(safe=True)
 
 
+async def close_connections() -> None:
+    """Close all Tortoise ORM database connections."""
+    await Tortoise.close_connections()
+
+
 
 
 async def copyright_item_from_dict(

@@ -43,6 +43,18 @@ class DataPipeline:
         """
         asyncio.run(self.process_data_async())
 
+    def update_relations(self) -> None:
+        """
+        Synchronous wrapper for updating relations.
+        """
+        asyncio.run(self.update_relations_async())
+
+    def export_reports(self) -> None:
+        """
+        Synchronous wrapper for exporting reports.
+        """
+        asyncio.run(self.export_reports_async())
+
     # Asynchronous interface
     async def run_async(self) -> None:
         """
@@ -52,7 +64,8 @@ class DataPipeline:
         await self.ingest_raw_data_async()
         await self.ingest_faculty_updates_async()
         await self.process_data_async()
-        # await self.export_reports_async()  # To be implemented
+        await self.update_relations_async()
+        await self.export_reports_async()
         logger.info("Data processing pipeline finished.")
 
     async def ingest_raw_data_async(self, file_path: str | None = None) -> None:
@@ -104,3 +117,23 @@ class DataPipeline:
         await process_staged_raw_data(self.settings)
         await process_staged_faculty_updates(self.settings)
         logger.info("Staged data processed.")
+
+    async def update_relations_async(self) -> None:
+        """
+        Updates database relations (duplicates, course links).
+        """
+        from easy_access.db.relations import update_relations_async
+
+        logger.info("Updating relations...")
+        await update_relations_async(self.settings)
+        logger.info("Relations updated.")
+
+    async def export_reports_async(self) -> None:
+        """
+        Exports processed data to Excel reports (faculty sheets, programme sheets, etc.).
+        """
+        from easy_access.sheets.export import export_reports_async
+
+        logger.info("Exporting reports...")
+        await export_reports_async(self.settings)
+        logger.info("Reports exported.")

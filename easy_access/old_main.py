@@ -37,7 +37,7 @@ from easy_access.settings import (
     EasyAccessSettings,
     Settings,
 )
-from easy_access.sheets.analysis import create_faculty_overviews
+from easy_access.sheets.analysis import create_faculty_overviews_sync
 from easy_access.sheets.enrichment import update_osiris_data
 from easy_access.sheets.sheet import (
     create_export_sheet,
@@ -1006,7 +1006,7 @@ class EasyAccessTool:
             )
             return
 
-        style_iter_result: int | None = create_faculty_overviews(
+        style_iter_result: int | None = create_faculty_overviews_sync(
             settings=self.settings,
             faculty_data=faculty_dict,
             style_iter=self.style_iter,

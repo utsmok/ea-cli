@@ -64,3 +64,17 @@ class EasyAccessTool:
         """
         pipeline = DataPipeline(settings=self.settings)
         pipeline.process_data()
+
+    def run_export(self) -> None:
+        """
+        Executes only the export stage.
+        """
+        pipeline = DataPipeline(settings=self.settings)
+        pipeline.export_reports()
+
+    def run_relations(self) -> None:
+        """
+        Executes only the relations update stage.
+        """
+        pipeline = DataPipeline(settings=self.settings)
+        pipeline.update_relations()

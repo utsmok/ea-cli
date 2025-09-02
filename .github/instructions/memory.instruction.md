@@ -50,9 +50,10 @@ Notes for future interactions
 - Phase 2 refactor completed 2025-09-02: `update_copyright_items` broken down into modular functions with strategy pattern, custom exceptions, and Settings integration.
 - Phase 4 completed 2025-03-09: Added DateFieldStrategy and EnumFieldStrategy for enhanced field comparisons, implemented comprehensive unit test coverage (50 tests in `tests/test_update_refactor.py`), and validated all refactored functions with real data processing. All 63 tests pass.
 - **MAJOR MILESTONE**: Complete `update_copyright_items` refactor finished 2025-03-09: All 5 phases implemented including comprehensive integration tests with real data (7 tests in `tests/test_integration_real_data.py`), 50 unit tests covering all refactored components, strategy pattern for field comparisons, custom exceptions, Settings integration, and full validation. The 400+ line monolithic function has been successfully broken down into modular, testable components.
-- 2025-09-02: Implemented comprehensive admin CLI for `StagedProcessingFailure` management with commands: `inspect-failures`, `failure-stats`, `retry-failures`, `cleanup-failures`; includes Trogon TUI support for enhanced user experience.
-- 2025-09-02: Added CLI flags for individual pipeline stages: `--ingest-only`, `--process-only`, `--export-only` to `run.py process` command, allowing developers to run specific stages of the data processing pipeline.
-- 2025-09-02: Converted `easy_access/pipeline.py` to provide async entrypoints (`run_async`, `ingest_raw_data_async`, etc.) and thin sync wrappers; removed `asyncio.run` from library-level code for better async compatibility.
+- 2025-09-02: **PHASE A COMPLETED**: Implemented export stage with `sheets/export.py` recreating legacy export functions (`create_faculty_sheets`, `create_programme_sheets`, `create_overviews`, `create_all_items_sheet`) with file uniqueness handling and DB-first architecture.
+- 2025-09-02: **PHASE A COMPLETED**: Extracted relations functions from `db/update.py` into optimized `easy_access/db/relations.py` with batch operations to eliminate N+1 queries.
+- 2025-09-02: **PHASE A COMPLETED**: Added `update_relations_async` pipeline stage calling optimized relations functions (batch prefetch, bulk updates).
+- 2025-09-02: **PHASE A COMPLETED**: Added `export_reports_async` to pipeline coordinating all export types (faculty, program, overview, all_items).
 
 (End of memory)
 

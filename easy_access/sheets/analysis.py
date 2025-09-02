@@ -112,7 +112,7 @@ def create_programme_overviews(
     return style_iter
 
 
-def create_faculty_overviews(
+async def create_faculty_overviews(
     settings: Settings,  # Added settings
     faculty_data: dict[str, pl.DataFrame],
     style_iter: int,
@@ -167,9 +167,7 @@ def create_faculty_overviews(
             )
         data_to_update.append(all_faculty_data)
 
-    asyncio.get_event_loop().run_until_complete(
-        update_db(settings=settings, datalist=data_to_update)
-    )
+    await update_db(settings=settings, datalist=data_to_update)
     return style_iter
 
 
@@ -185,3 +183,22 @@ async def update_db(settings: Settings, datalist: list[pl.DataFrame]):  # Added 
     await update_copyright_items(settings, df)
 
     await update_copyright_relations(settings=settings)  # Pass settings
+
+
+def create_faculty_overviews_sync(
+    settings: Settings,
+    faculty_data: dict[str, pl.DataFrame],
+    style_iter: int,
+    disable_writes: bool = False,
+) -> int:
+    """
+    Synchronous wrapper for create_faculty_overviews.
+    Used by legacy synchronous code that hasn't been migrated to async.
+    """
+    import asyncio
+    return asyncio.run(create_faculty_overviews(
+        settings=settings,
+        faculty_data=faculty_data,
+        style_iter=style_iter,
+        disable_writes=disable_writes
+    ))
