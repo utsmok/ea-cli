@@ -1,5 +1,6 @@
 compare/
 compare/*.*
+dashboard/*.*
 # datafiles
 *.xls
 *.xlsx

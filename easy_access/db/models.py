@@ -552,3 +552,19 @@ class StagedFacultyUpdate(Model, TimestampMixin):
 
     class Meta:
         table = "staged_faculty_update"
+
+
+class StagedProcessingFailure(Model, TimestampMixin):
+    """
+    Stores failures encountered while processing staged rows.
+    Each row references the staged material_id (if available), the raw payload
+    (as JSON), and an error message to aid debugging/retry.
+    """
+
+    id = fields.IntField(pk=True)
+    material_id = fields.IntField(null=True, db_index=True)
+    staged_payload = fields.JSONField(null=True)
+    error_message = fields.CharField(max_length=2000, null=True)
+
+    class Meta:
+        table = "staged_processing_failures"

@@ -465,8 +465,8 @@ def render_item_history(history: list[ItemUpdate]):
         return Div("No history found for this item.")
 
     logger.debug(f"Rendering item history for {len(history)} items")
-    all_data: list[dict[str, str | dict[str, str]] | int | datetime.datetime] = [
-        item.__dict__.get("change_details", {}) for item in history
+    all_data: list[dict[str, str | dict[str, str]]] = [
+        vars(item).get("change_details", {}) for item in history
     ]
     all_data.sort(
         key=lambda x: x.get("update_time", ""), reverse=True

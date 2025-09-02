@@ -32,7 +32,7 @@ from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFacu
     Settings,  # Add Settings for type hint
     SettingsFaculty,
 )
-from easy_access.utils import File, standardize_dataframe
+from easy_access.utils import File, standardize_dataframe, safe_float, safe_int
 
 
 
@@ -67,12 +67,17 @@ async def load_osiris_data(settings: Settings) -> None:
             course_code = int(course_code_raw)
         if course_code in existing_course_codes or not course_data.get("cursuscode"):
             continue
+        ec_val = course_data.get("ec", "0")
+        if isinstance(ec_val, str):
+            ec_parsed = safe_float(ec_val.replace(",", "."))
+        else:
+            ec_parsed = safe_float(str(ec_val).replace(",", "."))
         course_dict: dict[str, str | list[str] | None] = {
             "cursuscode": course_code,
-            "internal_id": int(course_data.get("internal_id")),
+            "internal_id": safe_int(course_data.get("internal_id")) or 0,
             "name": course_data.get("name", None),
             "short_name": course_data.get("short_name", None),
-            "ec": int(round(float(course_data.get("ec", 0).replace(",", ".")), 0)),
+            "ec": int(round(ec_parsed or 0, 0)),
             "programme": course_data.get("programme", None),
             "notes": course_data.get("notes", None),
             "category": course_data.get("category", None),

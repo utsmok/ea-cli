@@ -21,6 +21,9 @@ Top-priority todo items (from `.github/todo.md`)
 - Add tests ensuring staging is only cleared on successful processing.
  - Hardened staged processing (2025-09-02): `process_staged_raw_data` now uses an explicit staged field mapping, batched `in_transaction()` blocks, per-row error handling, and deletes only successfully-processed staged rows. Further type/validation helper work remains.
  - Next: add `safe_*` parsing helpers and unit tests for staged-processing; route complex merges into canonical `update_copyright_items` after validation.
+ - Hardened staged processing (2025-09-02): `process_staged_raw_data` now uses an explicit staged field mapping, batched `in_transaction()` blocks, per-row error handling, and deletes only successfully-processed staged rows. Per-row failures are persisted in `StagedProcessingFailure` for inspection and retry.
+ - Implemented small `safe_*` parsing helpers and moved them to `easy_access/utils.py` (2025-09-02). Unit tests `tests/test_safe_parsers.py` and integration test `tests/test_integration_staging.py` were added and pass locally.
+ - CI/GitHub Actions is deprioritized until a repo-wide safety sweep is completed.
 
 Tortoise ORM guidance recorded
 - Use `Tortoise.init(...)` and `Tortoise.generate_schemas(safe=True)` for idempotent setup; call `Tortoise.close_connections()` on exit.
@@ -42,5 +45,6 @@ Notes for future interactions
 - `.github/changelog.md` contains a changelog for this project; when you log changes here in your memory also update the changelog with a more detailed update
 - `.github/todo.md` contains a detailed todo list that should be kept updated alongside your memory
  - `.github/critical-review.md` contains the per-file findings and concrete follow-ups produced during the 2025-09-02 review.
+- Repo-wide safety sweep completed 2025-09-02: replaced `__dict__` with `vars()`, ad-hoc casts with `safe_*` helpers in key files; no new tests needed as existing ones cover.
 
 (End of memory)

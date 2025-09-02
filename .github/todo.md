@@ -1,76 +1,43 @@
 # Project TODO
 
-Guidance: keep entries short, and move completed items to the changelog with a short note.
+This file collects the actionable tasks for the dataflow refactor in priority order. It includes completed items for visibility.
 
-When you complete an item, add a one-line entry to `.github/changelog.md` (date,  summary).
+Guidance:
+- Keep items small and testable.
+- When an item is completed, add a one-line entry to `.github/changelog.md` and check it off here.
 
-## 0 Critical review of refactor changes
-- [x] Perform a thorough, critical review of the refactor changes already made comparing current branch to commit `849628b965f4bd23b91400f1a5034eaf40787334`:
-  - [x] Produce a file-level summary of changed files and a short rationale for each change. (see `.github/critical-review.md`)
-  - [x] Identify required follow-up code changes and add them to this todo list. (see follow-ups below)
-  - [x] Update `.github/analysis.md` and `.github/changelog.md` with review findings and follow-up actions.
-  - Owner/ETA: (unassigned) — review completed 2025-09-02
+## Priority: Immediate (safety & correctness)
+- [x] Repo-wide safety sweep: replace ad-hoc casts and `__dict__` usage with `safe_*` helpers and explicit mappings. Add unit tests for any changed codepaths. (high)
+- [ ] Route complex staged rows into canonical merge path: ensure `process_staged_raw_data` delegates non-trivial merges to `update_copyright_items` (use `copyright_item_from_dict` and `merge_rules`). (high)
+- [ ] Add logging improvements for staged processing (include material_id, faculty, stage, and compact error traces). (high)
+- [ ] Implement failure-inspection/retry helper: admin CLI or small script to list `StagedProcessingFailure` rows and requeue or attempt automated retries. (high)
 
-### Follow-ups from critical review
-- [ ] Replace `__dict__` usage in `easy_access/db/update.py::process_staged_raw_data` with an explicit safe mapping and typed conversion. (high)
-- [ ] Wrap staged processing in transactions/savepoints and process in batches; only clear staging after successful commit. (high)
- - [x] Replace `__dict__` usage in `easy_access/db/update.py::process_staged_raw_data` with an explicit safe mapping and typed conversion. (high) — implemented 2025-09-02
- - [x] Wrap staged processing in transactions/savepoints and process in batches; only clear staging after successful commit. (high) — implemented 2025-09-02
-- [ ] Route complex staged rows to `update_copyright_items` for canonical merge logic. (high)
-- [ ] Add per-row error capture and persist failed staged rows to a CSV/table for later retry. (high)
-- [ ] Extract merge heuristics from `easy_access/old_main.py` into `easy_access/merge_rules.py` and add unit tests that encode the priority rules. (medium)
-- [ ] Convert `easy_access/pipeline.py` to provide async entrypoints and a thin sync wrapper; remove `asyncio.run` from library-level methods. (medium)
-- [ ] Add unit and integration tests: staging success, staging failure (staging retained), `copyright_item_from_dict`.
- - [ ] Add unit and integration tests: staging success, staging failure (staging retained), `copyright_item_from_dict`.
- - [ ] Implement small `safe_*` parsing helpers used by staged processors and add unit tests for the helpers (next immediate task).
-- [ ] Add logging improvements for staged processing (include material_id, faculty, error trace).
-- [ ] Normalize `file_exists` values and add tests for `add_file_exists()` flows.
-- [ ] Create a developer note in README describing the new pipeline and where to find legacy heuristics.
+## Priority: High (reliability & observability)
+- [ ] Add unit tests for `copyright_item_from_dict` and merge heuristics in `easy_access/merge_rules.py`. (high)
+- [ ] Normalize `file_exists` values and add tests for any `add_file_exists()` or related flows. (high)
+- [ ] Add item-level error handling coverage and tests so single-row failures do not hide regressions. (high)
 
-This file holds the canonical, actionable to-do list for the dataflow refactor.
-Update this file when you make changes: check off items, add details, or create new items.
+## Priority: Medium (developer ergonomics & API)
+- [ ] Convert `easy_access/pipeline.py` to provide async entrypoints and thin sync wrappers; remove `asyncio.run` from library-level code. (medium)
+- [ ] Provide CLI flags or `Settings` options to run individual stages (ingest-only, process-only, export-only). (medium)
+- [ ] Implement the admin retry workflow (UI/CLI) for `StagedProcessingFailure`. (medium)
 
+## Priority: Low (infrastructure & performance)
+- [ ] Add GitHub Actions CI to run `uv run pytest` on push/PR after the repo-wide safety sweep. (low)
+- [ ] Profile and optimize bulk create/update paths (batch sizes, DB-side upserts where supported). (low)
 
-## 1 Core correctness & safety
-- [ ] Harden staged processing (`easy_access/db/update.py::process_staged_raw_data`)
-  - [ ] Replace `staged_item.__dict__` usage with an explicit safe mapping / `to_dict()` helper.
-  - [ ] Route complex rows to the existing `update_copyright_items` merge logic instead of ad-hoc updates.
-  - [ ] Ensure staged rows are validated/normalized (reuse `copyright_item_from_dict` where appropriate).
-  - [ ] Only clear staging on full success (transactional / atomic behavior or compensating rollback).
-- [ ] Add item-level error handling so a single failing row does not abort the whole run without safe reporting.
+## Documentation & housekeeping
+- [ ] Add a short developer note in README describing the pipeline flow and where to find legacy heuristics (`old_main.py`).
+- [ ] Add a migration/developer note listing notable model additions (`StagedProcessingFailure`) and where to find failure records.
 
-## 2 Merge rules & legacy behavior preservation
-- [ ] Extract merge heuristics from `easy_access/old_main.py` into `easy_access/merge_rules.py`.
-- [ ] Add unit tests codifying the priority rules (timestamp precedence, workflow-status ranking, manual-classification ordering, remark merging).
+## Completed (keep for history)
+- [x] Critical review of refactor changes and file-level summary (see `.github/critical-review.md`) — completed 2025-09-02
+- [x] Harden staged-processing in `easy_access/db/update.py`: replaced `__dict__` usage with explicit mapping, batched transactional processing, per-row error handling, and conditional deletion of processed staged rows — completed 2025-09-02
+- [x] Add per-row failure persistence: `StagedProcessingFailure` model and recording failures during staged processing — completed 2025-09-02
+- [x] Implement small safe parsing helpers (`safe_int`, `safe_float`, `safe_date`, `safe_enum`, `safe_compare_greater`) and move them to `easy_access/utils.py` — completed 2025-09-02
+- [x] Unit tests for parsing helpers: `tests/test_safe_parsers.py` — completed 2025-09-02
+- [x] Integration test: `tests/test_integration_staging.py` verifying staging retention/deletion semantics — completed 2025-09-02
 
-## 3 API stability & runtime behavior
-- [ ] Remove/replace `asyncio.run` calls in library helpers; provide async entrypoints and thin sync wrappers for CLI use.
-- [ ] Add CLI flags or `EasyAccessSettings` options to run individual stages (ingest-only, process-only, export-only, full-run).
-
-## 4 Observability & error handling
-- [ ] Improve logging (include material_id, faculty, and stage) for success and failure cases.
-- [ ] Add retries/backoff for transient I/O or DB contention errors.
-
-## 5 Testing and quality gates
-- [ ] Unit tests for ingestion helpers: `load_raw_copyright_data_to_staging`, `load_faculty_updates_to_staging` (use small polars DataFrames).
-- [ ] Integration tests for `DataPipeline.run()` against a temporary sqlite DB with a small sample dataset.
-- [ ] Tests that assert staging tables are only cleared on successful processing.
-- [ ] Add linting/type checks and include them in CI pipeline.
-
-## 6 Export / Reports
-- [ ] Implement `DataPipeline.export_reports` and wire existing report-generation code into it.
-- [ ] Add smoke tests for generated reports (columns present, row counts, basic values).
-
-## 7 Performance & bulk operations
-- [ ] Optimize bulk create/update (batch sizes, use of `on_conflict` where supported by ORM/bulk helpers).
-- [ ] Profile pipeline on representative dataset and address hotspots.
-
-## 8 Documentation & developer ergonomics
-- [ ] Update README with pipeline flow, CLI usage, and development notes.
-- [ ] Add a short migration note for developers about `old_main.py` and where to find the new entrypoints.
-
-## Small actionable items / quick wins
-- [ ] Implement async/sync wrapper helper for running coroutines from CLI code.
-- [ ] Add unit tests for `copyright_item_from_dict`.
-- [ ] Add a README note marking `load_raw_copyright_data` as deprecated and pointing to staging loaders.
+## Notes
+- Work in the `new-dataflow` branch. Add changelog entries for completed items.
 

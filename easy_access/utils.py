@@ -6,10 +6,95 @@ import pathlib
 import shutil
 import time
 from datetime import datetime
+from datetime import date
 from typing import Any
 
 import polars as pl
 from loguru import logger
+
+def safe_int(x: Any) -> int | None:
+    if x is None:
+        return None
+    try:
+        return int(x)
+    except Exception:
+        try:
+            return int(float(x))
+        except Exception:
+            return None
+
+def safe_float(x: Any) -> float | None:
+    if x is None:
+        return None
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+def safe_date(x: Any) -> date | None:
+    if x is None:
+        return None
+    if isinstance(x, date) and not isinstance(x, datetime):
+        return x
+    if isinstance(x, datetime):
+        return x.date()
+    if isinstance(x, str):
+        try:
+            return datetime.fromisoformat(x).date()
+        except Exception:
+            from datetime import datetime as _dt
+
+            for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    return _dt.strptime(x, fmt).date()
+                except Exception:
+                    continue
+    return None
+
+def safe_enum(enum_cls, value: Any):
+    if value is None:
+        return None
+    try:
+        return enum_cls(value)
+    except Exception:
+        try:
+            if isinstance(value, str) and value in enum_cls.__members__:
+                return enum_cls[value]
+        except Exception:
+            pass
+    return None
+
+def safe_compare_greater(a: Any, b: Any) -> bool:
+    """Return True if a > b using safe normalization for numbers and dates, else False."""
+    if a is None or b is None:
+        return False
+    # numeric comparison
+    if isinstance(a, (int, float, str)) and isinstance(b, (int, float, str)):
+        try:
+            fa = safe_float(a)
+            fb = safe_float(b)
+            if fa is None or fb is None:
+                return False
+            return fa > fb
+        except Exception:
+            return False
+    # date/datetime comparison
+    if isinstance(a, (date, datetime)) and isinstance(b, (date, datetime)):
+        try:
+            na = (
+                datetime.combine(a, datetime.min.time())
+                if isinstance(a, date) and not isinstance(a, datetime)
+                else a
+            )
+            nb = (
+                datetime.combine(b, datetime.min.time())
+                if isinstance(b, date) and not isinstance(b, datetime)
+                else b
+            )
+            return na > nb
+        except Exception:
+            return False
+    return False
 
 
 def determine_course_code(code: str, name: str) -> set[str]:

@@ -44,6 +44,24 @@ Key stages:
 - Replace `asyncio.run` in library code with async entrypoints and awrapper for CLI.
 - Add unit & integration tests covering ingest -> stage -> process flows.
 
+## Recent changes and operational notes (2025-09-02)
+
+- Implemented staged-processing hardening in `easy_access/db/update.py`:
+	- Replaced unsafe `__dict__` usage with an explicit `staged_fields` mapping.
+	- Process staged rows in batches inside `async with in_transaction()` blocks.
+	- Per-row try/except: only successfully processed staged rows are deleted after commit.
+	- Per-row failures are now persisted to the DB in `staged_processing_failures` (model `StagedProcessingFailure`) for inspection and retry.
+
+- Moved small parsing/normalization helpers into `easy_access/utils.py` (`safe_int`, `safe_float`, `safe_date`, `safe_enum`, `safe_compare_greater`) and updated modules to import them from there.
+
+- Added unit tests for the helpers (`tests/test_safe_parsers.py`) and an integration test for staged processing (`tests/test_integration_staging.py`). Both pass locally in the development environment.
+
+## Short-term next steps (priority order)
+
+- Repo-wide safety sweep: replace remaining ad-hoc casts and `__dict__` usages with `safe_*` helpers and explicit mappings. Add unit tests for changed areas. (High priority)
+- Implement a lightweight admin CLI to list `StagedProcessingFailure` rows and allow re-queuing for processing. (Medium)
+- Add CI after the repo-wide safety sweep to avoid introducing regressions into mainline. (Low)
+
 ## Quick review of diffs vs starting commit (849628b9...)
 
 I compared the current branch against commit `849628b965f4bd23b91400f1a5034eaf40787334` and found the following noteworthy changes:

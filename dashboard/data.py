@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import Any
 
+from easy_access.utils import safe_float
+
 import polars as pl
 from loguru import logger
 
@@ -412,7 +414,9 @@ def _create_filter_expression(
                     pl.Float32,
                 ):
                     with contextlib.suppress(ValueError):
-                        or_expressions.append(pl.col(actual_col) == float(or_value))
+                        parsed = safe_float(or_value)
+                        if parsed is not None:
+                            or_expressions.append(pl.col(actual_col) == parsed)
                 # Add other type handling if necessary
 
             # Combine OR expressions for a single filter key

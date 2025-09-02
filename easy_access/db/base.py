@@ -10,7 +10,7 @@ from loguru import logger
 from sqlalchemy import Engine, create_engine
 from tortoise import Model, Tortoise
 
-from easy_access.db.models import CopyrightItem, Faculty
+from easy_access.db.models import CopyrightItem, Faculty, Classification, Status
 from easy_access.settings import Settings
 
 # Module-level flag to memoize initialization
@@ -133,6 +133,14 @@ async def copyright_item_from_dict(
             faculty = await Faculty.get(abbreviation="UNM")
 
         item["faculty"] = faculty
+        # enforce sensible defaults for fields required by the model to avoid
+        # immediate constructor errors when values are missing in staged data.
+        if not item.get("classification"):
+            # fallback to the project's default classification
+            item["classification"] = Classification.LANGE_OVERNAME.value
+        if not item.get("status"):
+            item["status"] = Status.PUBLISHED.value
+
         item["material_id"] = int(item.get("material_id"))
         item["last_change"] = (
             datetime.strptime(item.get("last_change", ""), "%Y-%m-%d")
@@ -179,9 +187,11 @@ async def copyright_item_from_dict(
             item["file_exists"] = None
 
         final_dict = {}
-        for key in item:
-            if key in copyright_item_keys:
-                final_dict[key] = item[key]
+        # Only include keys that are in the allowed set and have non-None values.
+        # Passing explicit None for non-nullable fields causes model construction errors.
+        for key, val in item.items():
+            if key in copyright_item_keys and val is not None:
+                final_dict[key] = val
 
         final_item = CopyrightItem(**final_dict)
         return final_item

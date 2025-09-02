@@ -11,7 +11,7 @@ import yaml
 from loguru import logger
 from rich.traceback import install
 
-from easy_access.utils import Directory, File
+from easy_access.utils import Directory, File, safe_float
 
 """Manages application settings, loaded from YAML configuration files.
 
@@ -305,7 +305,7 @@ class UniversitySettings:
                 for programme in programmes:
                     # Use asdict for dataclasses if available and preferred,
                     # otherwise direct attribute access or __dict__ is common.
-                    prog_dict: dict[str, Any] = programme.__dict__.copy()  # Make a copy
+                    prog_dict: dict[str, Any] = vars(programme).copy()  # Make a copy
                     prog_dict["faculty_name"] = faculty.name
                     prog_dict["faculty_abbreviation"] = faculty.abbreviation
                     self.programmes.add(SettingsProgramme(**prog_dict))
@@ -804,9 +804,10 @@ class Settings:
         """
         for key, value in rest_values.items():
             if key == "fine_amount":
-                try:
-                    self.fine_amount = float(value)
-                except (ValueError, TypeError):
+                parsed = safe_float(value)
+                if parsed is not None:
+                    self.fine_amount = parsed
+                else:
                     logger.warning(
                         f"Could not parse 'fine_amount': {value} as float. Using default: {self.fine_amount}"
                     )

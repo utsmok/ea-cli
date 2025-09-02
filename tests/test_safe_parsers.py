@@ -11,6 +11,7 @@ def test_safe_int():
     assert safe_int("notanumber") is None
 
 
+
 def test_safe_float():
     assert safe_float("12.34") == pytest.approx(12.34)
     assert safe_float(5) == pytest.approx(5.0)

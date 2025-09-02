@@ -29,90 +29,19 @@ from easy_access.db.models import (
     StagedFacultyUpdate,
     WorkflowStatus,
     Status,
+    StagedProcessingFailure,
 )
 from easy_access.settings import Settings
-from easy_access.utils import determine_course_code, standardize_dataframe
-
-
-# --- small parsing helpers to centralize validation and reduce type casting bugs ---
-def safe_int(x: Any) -> int | None:
-    if x is None:
-        return None
-    try:
-        return int(x)
-    except Exception:
-        try:
-            # sometimes float-like strings
-            return int(float(x))
-        except Exception:
-            return None
-
-
-def safe_float(x: Any) -> float | None:
-    if x is None:
-        return None
-    try:
-        return float(x)
-    except Exception:
-        return None
-
-
-def safe_date(x: Any) -> date | None:
-    if x is None:
-        return None
-    if isinstance(x, date) and not isinstance(x, datetime):
-        return x
-    if isinstance(x, datetime):
-        return x.date()
-    if isinstance(x, str):
-        try:
-            return datetime.fromisoformat(x).date()
-        except Exception:
-            for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(x, fmt).date()
-                except Exception:
-                    continue
-    return None
-
-
-def safe_enum(enum_cls, value: Any):
-    if value is None:
-        return None
-    try:
-        # Try direct construction
-        return enum_cls(value)
-    except Exception:
-        try:
-            # Try name lookup
-            if isinstance(value, str) and value in enum_cls.__members__:
-                return enum_cls[value]
-        except Exception:
-            pass
-    return None
-
-# --- end helpers ---
-
-
-def safe_compare_greater(a: Any, b: Any) -> bool:
-    """Return True if a > b using safe normalization for numbers and dates, else False."""
-    if a is None or b is None:
-        return False
-    # numeric comparison
-    if isinstance(a, (int, float, str)) and isinstance(b, (int, float, str)):
-        try:
-            return float(a) > float(b)
-        except Exception:
-            return False
-    # date/datetime comparison
-    if isinstance(a, (date, datetime)) and isinstance(b, (date, datetime)):
-        try:
-            na = datetime.combine(a, datetime.min.time()) if isinstance(a, date) and not isinstance(a, datetime) else a
-            nb = datetime.combine(b, datetime.min.time()) if isinstance(b, date) and not isinstance(b, datetime) else b
-            return na > nb
-        except Exception:
-            return False
-    return False
+from easy_access.utils import (
+    determine_course_code,
+    standardize_dataframe,
+    safe_int,
+    safe_float,
+    safe_date,
+    safe_enum,
+    safe_compare_greater,
+)
+# --- end helpers: now imported from easy_access.utils ---
 
 
 async def link_courses_to_copyright_items() -> None:
@@ -329,21 +258,15 @@ async def update_copyright_items(
                     old_value = old_value.value
                 if isinstance(old_value, float):
                     try:
-                        if isinstance(new_value, (int, float, str)):
-                            new_value = round(float(new_value), 2)
-                        else:
-                            new_value = None
+                        parsed = safe_float(new_value)
+                        new_value = round(parsed, 2) if parsed is not None else None
                     except Exception:
                         new_value = None
                     old_value = round(old_value, 2)
                 if isinstance(old_value, int):
                     try:
-                        if new_value is None:
-                            new_value = None
-                        elif isinstance(new_value, (int, float, str)):
-                            new_value = int(new_value)
-                        else:
-                            new_value = None
+                        parsed = safe_int(new_value)
+                        new_value = parsed if parsed is not None else None
                     except Exception:
                         new_value = None
 
@@ -455,7 +378,8 @@ async def update_copyright_items(
     if isinstance(data, pl.DataFrame):
         data = standardize_dataframe(data)
         existing_mat_ids = await CopyrightItem.all().values("material_id")
-        existing_mat_ids = {int(m["material_id"]) for m in existing_mat_ids}
+        existing_mat_ids = {safe_int(m["material_id"]) for m in existing_mat_ids}
+        existing_mat_ids = {m for m in existing_mat_ids if m is not None}
 
         # Candidate new items (may be partial if coming from faculty sheets)
         candidate_new_items = (
@@ -715,10 +639,11 @@ async def process_staged_raw_data(settings: Settings) -> None:
     processed_ids: list[int] = []
 
     # Process in batches to limit transaction size
-    for batch in batched(staged_items, 50):
+    for batch_idx, batch in enumerate(batched(staged_items, 50)):
         batch_processed_ids: list[int] = []
+        logger.info(f"Processing batch {batch_idx} with {len(batch)} items")
         async with in_transaction() as conn:
-            for staged_item in batch:
+            for item_idx, staged_item in enumerate(batch):
                 try:
                     # Build a safe dict from known fields
                     item_dict: dict = {}
@@ -738,31 +663,24 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
                     if not existing_item:
                         # Create new item using canonical normalizer
+                        logger.debug(f"Creating new item for mid={mid}")
                         new_item = await copyright_item_from_dict(item_dict)
                         if new_item:
                             await new_item.save()
                             smid = safe_int(mid)
                             if smid is not None:
                                 batch_processed_ids.append(smid)
+                            logger.debug(f"Created new item mid={smid}")
                     else:
                         # Conservative updates for trivial fields
                         update_fields = []
                         # status: try to coerce to Status enum safely
                         status_val = item_dict.get("status")
                         if status_val:
-                            try:
-                                new_status = None
-                                try:
-                                    new_status = Status(status_val)
-                                except Exception:
-                                    # maybe name lookup
-                                    if status_val in Status.__members__:
-                                        new_status = Status[status_val]
-                                if new_status and existing_item.status != new_status:
-                                    existing_item.status = new_status
-                                    update_fields.append("status")
-                            except Exception:
-                                logger.debug(f"Could not parse status value '{status_val}' for material {mid}")
+                            new_status = safe_enum(Status, status_val)
+                            if new_status and existing_item.status != new_status:
+                                existing_item.status = new_status
+                                update_fields.append("status")
 
                         # last_change: accept datetime/date or parse common string formats
                         lc_val = item_dict.get("last_change")
@@ -790,15 +708,30 @@ async def process_staged_raw_data(settings: Settings) -> None:
                                 update_fields.append("last_change")
 
                         if update_fields:
+                            logger.debug(f"Updating existing item mid={mid} fields={update_fields}")
                             await existing_item.save(update_fields=update_fields)
                             smid = safe_int(mid)
                             if smid is not None:
                                 batch_processed_ids.append(smid)
+                            logger.debug(f"Updated existing item mid={smid}")
 
                 except Exception as e:
+                    err_msg = str(e)
                     logger.exception(
-                        f"Error processing staged item {getattr(staged_item,'material_id',None)}: {e}"
+                        f"Error processing staged item {getattr(staged_item,'material_id',None)}: {err_msg}"
                     )
+                    # Record failure in the DB for later inspection/retry
+                    try:
+                        payload = {f: getattr(staged_item, f, None) for f in staged_fields}
+                        await StagedProcessingFailure.create(
+                            material_id=safe_int(getattr(staged_item, "material_id", None)),
+                            staged_payload=payload,
+                            error_message=err_msg[:1900],
+                        )
+                    except Exception:
+                        logger.exception(
+                            f"Could not record staged processing failure for {getattr(staged_item,'material_id',None)}"
+                        )
                     # Do not re-raise; keep other rows processing. Failed staged rows remain for manual inspection.
 
         # After successful transaction, remove successfully processed staged rows
@@ -842,16 +775,7 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                         item.remarks = update.remarks
                         update_fields.append("remarks")
                     if update.workflow_status and item.workflow_status != update.workflow_status:
-                        # attempt to coerce to WorkflowStatus enum
-                        wf_st = None
-                        try:
-                            if update.workflow_status in WorkflowStatus.__members__:
-                                wf_st = WorkflowStatus[update.workflow_status]
-                            else:
-                                wf_st = WorkflowStatus(update.workflow_status)
-                        except Exception:
-                            wf_st = None
-
+                        wf_st = safe_enum(WorkflowStatus, update.workflow_status)
                         if wf_st:
                             item.workflow_status = wf_st
                             update_fields.append("workflow_status")
