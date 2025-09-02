@@ -24,11 +24,11 @@ from easy_access.db.models import (
     Course,
     CourseEmployee,
     Faculty,
-
     MissingCourse,
     Organization,
     Person,
     Programme,
+    StagedCopyrightItem,
 )
 from easy_access.db.update import (
     update_copyright_items,
@@ -39,8 +39,6 @@ from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFacu
     FileSetting,
     Settings,  # Add Settings for type hint
     SettingsFaculty,
-    # DEPARTMENT_MAPPING, # Will be accessed via settings
-    # SETTINGS, # Will be passed as an argument
 )
 from easy_access.utils import File
 
@@ -422,166 +420,12 @@ async def load_base_data(settings: Settings) -> None:
 async def load_raw_copyright_data(
     settings: Settings, file: File | pl.DataFrame | None = None
 ) -> None:
-    def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
-        """Read excel quietly suppressing noisy dtype-inference output."""
-        try:
-            with open(os.devnull, "w") as devnull:
-                with (
-                    contextlib.redirect_stdout(devnull),
-                    contextlib.redirect_stderr(devnull),
-                ):
-                    return pl.read_excel(file_path, **kwargs)
-        except Exception:
-            return pl.read_excel(file_path, **kwargs)
-
-    def read_copyright_export(
-        settings_param: Settings, file_param: File | None = None
-    ) -> pl.DataFrame:
-        """
-        Reads in data from the latest copyright export file in the copyright dir;
-        or if a file is given, reads in that file.
-        Input should be a direct export from the CopyRight tool without any changes.
-        """
-        try:
-            if not file_param:
-                logger.info(
-                    f"Reading in newest Copyright Data from directory: {settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
-                )
-                file_param = max(
-                    settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA].files,
-                    key=lambda x: x.created,
-                )
-
-            logger.info(f"Reading in data from:\n            {file_param.name}\n")
-            latest_file_date = file_param.created.strftime("%Y-%m-%d")
-            raw_copyright_data = _read_excel_quiet(file_param.path, sheet_name=None)
-            copyright_data = (
-                raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
-                .rename(
-                    lambda col: col.replace(" ", "_")
-                    .replace("#", "count_")
-                    .replace("*", "x")
-                    .lower()
-                )
-                .with_columns(
-                    pl.Series(
-                        "retrieved_from_copyright_on",
-                        [latest_file_date] * len(raw_copyright_data),
-                    ),
-                    pl.Series("workflow_status", ["ToDo"] * len(raw_copyright_data)),
-                    pl.col("last_change")
-                    .str.replace(r"^-$", "")
-                    .str.strip_chars()
-                    .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-                    .dt.strftime("%Y-%m-%d"),
-                    pl.col("classification").str.to_lowercase(),
-                    faculty=pl.col("department").replace_strict(
-                        settings_param.university_settings.department_mapping,
-                        default="Unmapped",
-                    ),
-                )
-            )
-
-            # now drop rows we definitely do not want.
-            # - drop row if material_id is null, None, blank, or '-'
-            # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/""), drop rest
-            logger.info(
-                f"Retrieved {len(copyright_data)} items from {file_param.name}."
-            )
-
-            copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
-            copyright_data = copyright_data.filter(
-                (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"]))
-                | (pl.col("filetype").is_null())
-            )
-
-            logger.info(
-                f"{len(copyright_data)} items remaining from {file_param.name} after filtering out missing material_ids and specific filetypes."
-            )
-            return copyright_data
-        except FileNotFoundError as e:
-            logger.warning(
-                f"No files found in {settings_param.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
-            )
-            raise e
-        except PermissionError as e:
-            logger.warning(f"Permission denied to read {file_param.name}")
-            raise e
-        except ValueError as e:
-            logger.warning(f"No file found: {file_param=}.")
-            raise e
-
     """
-    Loads in new items from a copyright export file.
-    Either give a specific file to read in, or use the default (latest regular raw copyright export in raw_copyright_data dir) .
+    This function is now a placeholder and will be replaced by the processing logic
+    in the DataPipeline class.
     """
-    await ensure_db_inited(settings)
-    error = None
-    logger.info(
-        f"# of items in db before loading raw items: {await CopyrightItem.all().count()}"
-    )
-    if file is not None:
-        if isinstance(file, pl.DataFrame):
-            logger.info(
-                f"loading {len(file)} raw copyright items into db from dataframe."
-            )
-            df = file
-        else:
-            logger.info(f"loading raw items from {file}")
-    try:
-        if not isinstance(file, pl.DataFrame):
-            if file is None:  # file here is the parameter of load_raw_copyright_data
-                logger.info("loading raw items from most recent raw copyright export")
-            df = read_copyright_export(settings_param=settings, file_param=file)
-
-        items = standardize_dataframe(df).to_dicts()
-
-        item_list = []
-
-        existing_mat_ids = await CopyrightItem.all().values("material_id")
-        existing_mat_ids = {int(m["material_id"]) for m in existing_mat_ids}
-
-        logger.info(
-            f"Read in {len(items)} raw copyright items. {len(existing_mat_ids)} items already in db."
-        )
-        num_total = len(items)
-        update_list = []
-        for item in items:
-            if int(item.get("material_id")) in existing_mat_ids:
-                update_list.append(item)
-                continue
-            created_item: CopyrightItem = await copyright_item_from_dict(item)
-            if not created_item:
-                logger.info(item)
-                inp = input(
-                    "Error parsing raw item. enter x to stop, anything else to continue"
-                )
-                if inp.lower() == "x":
-                    break
-                continue
-            item_list.append(created_item)
-            if num_total % 100 == 0:
-                logger.info(f"Parsed {len(item_list)}/{num_total} items.")
-    except Exception as e:
-        logger.warning(f"Error loading raw items: {e}")
-        error = e
-    finally:
-        if item_list:
-            await CopyrightItem.bulk_create(objects=item_list)
-            await load_llm_classifications(settings=settings)
-            await update_copyright_relations(settings=settings)
-        logger.success(
-            f"# of items in db after loading raw items: {await CopyrightItem.all().count()}"
-        )
-        if error:
-            await Tortoise.close_connections()
-            raise error
-
-    if update_list:
-        logger.info(f"comparing {len(update_list)} items with items in db for updates.")
-        await update_copyright_items(settings, update_list)
-
-    await Tortoise.close_connections()
+    logger.warning("load_raw_copyright_data is deprecated and will be removed.")
+    pass
 
 
 async def load_pdfs(settings: Settings) -> None:
@@ -640,3 +484,12 @@ async def load_pdfs(settings: Settings) -> None:
     await PDF.bulk_create(objects=[PDF(**p) for p in pdf_dicts])
 
     await Tortoise.close_connections()
+
+async def load_raw_copyright_data_to_staging(settings: Settings, data: pl.DataFrame) -> None:
+    """
+    Loads raw copyright data into the staging table.
+    """
+    await ensure_db_inited(settings)
+    items = standardize_dataframe(data).to_dicts()
+    staged_items = [StagedCopyrightItem(**item) for item in items]
+    await StagedCopyrightItem.bulk_create(staged_items)

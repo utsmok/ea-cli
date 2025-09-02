@@ -219,28 +219,7 @@ class EasyAccessTool:
         self.style_iter = 2
         self.latest_file_date = ""  # Initialize to empty string
 
-        self.set_functions(self.ea_settings.export)
-
-    def set_functions(self, export: bool) -> None:
-        """
-        Sets the sequence of processing functions to be run.
-
-        The function list is stored in `self.functions`.
-
-        Args:
-            export: If True, includes the export sheet creation function.
-        """
-        self.functions.extend(
-            [
-                self.process_raw_copyright_data,
-                self.create_overviews,
-                self.create_faculty_sheets,
-                self.create_all_items_sheet,
-            ]
-        )
-
-        if export:
-            self.functions.extend([self.create_export_sheet])
+        
 
     def run(self) -> None:
         """
@@ -248,92 +227,10 @@ class EasyAccessTool:
 
         Functions are run in the order they appear in `self.functions`.
         """
-        for func in self.functions:
-            logger.info(f"running {func.__name__}")
-            func()
+        from easy_access.pipeline import DataPipeline
 
-    def process_raw_copyright_data(self) -> None:
-        """
-        Processes the raw copyright data export.
-
-        Reads the latest copyright export file (or a specified override file),
-        loads data into the database, retrieves the full dataset,
-        optionally enriches with Osiris data, and identifies material IDs
-        already present in faculty sheets.
-        """
-        input_file_override: File | None = None
-        if self.ea_settings.other_sheet is not None:
-            # self.ea_settings.other_sheet is guaranteed to be a Path here
-            try:
-                input_file_override = File(self.ea_settings.other_sheet)
-            except Exception as e:
-                logger.warning(
-                    f"Failed to create File object from other_sheet path '{self.ea_settings.other_sheet}': {e}"
-                )
-                # Proceed with default behavior (None for input_file_override)
-
-        self.latest_file_date, self.copyright_data = read_copyright_export(
-            settings=self.settings, file=input_file_override
-        )
-        if self.copyright_data.is_empty():
-            logger.warning(
-                "No new Copyright data found to process! No new items will be added. Checking if there are other changes..."
-            )
-        else:
-            fresh_db: bool | None = asyncio.get_event_loop().run_until_complete(
-                ensure_db_inited(settings=self.settings)
-            )
-            if fresh_db:
-                asyncio.get_event_loop().run_until_complete(
-                    load_base_data(settings=self.settings)
-                )
-            asyncio.get_event_loop().run_until_complete(
-                load_raw_copyright_data(
-                    settings=self.settings, file=self.copyright_data
-                )
-            )
-
-        self.copyright_data = self.clean_and_validate_df(
-            retrieve_copyright_items(settings=self.settings)
-        )
-
-        if self.refresh_osiris_data:
-            asyncio.get_event_loop().run_until_complete(
-                update_osiris_data(
-                    settings=self.settings,
-                    df=self.copyright_data,
-                    only_retrieve_missing=self.only_retrieve_missing_osiris_data,
-                )
-            )
-
-        self.faculties = (
-            self.copyright_data.select(pl.col("faculty").unique())
-            .to_series()
-            .sort()
-            .to_list()
-        )
-        if self.ea_settings.faculty:
-            logger.info(f"Selected single faculty: {self.ea_settings.faculty}")
-            self.faculties = [self.ea_settings.faculty]
-
-        updated_items, mat_ids = asyncio.get_event_loop().run_until_complete(
-            self.update_db_from_faculty_sheets()
-        )
-        logger.info(
-            f"{len(mat_ids)} material_ids found in faculty sheets, {len(self.copyright_data)} items currently in copyright_data."
-        )
-
-        asyncio.get_event_loop().run_until_complete(self.add_file_exists())
-
-        if mat_ids:
-            self.mat_ids_on_disk = mat_ids
-        if updated_items:
-            self.copyright_data = retrieve_copyright_items(settings=self.settings)
-            self.copyright_data = self.clean_and_validate_df(self.copyright_data)
-
-        logger.success(
-            f"process copyright export done. {self.copyright_data.shape[0]} rows in self.copyright_data."
-        )
+        pipeline = DataPipeline(settings=self.settings)
+        pipeline.ingest_raw_data(file_path=self.ea_settings.other_sheet)
 
     async def update_db_from_faculty_sheets(self) -> tuple[bool, set[str]]:
         """
