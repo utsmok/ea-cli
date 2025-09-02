@@ -16,7 +16,6 @@ from tortoise import Tortoise
 from easy_access.db.base import (
     copyright_item_from_dict,
     ensure_db_inited,
-    standardize_dataframe,
 )
 from easy_access.db.models import (
     PDF,
@@ -25,10 +24,12 @@ from easy_access.db.models import (
     Course,
     Infringement,
     ItemUpdate,
+    StagedCopyrightItem,
+    StagedFacultyUpdate,
     WorkflowStatus,
 )
 from easy_access.settings import Settings
-from easy_access.utils import determine_course_code
+from easy_access.utils import determine_course_code, standardize_dataframe
 
 
 async def link_courses_to_copyright_items() -> None:
@@ -582,3 +583,75 @@ async def update_copyright_items(
 
     logger.success("Done updating CopyrightItems!")
     await Tortoise.close_connections()
+
+
+async def process_staged_raw_data(settings: Settings) -> None:
+    """
+    Processes the staged raw data and updates the main CopyrightItem table.
+    """
+    await ensure_db_inited(settings)
+    staged_items = await StagedCopyrightItem.all()
+    if not staged_items:
+        logger.info("No staged raw data to process.")
+        return
+
+    logger.info(f"Processing {len(staged_items)} staged raw items...")
+
+    for staged_item in staged_items:
+        item_dict = staged_item.__dict__
+        existing_item = await CopyrightItem.get_or_none(material_id=item_dict["material_id"])
+
+        if not existing_item:
+            new_item = await copyright_item_from_dict(item_dict)
+            if new_item:
+                await new_item.save()
+        else:
+            # For now, we will just update a few fields as per the initial plan.
+            # A more sophisticated update logic will be added later.
+            update_fields = []
+            if item_dict.get("status") and existing_item.status != item_dict.get("status"):
+                existing_item.status = item_dict["status"]
+                update_fields.append("status")
+            if item_dict.get("last_change") and existing_item.last_change != item_dict.get("last_change"):
+                existing_item.last_change = item_dict["last_change"]
+                update_fields.append("last_change")
+            
+            if update_fields:
+                await existing_item.save(update_fields=update_fields)
+
+    # Clear the staging table after processing
+    await StagedCopyrightItem.all().delete()
+    logger.info("Staged raw data processed and staging table cleared.")
+
+async def process_staged_faculty_updates(settings: Settings) -> None:
+    """
+    Processes the staged faculty updates and updates the main CopyrightItem table.
+    """
+    await ensure_db_inited(settings)
+    staged_updates = await StagedFacultyUpdate.all()
+    if not staged_updates:
+        logger.info("No staged faculty updates to process.")
+        return
+
+    logger.info(f"Processing {len(staged_updates)} staged faculty updates...")
+
+    for update in staged_updates:
+        item = await CopyrightItem.get_or_none(material_id=update.material_id)
+        if item:
+            update_fields = []
+            if update.manual_classification and item.manual_classification != update.manual_classification:
+                item.manual_classification = update.manual_classification
+                update_fields.append("manual_classification")
+            if update.remarks and item.remarks != update.remarks:
+                item.remarks = update.remarks
+                update_fields.append("remarks")
+            if update.workflow_status and item.workflow_status != update.workflow_status:
+                item.workflow_status = update.workflow_status
+                update_fields.append("workflow_status")
+            
+            if update_fields:
+                await item.save(update_fields=update_fields)
+
+    # Clear the staging table after processing
+    await StagedFacultyUpdate.all().delete()
+    logger.info("Staged faculty updates processed and staging table cleared.")

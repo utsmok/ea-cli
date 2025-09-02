@@ -110,8 +110,10 @@ This plan is designed to be followed by a developer to implement the proposed ch
 #### 3.3.5. Step 5: Implement Data Processing Logic (In Progress)
 
 -   **Status**: In Progress
--   **Files Modified**: `easy_access/pipeline.py`
+-   **Files Modified**: `easy_access/pipeline.py`, `easy_access/db/update.py`
 -   **Changes Made**:
-    -   Added a placeholder for the `process_data` method in the `DataPipeline` class.
-    -   Updated the `run` method to call `process_data`.
--   **Reasoning**: This sets up the structure for the next major phase of the refactoring, which will be to implement the logic for processing the staged data and updating the main `CopyrightItem` table.
+    -   The `process_data` method in `DataPipeline` now calls `process_staged_raw_data`.
+    -   Created the `process_staged_raw_data` function in `easy_access/db/update.py`.
+    -   This new function reads from the `StagedCopyrightItem` table, creates new `CopyrightItem` records for new items, and updates existing items with the latest data for a few key fields (`status`, `last_change`).
+    -   After processing, the `StagedCopyrightItem` table is cleared.
+-   **Reasoning**: This is the first step in implementing the new data processing logic. It establishes a clear flow for handling incoming raw data: ingest into a staging table, then process from the staging table into the main table. This is more robust and easier to manage than the previous approach.

@@ -1,4 +1,5 @@
 import contextlib
+import json
 import logging
 import os
 import warnings
@@ -100,12 +101,12 @@ def read_copyright_export(
 
         # now drop rows we definitely do not want.
         # - drop row if material_id is null, None, blank, or '-'
-        # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/"""), drop rest
+        # - keep rows with filetype pdf, ppt, doc, or blank ('-'/None/null/"'), drop rest
         logger.info(f"Retrieved {len(copyright_data)} items from {file.name}.")
 
         copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
         copyright_data = copyright_data.filter(
-            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"]))
+            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) 
             | (pl.col("filetype").is_null())
         )
 

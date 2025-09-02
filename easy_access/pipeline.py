@@ -4,7 +4,6 @@ This module contains the main data processing pipeline for the Easy Access tool.
 
 from loguru import logger
 
-
 class DataPipeline:
     """
     Orchestrates the data processing workflow.
@@ -28,8 +27,8 @@ class DataPipeline:
         """
         Ingests raw data from a copyright export Excel file into the staging table.
         """
-        from easy_access.db.ingest import load_raw_copyright_data_to_staging
         from easy_access.sheets.sheet import read_copyright_export
+        from easy_access.db.ingest import load_raw_copyright_data_to_staging
 
         logger.info("Ingesting raw copyright data...")
         if file_path:
@@ -42,6 +41,7 @@ class DataPipeline:
         if df.is_empty():
             logger.warning("No new copyright data found to ingest.")
             return
+
         import asyncio
         asyncio.run(load_raw_copyright_data_to_staging(self.settings, df))
         logger.info("Raw copyright data ingested into staging table.")
@@ -50,8 +50,8 @@ class DataPipeline:
         """
         Ingests data from faculty Excel sheets into the staging table.
         """
-        from easy_access.db.ingest import load_faculty_updates_to_staging
         from easy_access.sheets.sheet import read_faculty_sheets
+        from easy_access.db.ingest import load_faculty_updates_to_staging
 
         logger.info("Ingesting faculty updates...")
         df = read_faculty_sheets(self.settings)
@@ -68,6 +68,10 @@ class DataPipeline:
         """
         Processes the staged data and updates the main CopyrightItem table.
         """
+        import asyncio
+        from easy_access.db.update import process_staged_raw_data, process_staged_faculty_updates
+
         logger.info("Processing staged data...")
-        # This method will be implemented in a future step.
+        asyncio.run(process_staged_raw_data(self.settings))
+        asyncio.run(process_staged_faculty_updates(self.settings))
         logger.info("Staged data processed.")
