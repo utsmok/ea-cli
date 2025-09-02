@@ -13,10 +13,9 @@ from aiometer import amap
 from google import genai
 from loguru import logger
 
-from easy_access.classification.classifier_models import Classification
-from easy_access.classification.pdf_handling import extract_pdf_text
+from classification.classifier_models import Classification
+from classification.pdf_handling import extract_pdf_text
 from easy_access.db.base import ensure_db_inited
-from easy_access.db.ingest import load_llm_classifications
 from easy_access.db.models import PDF, CopyrightItem
 from easy_access.settings import SETTINGS, DirSetting
 
@@ -316,4 +315,3 @@ async def main(subset: list[int] | list[str] | None = None):
             pdf_batch = []
             batch_start_time = time.time()
 
-    await load_llm_classifications()

@@ -167,7 +167,7 @@ def run_dashboard(
     from easy_access.settings import SETTINGS
 
     uvicorn.run(
-        "easy_access.dashboard.dash:app",
+        "dashboard.dash:app",
         host=host,
         port=port,
         reload=SETTINGS.dashboard_reload,
@@ -312,7 +312,7 @@ def run_all_preprocess(
 
     import asyncio
 
-    from easy_access.classification.httpx_downloader import main_download_all
+    from classification.httpx_downloader import main_download_all
     from easy_access.db.retrieve import retrieve_unmarked_deleted_items
     from easy_access.main import EasyAccessTool
     from easy_access.settings import SETTINGS, EasyAccessSettings

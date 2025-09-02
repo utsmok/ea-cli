@@ -8,7 +8,6 @@ compare/*.*
 *.ndjson
 *.db
 *.parquet
-*.md
 *.pdf
 *.txt
 *.woff

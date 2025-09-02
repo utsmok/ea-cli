@@ -10,17 +10,17 @@ from fasthtml.components import Button
 from loguru import logger
 from monsterui.all import *
 
-import easy_access.dashboard.urls as urls
-from easy_access.dashboard.constants import (
+import dashboard.urls as urls
+from dashboard.constants import (
     BADGE_STYLES,
     DEFAULT_PILL_STYLE,
     DISPLAY_COLUMNS,
     FILTERABLE_COLUMNS,
     LabelT,
 )
-from easy_access.dashboard.data import get_item_df
-from easy_access.dashboard.urls import Url
-from easy_access.dashboard.web import AppState
+from dashboard.data import get_item_df
+from dashboard.urls import Url
+from dashboard.web import AppState
 from easy_access.db.models import ItemUpdate
 from easy_access.settings import SETTINGS, DirSetting
 

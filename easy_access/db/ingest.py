@@ -24,14 +24,13 @@ from easy_access.db.models import (
     Course,
     CourseEmployee,
     Faculty,
-    LLMClassification,
+
     MissingCourse,
     Organization,
     Person,
     Programme,
 )
 from easy_access.db.update import (
-    link_llm_classifications_to_copyright_items,
     update_copyright_items,
     update_copyright_relations,
 )
@@ -582,139 +581,6 @@ async def load_raw_copyright_data(
         logger.info(f"comparing {len(update_list)} items with items in db for updates.")
         await update_copyright_items(settings, update_list)
 
-    await Tortoise.close_connections()
-
-
-async def load_llm_classifications(settings: Settings) -> None:
-    """
-    load llm classifications from .json files in the classifications dir
-    """
-    await ensure_db_inited(settings)
-    existing_classifications = await LLMClassification.all().values("used_material_id")
-    existing_classifications = {
-        int(m["used_material_id"]) for m in existing_classifications
-    }
-    logger.info(f"# of existing llm classifications: {len(existing_classifications)}")
-    # load jsons to list of dicts
-    data_list: list[dict] = []
-    try:
-        all_files = [
-            f
-            for f in settings.dirs[DirSetting.CLASSIFICATIONS].files
-            if f.name.endswith(".json")
-        ]
-        old_files = [f for f in all_files if "_old" in f.name]
-        if old_files:
-            logger.info(f"Found {len(old_files)} old json files. Removing...")
-            for f in old_files:
-                f.delete()
-
-        all_files = [
-            f
-            for f in settings.dirs[DirSetting.CLASSIFICATIONS].files
-            if f.name.endswith(".json")
-        ]
-        json_mat_ids = {int(f.name.replace(".json", "").strip()): f for f in all_files}
-        logger.info(f"# of jsons with data found: {len(json_mat_ids)}")
-        remaining_jsons = [
-            json_mat_ids.get(m)
-            for m in json_mat_ids
-            if m not in existing_classifications
-        ]
-        logger.info(f"# of jsons with data not in db: {len(remaining_jsons)}")
-        deletelist: list[File] = []
-        for file in remaining_jsons:
-            try:
-                with open(file.path, encoding="utf-8", errors="ignore") as f:
-                    data = json.load(f)
-                    data["used_material_id"] = int(
-                        file.name.replace(".json", "").strip()
-                    )
-                    if not data.get("allowed_usage") or data.get("allowed_usage") == "":
-                        deletelist.append(file)
-                    else:
-                        data_list.append(data)
-            except Exception as e:
-                logger.warning(f"Error loading json file {file.name}: {e}")
-                continue
-
-        logger.success(
-            f"Retrieved {len(data_list)} new llm classifications, now adding to db."
-        )
-        if deletelist:
-            for f in deletelist:
-                f.delete()
-    except Exception as e:
-        logger.warning(f"Error loading llm classifications: {e}")
-
-    if not data_list:
-        logger.info("No new llm classifications found.")
-    else:
-        new_objects = []
-        for d in data_list:
-            try:
-                new_objects.append(
-                    LLMClassification(
-                        allowed_usage=d.get("allowed_usage", ""),
-                        allowed_usage_reasoning=d.get("allowed_usage_reasoning", ""),
-                        copyright_status=d.get("copyright_status", ""),
-                        copyright_classification_reason=d.get(
-                            "copyright_classification_reason", ""
-                        ),
-                        item_type=d.get("item_type", ""),
-                        item_type_classification_reason=d.get(
-                            "item_type_classification_reason", ""
-                        ),
-                        pdf_name=d.get("pdf_name", ""),
-                        publisher_name=d.get("publisher_name", ""),
-                        copyright_holder=d.get("copyright_holder", ""),
-                        item_title=d.get("item_title", ""),
-                        pdf_page_count=int(d.get("pdf_page_count", 0)),
-                        remarks=d.get("remarks", ""),
-                        author_names=d.get("author_names", [""])
-                        if isinstance(d.get("author_names", [""]), list)
-                        else [d.get("author_names", "")],
-                        doi=d.get("doi", [""])
-                        if isinstance(d.get("doi", [""]), list)
-                        else [d.get("doi", "")],
-                        isbn=d.get("isbn", [""])
-                        if isinstance(d.get("isbn", [""]), list)
-                        else [d.get("isbn", "")],
-                        source_url=d.get("source_url", [""])
-                        if isinstance(d.get("source_url", [""]), list)
-                        else [d.get("source_url", "")],
-                        license=d.get("license", [""])
-                        if isinstance(d.get("license", [""]), list)
-                        else [d.get("license", "")],
-                        topic=d.get("topic", [""])
-                        if isinstance(d.get("topic", [""]), list)
-                        else [d.get("topic", "")],
-                        used_material_id=int(d.get("used_material_id", 0)),
-                    )
-                )
-            except Exception as e:
-                logger.warning(
-                    f"error while trying to create llm classification object. Error: {e}."
-                )
-        try:
-            await LLMClassification.bulk_create(new_objects)
-        except Exception as e:
-            logger.warning(
-                f"error while trying to bulk save items. Error: {e}. Trying one-by-one."
-            )
-            for item in new_objects:
-                try:
-                    await item.save()
-                except Exception as e:
-                    logger.error(e)
-                    logger.warning(
-                        f"error {e} while trying to save item {item}. Skipping for now."
-                    )
-
-        logger.success(
-            f"Created {len(new_objects)} new llm classifications in db. Now linking to copyright items in db."
-        )
-    await link_llm_classifications_to_copyright_items()
     await Tortoise.close_connections()
 
 

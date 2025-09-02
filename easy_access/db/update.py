@@ -24,37 +24,10 @@ from easy_access.db.models import (
     Course,
     Infringement,
     ItemUpdate,
-    LLMClassification,
     WorkflowStatus,
 )
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code
-
-
-async def link_llm_classifications_to_copyright_items() -> None:
-    """
-    Link llm classifications to copyright items
-    """
-    # get all LLM classifications without a corresponding CopyrightItem
-
-    classifications_to_link = await LLMClassification().filter(item__isnull=True)
-
-    for classification in classifications_to_link:
-        try:
-            material_id = classification.used_material_id
-            item = await CopyrightItem.get_or_none(material_id=material_id)
-            if item:
-                item.llm_classification = classification
-                await item.save()
-        except Exception as e:
-            logger.warning(
-                f"Error while trying to get llm classification for item {item.material_id}: {e}"
-            )
-            continue
-
-    logger.info(
-        f"Done linking {len(classifications_to_link)} LLM classifications to CopyrightItems."
-    )
 
 
 async def link_courses_to_copyright_items() -> None:
@@ -127,7 +100,6 @@ async def update_copyright_relations(settings: Settings) -> None:
     await ensure_db_inited(settings)
     await update_duplicate_status()
 
-    await link_llm_classifications_to_copyright_items()
     await link_courses_to_copyright_items()
     await Tortoise.close_connections()
 

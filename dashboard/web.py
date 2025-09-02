@@ -7,7 +7,7 @@ from typing import Any
 from fasthtml.common import *
 from loguru import logger
 
-from easy_access.dashboard.constants import DEFAULT_PER_PAGE, db
+from dashboard.constants import DEFAULT_PER_PAGE, db
 from easy_access.settings import SETTINGS, DirSetting
 
 # --------------------

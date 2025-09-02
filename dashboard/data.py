@@ -15,7 +15,7 @@ from easy_access.dashboard.constants import (
     BADGE_STYLES,
     FILTERABLE_COLUMNS,
 )
-from easy_access.dashboard.web import AppState, load_app_state
+from dashboard.web import AppState, load_app_state
 from easy_access.db.retrieve import retrieve_copyright_items, retrieve_item_history
 from easy_access.db.update import update_copyright_items
 from easy_access.settings import SETTINGS

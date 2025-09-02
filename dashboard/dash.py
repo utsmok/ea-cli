@@ -44,10 +44,10 @@ from easy_access.dashboard.data import (
     process_state,
     store_item_changes,
 )
-from easy_access.dashboard.files import Entities, get_entities, get_extracted_text
-from easy_access.dashboard.urls import URLS as global_urls
-from easy_access.dashboard.urls import Url
-from easy_access.dashboard.web import Login, bware, load_app_state, login_redir, users
+from dashboard.files import Entities, get_entities, get_extracted_text
+from dashboard.urls import URLS as global_urls
+from dashboard.urls import Url
+from dashboard.web import Login, bware, load_app_state, login_redir, users
 from easy_access.db.retrieve import (
     retrieve_osiris_data,
 )
