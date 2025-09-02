@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+import polars as pl
 from loguru import logger
 
 
@@ -97,6 +98,40 @@ def determine_course_code(code: str, name: str) -> set[str]:
         )
         return temp_results
 
+
+def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    rename cols to standard format
+    cast all cols to str
+    replace '-' with None
+    filter missing material_ids
+    filter to select only relevant itemtypes
+    drop useless cols
+    """
+    df = (
+        df.with_columns(pl.exclude(pl.String).cast(str))
+        .rename(
+            lambda col: col.replace(" ", "_")
+            .replace("#", "count_")
+            .replace("*", "x")
+            .lower()
+        )
+        .with_columns(
+            pl.when(pl.col(pl.String) != "-").then(pl.col(pl.String)).name.keep()
+        )
+        .filter(pl.col("material_id").is_not_null())
+    )
+
+    if "filetype" in df.columns:
+        df = df.filter(
+            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"]))
+            | (pl.col("filetype").is_null())
+        )
+    if "type" in df.columns:
+        df = df.drop("type")
+    if "google_search_file" in df.columns:
+        df = df.drop("google_search_file")
+    return df
 
 class Directory:
     """Represents a directory and provides operations on it.

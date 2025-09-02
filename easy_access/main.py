@@ -9,37 +9,13 @@ coordinating the various data processing workflows, including:
 - Enriching data with external sources like Osiris.
 """
 
-import asyncio
-import contextlib
-import datetime
-import os
-from collections.abc import Callable
-from pathlib import Path
 
-import polars as pl
-from loguru import logger
 
-from easy_access.db.base import ensure_db_inited
-from easy_access.db.ingest import load_base_data, load_raw_copyright_data
-from easy_access.db.retrieve import retrieve_copyright_items, retrieve_full_data
-from easy_access.db.update import update_copyright_items
+from easy_access.pipeline import DataPipeline
 from easy_access.settings import (
-    DirSetting,
     EasyAccessSettings,
     Settings,
 )
-from easy_access.sheets.analysis import create_faculty_overviews
-from easy_access.sheets.enrichment import update_osiris_data
-from easy_access.sheets.sheet import (
-    create_export_sheet,
-    finalize_sheet,
-    read_copyright_export,
-    store_complete_data,
-)
-from easy_access.utils import Directory, File
-from easy_access.utilities.file_exists import check_file_exists
-from easy_access.api_keys import canvas as api_token
-from easy_access.pipeline import DataPipeline
 
 
 class EasyAccessTool:

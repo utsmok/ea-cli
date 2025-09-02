@@ -1,5 +1,4 @@
 import contextlib
-import json
 import logging
 import os
 import warnings
@@ -24,7 +23,7 @@ from easy_access.db.retrieve import (
 
 # from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting # Will be passed as parameters
 from easy_access.settings import ColInfo, DirSetting, Settings  # Keep for type hinting
-from easy_access.utils import Directory, File
+from easy_access.utils import Directory, File, standardize_dataframe
 
 
 def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
@@ -63,7 +62,10 @@ def read_copyright_export(
     Reads in data from the latest copyright export file in the copyright dir;
     or if a file is given, reads in that file.
     Input should be a direct export from the CopyRight tool without any changes.
+
     """
+
+
     try:
         if not file:
             logger.info(
@@ -77,20 +79,13 @@ def read_copyright_export(
         logger.info(f"Reading in data from:\n            {file.name}\n")
         latest_file_date = file.created.strftime("%Y-%m-%d")
         raw_copyright_data = _read_excel_quiet(file.path, sheet_name=None)
-        copyright_data = (
-            raw_copyright_data.with_columns(pl.exclude(pl.Utf8).cast(str))
-            .rename(
-                lambda col: col.replace(" ", "_")
-                .replace("#", "count_")
-                .replace("*", "x")
-                .lower()
-            )
-            .with_columns(
+        copyright_data= standardize_dataframe(raw_copyright_data)
+        copyright_data = copyright_data.with_columns(
                 pl.Series(
                     "retrieved_from_copyright_on",
-                    [latest_file_date] * len(raw_copyright_data),
+                    [latest_file_date] * len(copyright_data),
                 ),
-                pl.Series("workflow_status", ["ToDo"] * len(raw_copyright_data)),
+                pl.Series("workflow_status", ["ToDo"] * len(copyright_data)),
                 pl.col("last_change")
                 .str.replace(r"^-", "")
                 .str.strip_chars()
@@ -101,7 +96,7 @@ def read_copyright_export(
                     settings.university_settings.department_mapping, default="Unmapped"
                 ),
             )
-        )
+
 
         # now drop rows we definitely do not want.
         # - drop row if material_id is null, None, blank, or '-'
@@ -110,7 +105,7 @@ def read_copyright_export(
 
         copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
         copyright_data = copyright_data.filter(
-            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) 
+            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"]))
             | (pl.col("filetype").is_null())
         )
 
@@ -405,17 +400,41 @@ def read_faculty_sheets(settings: Settings) -> pl.DataFrame:
     Reads all faculty sheets and returns a single DataFrame.
     """
     all_dfs = []
+    select_cols: list[str] = [
+        "material_id",
+        "workflow_status",
+        "remarks",
+        "manual_classification",
+    ]
+    material_ids_found: set[str] = set()
+    update_df: pl.DataFrame = pl.DataFrame(
+        schema={col: pl.Utf8 for col in select_cols}
+    )
+
     for faculty_dir in settings.dirs[DirSetting.FACULTIES_DIR].dirs():
         for file in faculty_dir.files_r:
-            if file.extension == ".xlsx" and "overview" not in file.name:
+            if file.extension == ".xlsx" and "overview" not in file.name and "llm" not in file.name:
                 try:
                     df = _read_excel_quiet(
                         file.path, sheet_name=settings.data_settings.data_entry_name
                     )
+                    for col_name in select_cols:
+                        if col_name not in df.columns:
+                            df = df.with_columns(
+                                pl.lit(None).alias(col_name).cast(pl.Utf8)
+                            )
+                        else:
+                            df = df.with_columns(pl.col(col_name).cast(pl.Utf8))
+                    df = df.select(
+                        select_cols
+                    )  # Ensure correct column order and selection
+
                     all_dfs.append(df)
                 except Exception as e:
                     logger.warning(f"Error reading {file.path}: {e}")
                     continue
     if not all_dfs:
         return pl.DataFrame()
+
+
     return pl.concat(all_dfs)

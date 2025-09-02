@@ -151,6 +151,7 @@ def process_data(
     tool.run()
 
     logger.success("Main processing done!")
+    typer.Exit()
 
 
 @app.command(name="dashboard")
@@ -173,6 +174,7 @@ def run_dashboard(
         reload=SETTINGS.dashboard_reload,
     )
     logger.success("Dashboard server stopped.")
+    typer.Exit()
 
 
 @app.command(name="export")
@@ -195,6 +197,7 @@ def run_export(
         logger.info("Creating export sheets for all faculties.")
         create_export_sheet(settings=SETTINGS)
     logger.success("Done creating export sheets.")
+    typer.Exit()
 
 
 # Commands for backup app
@@ -214,6 +217,7 @@ def create_backup_command() -> None:
         logger.info(
             "Backup not created as per settings.yaml (backup_all: false or not set)."
         )
+    typer.Exit()
 
 
 @backup_app.command(name="restore")
@@ -260,6 +264,7 @@ def restore_backup_command(
         select=select_enum,
     )
     logger.success("Backup restoration process finished.")
+    typer.Exit()
 
 
 # Commands for pre-processing app

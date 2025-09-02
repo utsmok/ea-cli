@@ -2,21 +2,16 @@
 functions to ingest new data into the database
 """
 
-import contextlib
 import json
-import os
 from collections import Counter
-from pathlib import Path
 
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
 
 from easy_access.db.base import (
-    copyright_item_from_dict,
     create,
     ensure_db_inited,
-    standardize_dataframe,
 )
 from easy_access.db.models import (
     PDF,
@@ -31,17 +26,14 @@ from easy_access.db.models import (
     StagedCopyrightItem,
     StagedFacultyUpdate,
 )
-from easy_access.db.update import (
-    update_copyright_items,
-    update_copyright_relations,
-)
 from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFaculty for type hints
     DirSetting,
     FileSetting,
     Settings,  # Add Settings for type hint
     SettingsFaculty,
 )
-from easy_access.utils import File
+from easy_access.utils import File, standardize_dataframe
+
 
 
 async def load_osiris_data(settings: Settings) -> None:
@@ -493,7 +485,10 @@ async def load_raw_copyright_data_to_staging(settings: Settings, data: pl.DataFr
     await ensure_db_inited(settings)
     items = standardize_dataframe(data).to_dicts()
     staged_items = [StagedCopyrightItem(**item) for item in items]
-    await StagedCopyrightItem.bulk_create(staged_items)
+    for i in staged_items:
+        await i.save()
+
+
 
 
 async def load_faculty_updates_to_staging(settings: Settings, data: pl.DataFrame) -> None:

@@ -5,11 +5,9 @@ ORM models for the database.
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from loguru import logger
 
 from tortoise import fields
 from tortoise.models import Model
-
 
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import File
@@ -461,6 +459,46 @@ class StagedCopyrightItem(Model, TimestampMixin):
     """
     Staging table for raw data ingested from copyright export files.
     Fields are kept as simple as possible to accommodate raw data.
+
+    The raw fields we expect:
+        [
+        "Material id",
+        "Period",
+        "Department",
+        "Course code",
+        "Course name",
+        "url",
+        "Filename",
+        "Title",
+        "Owner",
+        "Filetype",
+        "Classification",
+        "Type",
+        "ML Prediction",
+        "Manual classification",
+        "Manual identifier",
+        "Scope",
+        "Remarks",
+        "Auditor",
+        "Last change",
+        "Status",
+        "Google search file",
+        "ISBN",
+        "DOI",
+        "In collection",
+        "pagecount",
+        "wordcount",
+        "picturecount",
+        "Author",
+        "Publisher",
+        "Reliability",
+        "Pages * Students",
+        "#students_registered"
+    ]
+
+    Before ingestion, these should be lowercased, spaces replaced with underscores, * replaced with x, and # replaced with count_.
+    e.g. by calling standardize_dataframe in db.base
+
     """
 
     material_id = fields.IntField(pk=True)
@@ -478,16 +516,29 @@ class StagedCopyrightItem(Model, TimestampMixin):
     manual_identifier = fields.CharField(max_length=2048, null=True)
     scope = fields.CharField(max_length=255, null=True)
     remarks = fields.CharField(max_length=10000, null=True)
+    ml_prediction = fields.CharField(max_length=255, null=True)
+    isbn = fields.CharField(max_length=255, null=True)
+    doi = fields.CharField(max_length=255, null=True)
+    in_collection = fields.CharField(max_length=255, null=True)
+    pagecount = fields.CharField(max_length=255, null=True)
+    wordcount = fields.CharField(max_length=255, null=True)
+    picturecount = fields.CharField(max_length=255, null=True)
+    author = fields.CharField(max_length=255, null=True)
+    publisher = fields.CharField(max_length=255, null=True)
     auditor = fields.CharField(max_length=10000, null=True)
-    last_change = fields.CharField(max_length=255, null=True)
+    last_change = fields.DateField(null=True)
     status = fields.CharField(max_length=255, null=True)
+    reliability = fields.CharField(max_length=255, null=True)
+    pages_x_students = fields.CharField(max_length=255, null=True)
+    count_students_registered = fields.CharField(max_length=255, null=True)
     retrieved_from_copyright_on = fields.DatetimeField(null=True)
     workflow_status = fields.CharField(max_length=255, null=True)
     faculty = fields.CharField(max_length=255, null=True)
 
+
+
     class Meta:
         table = "staged_copyright_item"
-
 
 class StagedFacultyUpdate(Model, TimestampMixin):
     """
