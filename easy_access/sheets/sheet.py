@@ -1,5 +1,4 @@
 import contextlib
-import json
 import logging
 import os
 import warnings
@@ -106,7 +105,7 @@ def read_copyright_export(
 
         copyright_data = copyright_data.filter(pl.col("material_id").is_not_null())
         copyright_data = copyright_data.filter(
-            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"])) 
+            (pl.col("filetype").is_in(["pdf", "ppt", "doc", "-"]))
             | (pl.col("filetype").is_null())
         )
 

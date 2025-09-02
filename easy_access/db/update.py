@@ -615,7 +615,7 @@ async def process_staged_raw_data(settings: Settings) -> None:
             if item_dict.get("last_change") and existing_item.last_change != item_dict.get("last_change"):
                 existing_item.last_change = item_dict["last_change"]
                 update_fields.append("last_change")
-            
+
             if update_fields:
                 await existing_item.save(update_fields=update_fields)
 
@@ -646,9 +646,13 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                 item.remarks = update.remarks
                 update_fields.append("remarks")
             if update.workflow_status and item.workflow_status != update.workflow_status:
-                item.workflow_status = update.workflow_status
+                wf_st = WorkflowStatus.ToDo
+                if update.workflow_status in WorkflowStatus.__members__:
+                    wf_st = WorkflowStatus[update.workflow_status]
+
+                item.workflow_status = wf_st
                 update_fields.append("workflow_status")
-            
+
             if update_fields:
                 await item.save(update_fields=update_fields)
 
