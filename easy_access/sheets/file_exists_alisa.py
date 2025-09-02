@@ -1,8 +1,7 @@
+import re
+
 import pandas as pd
 import requests
-from time import sleep
-import re
-import math
 
 INPUT_FILE = "ET_Combined_Data.xlsx"
 OUTPUT_FILE = "ET_output_checked.xlsx"

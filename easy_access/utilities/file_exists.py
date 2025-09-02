@@ -1,11 +1,11 @@
-import asyncio
-from pathlib import Path
 import time
-import polars as pl
-import httpx
-from loguru import logger
-import aiometer
 from functools import partial
+from pathlib import Path
+
+import aiometer
+import httpx
+import polars as pl
+from loguru import logger
 
 
 async def check_file_exists(
@@ -38,7 +38,7 @@ async def check_file_exists(
         data: dict[str, str | bool], session: httpx.AsyncClient
     ) -> dict[str, str | bool]:
         """Checks if a Canvas file exists via the API"""
-        file_url = data.get("file_url", None)
+        file_url = data.get("file_url")
         if not file_url or not isinstance(file_url, str):
             return {"material_id": data["material_id"], "file_exists": False}
         try:
@@ -83,11 +83,7 @@ async def check_file_exists(
     # Use API to check file existence
     header = {"Authorization": f"Bearer {api_token}"}
     processed_results = []
-    counterdict = {
-        'true': 0,
-        'false': 0,
-        'none': 0
-    }
+    counterdict = {"true": 0, "false": 0, "none": 0}
     async with httpx.AsyncClient(
         headers=header, follow_redirects=True, timeout=20
     ) as session:
@@ -105,13 +101,13 @@ async def check_file_exists(
                 if not isinstance(result, BaseException):
                     processed_results.append(result)
                     if result.get("file_exists") is True:
-                        counterdict['true'] += 1
+                        counterdict["true"] += 1
                     elif result.get("file_exists") is False:
-                        counterdict['false'] += 1
+                        counterdict["false"] += 1
                     else:
-                        counterdict['none'] += 1
+                        counterdict["none"] += 1
                 else:
-                    counterdict['none'] += 1
+                    counterdict["none"] += 1
     logger.info(
         f"Received data for {len(processed_results)} URLs after checking {len(files_to_check)} items in {time.time() - start_time:.2f} seconds."
     )

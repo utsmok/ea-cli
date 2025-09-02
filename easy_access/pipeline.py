@@ -20,8 +20,7 @@ class DataPipeline:
         self.ingest_raw_data()
         self.ingest_faculty_updates()
         self.process_data()
-        # The following methods will be implemented in subsequent steps
-        # self.export_reports()
+        # self.export_reports() # To be implemented
         logger.info("Data processing pipeline finished.")
 
     def ingest_raw_data(self, file_path: str | None = None) -> None:

@@ -6,7 +6,7 @@ import json
 import traceback
 from collections.abc import Iterable
 from time import time
-from typing import Any, LiteralString
+from typing import Any
 
 import polars as pl
 
@@ -22,13 +22,13 @@ from easy_access.settings import Settings  # Import Settings for type hint
 
 engine: Engine | None = None
 
-def format_col(data: pl.DataFrame, colname:str, mapping:dict) -> pl.DataFrame:
+
+def format_col(data: pl.DataFrame, colname: str, mapping: dict) -> pl.DataFrame:
     """Format a column in a DataFrame using a mapping dictionary."""
     if colname in data.columns:
-        data = data.with_columns(
-            pl.col(colname).replace(mapping).alias(colname)
-        )
+        data = data.with_columns(pl.col(colname).replace(mapping).alias(colname))
     return data
+
 
 def retrieve_copyright_items(
     settings: Settings, additional_cols: list[str] | None = None
@@ -70,9 +70,9 @@ def retrieve_copyright_items(
         logger.error(f"Error retrieving copyright items: {e}")
         logger.debug(traceback.format_exc())
         raise e
-    if 'file_exists' in df.columns:
-        print(df['file_exists'].value_counts())
-        df = format_col(df, 'file_exists', {"1": "Yes", "0": "No"})
+    if "file_exists" in df.columns:
+        print(df["file_exists"].value_counts())
+        df = format_col(df, "file_exists", {"1": "Yes", "0": "No"})
     return df
 
 
@@ -534,7 +534,11 @@ async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightI
     await Tortoise.close_connections()
     return copyright_items
 
-async def retrieve_tortoise_copyright_items(settings: Settings, material_ids: list[str] | list[int] | None = None, ) -> list[CopyrightItem]:
+
+async def retrieve_tortoise_copyright_items(
+    settings: Settings,
+    material_ids: list[str] | list[int] | None = None,
+) -> list[CopyrightItem]:
     """
     Retrieves copyright items from the database based on a list of material ids; or all if None.
 
@@ -546,7 +550,9 @@ async def retrieve_tortoise_copyright_items(settings: Settings, material_ids: li
         A list of CopyrightItem instances.
     """
     if not settings:
-        raise ValueError("Settings must be provided to retrieve_tortoise_copyright_items")
+        raise ValueError(
+            "Settings must be provided to retrieve_tortoise_copyright_items"
+        )
     await ensure_db_inited(settings)
 
     if material_ids is None:

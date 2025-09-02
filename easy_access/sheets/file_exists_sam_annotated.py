@@ -2,14 +2,13 @@
 # import requests
 # from time import sleep # we don't need this when using httpx
 
-import polars as pl  # moved to polars as we're using that everywhere, it's faster and easier to use
+from pathlib import Path
+
 import httpx  # switched to httpx as it's async capable and already used in this code
-import re
+import polars as pl  # moved to polars as we're using that everywhere, it's faster and easier to use
 from loguru import (
     logger,
 )  # imported the logger used throughout the code to log messages instead of using `print`
-from pathlib import Path
-
 
 # first, we will turn the main part of this file into a function so we can call it from other files
 

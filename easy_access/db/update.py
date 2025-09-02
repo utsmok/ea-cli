@@ -6,8 +6,9 @@ import contextlib
 import traceback
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
-from typing import Any
 from itertools import batched
+from typing import Any
+
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
@@ -185,10 +186,12 @@ async def update_copyright_items(
     def change(
         changes: dict, field: str, new_value: Any, old_value: Any, reason: str
     ) -> dict:
-
         if field == "file_exists":
             db_item.last_canvas_check = datetime.now()
-            changes["last_canvas_check"] = {"old": str(old_value), "new": str(new_value)}
+            changes["last_canvas_check"] = {
+                "old": str(old_value),
+                "new": str(new_value),
+            }
         else:
             logger.debug(
                 f"[{reason}] [{field}] {old_value}  {type(old_value)}) --> {new_value} ({type(new_value)})"
@@ -211,16 +214,17 @@ async def update_copyright_items(
             old_value = getattr(db_item, field)
             try:
                 if field == "file_exists":
-
                     match new_value:
                         case True | 1 | "1" | "true" | "True":
                             new_value = True
                         case False | 0 | "0" | "false" | "False":
                             new_value = False
-                        case None | '':
+                        case None | "":
                             new_value = None
                         case _:
-                            logger.warning(f"[skip][file_exists] unexpected value: {new_value}")
+                            logger.warning(
+                                f"[skip][file_exists] unexpected value: {new_value}"
+                            )
                             continue
 
                     if not isinstance(new_value, bool):
@@ -549,7 +553,9 @@ async def update_copyright_items(
             [changes.update({"modified_by": cur_user}) for changes in updates.values()]
             logger.info(f"items modified by {cur_user}")
 
-        for update_batch in batched([(mat_id, changes) for mat_id, changes in updates.items()], 50):
+        for update_batch in batched(
+            [(mat_id, changes) for mat_id, changes in updates.items()], 50
+        ):
             logger.info(f"Updating {len(update_batch)} changelog items in db.")
 
             mat_ids = [mat_id for mat_id, _ in update_batch]
