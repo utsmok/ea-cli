@@ -1,81 +1,271 @@
 # Easy Access Sheet Toolkit
-*April 2025*
-Note: This project has been significantly updated, changed, and expanded in the meantime, but is not in a 'shareable' state yet. Once it is (if it is...) I'll update the README... someday!
+*March 2025*
 
-*February 2025*
+The Easy Access Sheet Toolkit is a comprehensive Python application with a built-in CLI designed to automate the processing, enrichment, and export of copyright data from university systems. It provides a complete pipeline for transforming raw copyright data into enriched, faculty-organized Excel sheets.
 
-Note: only tested on windows systems (actually, only tested on my personal computer with very specific data and settings)
+## Features
 
-The Easy Access Sheet Toolkit is a python script with a built-in CLI developed to automate the process of creating sheets of data per faculty from a university's CopyRight tool.
+- **Multi-stage Pipeline**: Modular processing pipeline with independent stages
+- **Data Enrichment**: Automatic enrichment with OSIRIS course and person data
+- **File Existence Verification**: TTL-based Canvas API file existence checking
+- **Bulk Operations**: Optimized database operations for performance
+- **Export Generation**: Multiple export formats (faculty sheets, overview, all items)
+- **Modern Architecture**: Async/await, dependency injection, comprehensive testing
 
-This script does the following:
-- Read data exported by the CopyRight tool
-- Process the data into a standard format
-- Add a few extra columns to the data to improve the workflow
-- Enrich each item with data from OSIRIS and People Pages
-- Export various sheets:
-    - per faculty
-    - all items
-    - only items that have been changed
-- format & style those excel sheets for easy usage
-- Read back the data from all the sheets to produce a CopyRight 'import' sheet -- currently under development.
+## Pipeline Stages
 
-Take a look at the cli help function:
-![image](https://github.com/user-attachments/assets/c2038652-3e68-4ebf-9bec-e677721e001a)
+The toolkit operates through several configurable pipeline stages:
 
-# Setting up things to use the toolkit
+### 1. Data Ingestion (`--ingest-only`)
+- Reads raw copyright data from SURF CopyRight exports
+- Processes data into standardized format
+- Handles duplicate detection and merging
+- Stores processed data in database
 
-Here are some basic instructions on how to get started with the toolkit. For more details, take a look in the source code -- it contains a lot of comments. You probably will want to change things in the script to match your own workflows anyway. Feel free to get in touch if you have questions.
+### 2. Data Processing (`--process-only`)
+- Applies business rules and transformations
+- Updates copyright item relationships
+- Performs data validation and cleanup
+- Prepares data for enrichment
 
-### Settings: settings.yaml
+### 3. Data Enrichment (`--enrich-only`)
+- Fetches course data from OSIRIS API
+- Retrieves person/contact information
+- Links courses to copyright items
+- TTL-based freshness policies
 
-settings.yaml contains most settings for the app. 
+### 4. File Existence Check (`--file-exists-only`)
+- Verifies file existence via Canvas API
+- TTL-based checking (configurable)
+- Rate-limited API calls
+- Bulk database updates
 
-The file should include a hierarchy of the universities faculties' and programmes. This is necessary to split the results per faculty and/or programme because the CopyRight tool does not have information about which faculty a programme belongs to.
-The included settings.yaml file includes all the settings used at the University of Twente. If you do not change the information, the script will not be able to recognize any file, and it will then move all items to the 'Unmapped' faculty.
+### 5. Export Generation (`--export-only`)
+- Creates faculty-specific Excel sheets
+- Generates overview and summary sheets
+- Applies formatting and styling
+- Handles file uniqueness and versioning
 
-### Adding data from the CopyRight tool
+## Quick Start
 
-Go to SURF's CopyRight tool, filter the data you want to export, press right click on the sheet -> press download as ... -> select data --> press export --> press 'Click here to download your data file'.
-Put it in the folder called 'raw_copyright_data' (or whatever name you changed it to in settings.yaml) in the same directory as the run.py file, and put the downloaded file in it. 
+### Prerequisites
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager (recommended)
 
-### Running the cli
+### Installation
 
-Run the cli with standard settings to create the initial sheets:
+1. **Install uv** (recommended):
+   ```bash
+   # Windows PowerShell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   uv python install
+   ```
 
-    uv run easy_access_cli.py
+2. **Clone and setup**:
+   ```bash
+   git clone <repository-url>
+   cd ea-cli
+   uv sync
+   ```
 
-If all is well, you'll see something like this:
-![image](https://github.com/user-attachments/assets/0724f886-f067-45d7-98f3-67e9eff8e25e)
-If something is wrong, you'll either get a short warning/error message with the specific issue; or you'll get a giant list of detailed errors. Probably the last. 
+### Configuration
 
-If you want to check out all available cli options use the --help option (see the screenshot above):
+1. **Settings File**: Copy and modify `settings.yaml`:
+   ```yaml
+   university_settings:
+     canvas_api_token: "your_canvas_token"
+     osiris_base_url: "https://osiris.utwente.nl"
 
-    uv run easy_access_cli.py --help
+   enrichment_settings:
+     course_ttl_days: 30
+     person_ttl_days: 30
+     file_exists_ttl_days: 30
+     file_exists_rate_limit_delay: 0.1
 
+   data_settings:
+     raw_data_col_order: [...]
+   ```
 
-# uv? What is that?
+2. **Add Copyright Data**: Place SURF CopyRight exports in `raw_copyright_data/`
 
-[uv](https://docs.astral.sh/uv/getting-started/installation/) is an all-in-one python manager. It's a great way to run python scripts and manage dependencies: very easy, very fast, and it runs completely separate from any other python installations on your computer. I -highly- recommend using it in general, but especially for this script.
-Of course, you can use any python installation you want to run the script, but using uv is definitely the easiest way to get started.
+### Running the Pipeline
 
-## Installing uv
+**Full pipeline** (default):
+```bash
+uv run run.py
+```
 
-On windows, install uv by opening Powershell (press windows key, type 'powershell', enter) and pasting the following line:
+**Individual stages**:
+```bash
+# Only ingest new data
+uv run run.py --ingest-only
 
-    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# Only process existing data
+uv run run.py --process-only
 
-and then press enter to install.
-Once uv is done installing, close PowerShell and start it up again.
-Then type in:
+# Only enrich with external data
+uv run run.py --enrich-only
 
-    uv python install
+# Only check file existence
+uv run run.py --file-exists-only
 
-press enter, and you've fully installed uv!
-Run  the help info of the easy access script with the following command:
+# Only generate exports
+uv run run.py --export-only
+```
 
-    uv run run.py --help
+**Skip stages**:
+```bash
+# Skip file existence checks
+uv run run.py --no-file-exists
 
-To run the script using default settings, don't include --help:
+# Skip enrichment
+uv run run.py --no-enrich
+```
 
-    uv run run.py
+## Architecture
+
+### Core Components
+
+- **`pipeline.py`**: Main orchestrator coordinating all stages
+- **`db/`**: Database models and operations
+  - `models.py`: Tortoise ORM models
+  - `update.py`: Data processing and merging logic
+  - `relations.py`: M2M relationship management
+  - `retrieve.py`: Optimized data retrieval with aggregation
+- **`enrichment/`**: External data fetching
+  - `osiris.py`: Course and person data APIs
+- **`maintenance/`**: Ongoing data maintenance
+  - `file_existence.py`: Canvas API file verification
+- **`sheets/`**: Export generation
+  - `export.py`: Excel sheet creation and formatting
+
+### Database Schema
+
+Key entities:
+- **CopyrightItem**: Core copyright data
+- **CourseData**: Course information from OSIRIS
+- **PersonData**: Contact information
+- **Faculty**: Organizational hierarchy
+- **OrganizationData**: Department affiliations
+
+### Performance Optimizations
+
+- **Bulk Operations**: Raw SQL for efficient batch updates
+- **Memory Management**: Streaming/chunked data processing
+- **Rate Limiting**: Configurable delays for API calls
+- **Connection Pooling**: Optimized database connections
+- **Async Processing**: Concurrent API calls with semaphores
+
+## Configuration Options
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--ingest-only` | Run only data ingestion stage |
+| `--process-only` | Run only data processing stage |
+| `--enrich-only` | Run only data enrichment stage |
+| `--export-only` | Run only export generation stage |
+| `--file-exists-only` | Run only file existence verification |
+| `--no-enrich` | Skip data enrichment stage |
+| `--no-file-exists` | Skip file existence verification |
+| `--force` | Force reprocessing of all data |
+
+### Settings Configuration
+
+**Enrichment Settings** (`settings.yaml`):
+```yaml
+enrichment_settings:
+  course_ttl_days: 30          # Days before course data is considered stale
+  person_ttl_days: 30          # Days before person data is considered stale
+  file_exists_ttl_days: 30     # Days before file existence is rechecked
+  file_exists_rate_limit_delay: 0.1  # Seconds between API calls
+```
+
+**Data Settings**:
+```yaml
+data_settings:
+  raw_data_col_order: [...]     # Column ordering for exports
+  faculty_hierarchy: {...}      # Faculty/program hierarchy
+```
+
+## Development
+
+### Project Structure
+```
+ea-cli/
+├── easy_access/
+│   ├── db/                    # Database operations
+│   ├── enrichment/           # External data fetching
+│   ├── maintenance/          # Ongoing maintenance tasks
+│   ├── sheets/              # Export generation
+│   ├── settings.py          # Configuration management
+│   ├── pipeline.py          # Main orchestration
+│   └── main.py              # CLI entry point
+├── tests/                   # Unit and integration tests
+├── raw_copyright_data/      # Input data directory
+├── cip_sheets/             # Generated faculty sheets
+├── pdf_downloads/          # Downloaded PDF files
+└── settings.yaml           # Configuration file
+```
+
+### Testing
+
+Run the test suite:
+```bash
+uv run pytest
+```
+
+Run specific test categories:
+```bash
+# Unit tests only
+uv run pytest tests/test_*.py -v
+
+# Integration tests
+uv run pytest tests/test_integration_*.py -v
+
+# With coverage
+uv run pytest --cov=easy_access --cov-report=html
+```
+
+### Contributing
+
+1. **Branching**: Create feature branches from `new-dataflow`
+2. **Testing**: Add tests for new functionality
+3. **Documentation**: Update README for new features
+4. **Code Style**: Follow existing patterns and add type hints
+
+## Troubleshooting
+
+### Common Issues
+
+1. **API Token Missing**: Ensure `canvas_api_token` is set in `settings.yaml`
+2. **Database Errors**: Check database file permissions and disk space
+3. **Memory Issues**: Reduce batch sizes in settings for large datasets
+4. **Rate Limiting**: Increase `file_exists_rate_limit_delay` if hitting API limits
+
+### Logs
+
+Check logs in the console output or enable debug logging:
+```bash
+uv run run.py --verbose
+```
+
+### Performance Tuning
+
+For large datasets, adjust these settings:
+```yaml
+# Reduce memory usage
+batch_size: 500
+
+# Reduce API load
+max_concurrent: 25
+file_exists_rate_limit_delay: 0.2
+
+# Database optimization
+pool_size: 10
+```
+
+## License
+
+See LICENSE file for details.

@@ -14,8 +14,9 @@ class DataPipeline:
     - Use async methods (run_async, ingest_raw_data_async, etc.) for async contexts
     """
 
-    def __init__(self, settings):
+    def __init__(self, settings, ea_settings=None):
         self.settings = settings
+        self.ea_settings = ea_settings
 
     # Synchronous interface (backwards compatible)
     def run(self) -> None:
@@ -55,6 +56,18 @@ class DataPipeline:
         """
         asyncio.run(self.export_reports_async())
 
+    def enrich_data(self) -> None:
+        """
+        Synchronous wrapper for enriching data with OSIRIS information.
+        """
+        asyncio.run(self.enrich_data_async())
+
+    def verify_file_existence(self) -> None:
+        """
+        Synchronous wrapper for verifying file existence.
+        """
+        asyncio.run(self.verify_file_existence_async())
+
     # Asynchronous interface
     async def run_async(self) -> None:
         """
@@ -65,6 +78,14 @@ class DataPipeline:
         await self.ingest_faculty_updates_async()
         await self.process_data_async()
         await self.update_relations_async()
+        await self.enrich_data_async()
+
+        # Conditionally run file existence verification
+        if self.ea_settings and not self.ea_settings.no_file_exists:
+            await self.verify_file_existence_async()
+        else:
+            logger.info("File existence verification disabled, skipping...")
+
         await self.export_reports_async()
         logger.info("Data processing pipeline finished.")
 
@@ -137,3 +158,42 @@ class DataPipeline:
         logger.info("Exporting reports...")
         await export_reports_async(self.settings)
         logger.info("Reports exported.")
+
+    async def enrich_data_async(self) -> None:
+        """
+        Enriches data with OSIRIS course and person information.
+        """
+        from easy_access.enrichment.osiris import enrich_async
+
+        logger.info("Enriching data with OSIRIS information...")
+        await enrich_async(self.settings)
+        logger.info("Data enrichment completed.")
+
+    async def verify_file_existence_async(self) -> None:
+        """
+        Verifies file existence for copyright items based on TTL policies.
+        """
+        from easy_access.maintenance.file_existence import refresh_file_existence_async
+
+        logger.info("Verifying file existence...")
+        ttl_days = getattr(self.settings, 'file_exists_ttl_days', 30)
+        # Get rate limit delay from settings or use default
+        rate_limit_delay = getattr(self.settings, 'file_exists_rate_limit_delay', 0.1)
+
+        result = await refresh_file_existence_async(
+            self.settings,
+            ttl_days=ttl_days,
+            batch_size=1000,
+            max_concurrent=50,
+            rate_limit_delay=rate_limit_delay
+        )
+
+        if "error" in result:
+            logger.error(f"File existence verification failed: {result['error']}")
+        else:
+            logger.info(
+                f"File existence verification completed: "
+                f"{result.get('checked', 0)} checked, "
+                f"{result.get('exists', 0)} exist, "
+                f"{result.get('not_exists', 0)} not found"
+            )

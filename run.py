@@ -146,6 +146,27 @@ def process_data(
             rich_help_panel="Stage Selection",
         ),
     ] = False,
+    enrich_only: Annotated[
+        bool,
+        typer.Option(
+            help="Only run the enrichment stage (fetch OSIRIS data).",
+            rich_help_panel="Stage Selection",
+        ),
+    ] = False,
+    file_exists_only: Annotated[
+        bool,
+        typer.Option(
+            help="Only run the file existence verification stage.",
+            rich_help_panel="Stage Selection",
+        ),
+    ] = False,
+    no_file_exists: Annotated[
+        bool,
+        typer.Option(
+            help="Skip file existence verification stage.",
+            rich_help_panel="Processing Options",
+        ),
+    ] = False,
 ) -> None:
     """Runs the main Easy Access data processing workflow."""
     if other_sheet:
@@ -157,15 +178,17 @@ def process_data(
             other_sheet = None
 
     # Validate stage selection options
-    stage_options = [ingest_only, process_only, export_only]
+    stage_options = [ingest_only, process_only, export_only, enrich_only, file_exists_only]
     if sum(stage_options) > 1:
-        logger.error("Cannot specify multiple stage options. Choose only one: --ingest-only, --process-only, or --export-only.")
+        logger.error("Cannot specify multiple stage options. Choose only one: --ingest-only, --process-only, --export-only, --enrich-only, or --file-exists-only.")
         typer.Exit(1)
 
     # Determine which stages to run
     run_ingest = ingest_only or not any(stage_options)  # Default to all if no stage specified
     run_process = process_only or not any(stage_options)
     run_export = export_only or not any(stage_options)
+    run_enrich = enrich_only or not any(stage_options)
+    run_file_exists = file_exists_only or not any(stage_options)
 
     # Import project modules here to avoid import-time side-effects when showing --help
     from easy_access.main import EasyAccessTool
@@ -181,6 +204,7 @@ def process_data(
         only_retrieve_missing_osiris_data=not osiris_full_refresh,
         disable_writes=disable_writes,
         faculty=single_faculty,
+        no_file_exists=no_file_exists,
     )
 
     tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)
@@ -192,6 +216,12 @@ def process_data(
     if run_process:
         logger.info("Running process stage...")
         tool.run_process()
+    if run_enrich:
+        logger.info("Running enrichment stage...")
+        tool.run_enrich()
+    if run_file_exists and not no_file_exists:
+        logger.info("Running file existence verification stage...")
+        tool.run_verify_file_existence()
     if run_export:
         logger.info("Running export stage...")
         tool.run_export()

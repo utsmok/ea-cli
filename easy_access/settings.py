@@ -123,6 +123,13 @@ class BackupSetting(Enum):
     BACKUP_OVERVIEWS = "backup_overviews"
 
 
+class EnrichmentSetting(Enum):
+    """Enum for enrichment settings keys used in settings.yaml."""
+
+    COURSE_TTL_DAYS = "course_ttl_days"
+    PERSON_TTL_DAYS = "person_ttl_days"
+
+
 class SheetSetting(Enum):
     """Enum for sheet-related settings keys used in settings.yaml."""
 
@@ -159,6 +166,7 @@ class EasyAccessSettings:
     dirs: dict[DirSetting, Directory] = field(default_factory=dict)
     disable_writes: bool = False
     faculty: str | None = None
+    no_file_exists: bool = False
 
     @classmethod
     def create_for_runtime(
@@ -369,6 +377,27 @@ class UniversitySettings:
 
 
 @dataclass
+class EnrichmentSettings:
+    """Holds settings related to OSIRIS data enrichment.
+
+    Attributes:
+        course_ttl_days: Time-to-live in days for course data freshness.
+                         Courses older than this will be refetched.
+        person_ttl_days: Time-to-live in days for person data freshness.
+                         Persons older than this will be refetched.
+        file_exists_ttl_days: Time-to-live in days for file existence checks.
+                             Files older than this will be rechecked.
+        file_exists_rate_limit_delay: Delay in seconds between file existence API calls.
+                                     Helps avoid rate limiting from Canvas API.
+    """
+
+    course_ttl_days: int | None = None
+    person_ttl_days: int | None = None
+    file_exists_ttl_days: int | None = None
+    file_exists_rate_limit_delay: float = 0.1
+
+
+@dataclass
 class Settings:
     """Main dataclass holding all application settings, loaded from a YAML file.
 
@@ -382,6 +411,7 @@ class Settings:
         data_settings: Nested DataSettings object.
         university_settings: Nested UniversitySettings object.
         backup_settings: Nested BackupSettings object.
+        enrichment_settings: Nested EnrichmentSettings object.
         classification_options: List of available classification options.
         dashboard_reload: Boolean indicating if the dashboard should auto-reload.
         db_path: Path to the SQLite database file.
@@ -399,6 +429,7 @@ class Settings:
         default_factory=UniversitySettings, init=False
     )
     backup_settings: BackupSettings = field(default_factory=BackupSettings, init=False)
+    enrichment_settings: EnrichmentSettings = field(default_factory=EnrichmentSettings, init=False)
     classification_options: list[str] = field(default_factory=list)
     dashboard_reload: bool = field(default=True, init=False)
     db_path: Path = field(default=Path("db.sqlite3"), init=False)
@@ -653,6 +684,40 @@ class Settings:
                         f"Unrecognized backup setting {key_str} (with value: {value_data}). Skipping."
                     )
         self.backup_settings.backup_location = self.dirs.get(DirSetting.FULL_BACKUPS)
+
+    def parse_enrichment(self, enrichment_settings_yaml: dict[str, Any]) -> None:
+        """Parses the 'enrichment' section of settings.yaml.
+
+        Args:
+            enrichment_settings_yaml: The dictionary representing the 'enrichment' settings.
+        """
+        for key_str, value_data in enrichment_settings_yaml.items():
+            try:
+                key_enum = EnrichmentSetting(value=key_str)
+            except ValueError:
+                logger.error(
+                    f"Unrecognized enrichment setting {key_str} (with value: {value_data}). Skipping."
+                )
+                continue
+            match key_enum:
+                case EnrichmentSetting.COURSE_TTL_DAYS:
+                    try:
+                        self.enrichment_settings.course_ttl_days = int(value_data)
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            f"Invalid value for COURSE_TTL_DAYS: {value_data}. Using default None"
+                        )
+                case EnrichmentSetting.PERSON_TTL_DAYS:
+                    try:
+                        self.enrichment_settings.person_ttl_days = int(value_data)
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            f"Invalid value for PERSON_TTL_DAYS: {value_data}. Using default None"
+                        )
+                case _:
+                    logger.warning(
+                        f"Unrecognized enrichment setting {key_str} (with value: {value_data}). Skipping."
+                    )
 
     def parse_directories(self, raw_dir_strs: dict[str, str]) -> None:
         """Parses the 'directories' section of settings.yaml.
@@ -912,6 +977,7 @@ class Settings:
             "files": self.parse_files,
             "unsorted": self.parse_unsorted,
             "backup": self.parse_backup,
+            "enrichment": self.parse_enrichment,
             "database_path": self.parse_database_settings,
         }
 

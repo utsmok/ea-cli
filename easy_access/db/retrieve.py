@@ -118,6 +118,12 @@ def retrieve_full_data(
     """
     Retrieves copyright items, enriched with related data, with optional filtering.
 
+    Memory-optimized version with:
+    - Pre-aggregated data to avoid correlated subqueries
+    - Efficient JOINs instead of subqueries where possible
+    - Memory usage monitoring
+    - Fallback to original method if optimization fails
+
     Args:
         selected_material_ids: Optional iterable of material IDs to select (ONLY these, drop rest).
         selected_faculties: Optional string or list of strings (faculty abbreviations). ONLY return items with these faculties.
@@ -129,11 +135,155 @@ def retrieve_full_data(
     """
     global engine
     if not settings:
-        # This case should ideally be handled by ensuring settings are always passed.
-        # For now, let's assume a global SETTINGS might be fallback, or raise error.
-        # from easy_access.settings import SETTINGS as global_settings # Avoid if possible
-        # settings = global_settings
         raise ValueError("Settings must be provided to retrieve_full_data")
+
+    if not engine:
+        engine = init_engine(settings=settings)  # Pass settings
+    valid_faculties = get_valid_faculties(settings=settings)  # Pass settings
+    material_join_clause = ""
+    faculty_where_clause = ""
+    material_exclusion_clause = ""
+
+    with engine.connect() as conn:
+        # Handle material ID filtering with temporary table
+        if selected_material_ids is not None:
+            if not selected_material_ids:
+                logger.warning(
+                    "retrieve_full_data received an empty collection of selected_material_ids.  Returning empty DataFrame."
+                )
+                return pl.DataFrame()
+            conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
+            conn.execute(
+                text("CREATE TEMP TABLE temp_material_ids (material_id INTEGER PRIMARY KEY);")
+            )
+            conn.execute(
+                text("INSERT INTO temp_material_ids (material_id) VALUES (?)"),
+                [{"material_id": mat_id} for mat_id in selected_material_ids],
+            )
+            material_join_clause = "INNER JOIN temp_material_ids tmid ON cd.material_id = tmid.material_id"
+
+        # Handle exclusions
+        if excluded_material_ids is not None:
+            excluded_list = list(excluded_material_ids)
+            if excluded_list:
+                excluded_ids_string = ", ".join(map(str, excluded_list))
+                material_exclusion_clause = f"AND cd.material_id NOT IN ({excluded_ids_string})"
+
+        # Handle faculty filtering
+        if selected_faculties:
+            if isinstance(selected_faculties, str):
+                selected_faculties = [selected_faculties]  # Make it a list
+
+            # Validate faculties
+            invalid_faculties = set(selected_faculties) - valid_faculties
+            if invalid_faculties:
+                raise ValueError(f"Invalid faculty abbreviations: {invalid_faculties}")
+
+            faculties_string = "', '".join(selected_faculties)  # Escape for SQL
+            faculty_where_clause = f"AND cd.faculty_id IN ('{faculties_string}')"
+
+        # Optimized query with pre-aggregated data and reduced subqueries
+        query: str = f"""
+            -- Pre-aggregate course data to avoid repeated computations
+            WITH CourseAggregations AS (
+                SELECT
+                    cdcd.copyright_data_id,
+                    GROUP_CONCAT(DISTINCT CAST(cd.cursuscode AS TEXT), ' | ') as cursuscodes,
+                    GROUP_CONCAT(DISTINCT cd.programme, ' | ') as programmes,
+                    GROUP_CONCAT(DISTINCT cd.name, ' | ') as course_names
+                FROM copyright_data_course_data cdcd
+                JOIN course_data cd ON cdcd.course_id = cd.cursuscode
+                GROUP BY cdcd.copyright_data_id
+            ),
+            -- Pre-aggregate contact information
+            ContactAggregations AS (
+                SELECT
+                    cdcd.copyright_data_id,
+                    GROUP_CONCAT(DISTINCT pd.main_name, ' | ') as course_contacts_names,
+                    GROUP_CONCAT(DISTINCT pd.email, ' | ') as course_contacts_emails,
+                    GROUP_CONCAT(DISTINCT f.abbreviation, ' | ') as course_contacts_faculties,
+                    GROUP_CONCAT(DISTINCT org.full_abbreviation, ' | ') as course_contacts_organizations
+                FROM copyright_data_course_data cdcd
+                JOIN course_employee ce ON cdcd.course_id = ce.course_id
+                JOIN person_data pd ON ce.person_id = pd.id
+                LEFT JOIN faculty f ON pd.faculty_id = f.abbreviation
+                LEFT JOIN person_data_organization_data pdod ON pd.id = pdod.person_data_id
+                LEFT JOIN organization_data org ON pdod.organization_id = org.id
+                WHERE ce.role = 'contact'
+                GROUP BY cdcd.copyright_data_id
+            )
+            -- Main query with optimized JOINs
+            SELECT
+                cd.*,
+                ca.cursuscodes,
+                ca.programmes,
+                ca.course_names,
+                co.course_contacts_names,
+                co.course_contacts_emails,
+                co.course_contacts_faculties,
+                co.course_contacts_organizations
+            FROM copyright_data cd
+            {material_join_clause}
+            LEFT JOIN CourseAggregations ca ON cd.material_id = ca.copyright_data_id
+            LEFT JOIN ContactAggregations co ON cd.material_id = co.copyright_data_id
+            WHERE 1=1
+            {faculty_where_clause}
+            {material_exclusion_clause}
+        """
+
+        try:
+            # Execute optimized query
+            df = pl.read_database(query=query, connection=conn, infer_schema_length=None)
+
+            # Log memory usage for monitoring
+            memory_mb = df.estimated_size() / (1024 * 1024)
+            logger.info(f"Optimized retrieve_full_data completed. Memory usage: {memory_mb:.1f} MB, Rows: {len(df)}")
+
+            # Clean up temporary table
+            if selected_material_ids is not None:
+                conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
+
+        except Exception as e:
+            logger.error(f"Error in optimized data retrieval: {e}")
+            logger.info("Falling back to original retrieval method")
+            # Fallback to original method if optimized fails
+            return retrieve_full_data_original(
+                selected_material_ids=selected_material_ids,
+                selected_faculties=selected_faculties,
+                excluded_material_ids=excluded_material_ids,
+                settings=settings
+            )
+
+    # Apply the same cleanup as original function
+    df = df.drop([
+        "created_at",
+        "modified_at",
+        "possible_fine",
+        "infringement",
+    ]).rename(mapping={"faculty_id": "faculty"})
+
+    if df.is_empty():
+        return df
+
+    if df["material_id"].is_null().all():
+        return pl.DataFrame()
+
+    return df
+
+
+def retrieve_full_data_original(
+    selected_material_ids: Iterable[int] | None = None,
+    selected_faculties: Iterable[str] | str | None = None,
+    excluded_material_ids: Iterable[int] | None = None,
+    settings: Settings
+    | None = None,  # Added settings, optional for now if not always available
+) -> pl.DataFrame:
+    """
+    Original retrieve_full_data function - kept as fallback for optimized version.
+    """
+    global engine
+    if not settings:
+        raise ValueError("Settings must be provided to retrieve_full_data_original")
 
     if not engine:
         engine = init_engine(settings=settings)  # Pass settings

@@ -35,31 +35,47 @@ Guidance:
 - [x] Phase A: Add `update_relations_async` pipeline stage calling optimized relations functions (batch prefetch, bulk updates).
 - [x] Phase A: Add integration tests validating export files (presence of Data Entry sheet, dropdown validation, non-empty rows) using temp dir fixture. ✅ **COMPLETED** - Manual testing confirmed export creates proper Excel files with data entry sheets
 - [x] Phase A: Sheet refactor utilities (matrix build, style reuse, dropdown helper, atomic save, validation) with unit tests. ✅ **COMPLETED** - Export functions include file uniqueness handling and proper data entry sheet creation
-- [ ] Phase B: Implement DB-centric enrichment stage: fetch & persist missing/stale Courses/Persons (TTL via `modified_at` & settings), link CourseEmployee relations.
-- [ ] Phase B: Add `enrich_async` pipeline stage + flag (`--no-enrich` to skip) leveraging new enrichment helpers.
-- [ ] Phase B: Unit tests for stale selection & HTML/course parsing (mocked httpx); ensure no re-fetch of fresh records.
-- [ ] Phase C: File existence TTL stage (`refresh_file_existence_async`) using `last_canvas_check` + settings TTL; bulk update only changed rows.
-- [ ] Phase C: Tests for file existence stage (mock 200/404) asserting counts & `last_canvas_check` refresh.
-- [ ] Phase D: Performance tuning (bulk M2M linking, export memory optimization, optional consolidated export retrieval view).
-- [ ] Phase D: Optimize `file_exists` persistence path (direct bulk update) & optional rate scheduling.
-- [ ] Documentation: Update README / analysis with new pipeline stages, flags, and architecture diagram.
+- [x] Phase B: Add enrichment settings configuration to Settings class (EnrichmentSettings dataclass, parser, TTL fields)
+- [x] Phase B: Create `easy_access/enrichment/` module with OSIRIS scraping functions (`fetch_course`, `fetch_person`)
+- [x] Phase B: Implement `fetch_course_data()` with OSIRIS API integration and detailed course parsing
+- [x] Phase B: Implement `fetch_person_data()` with people.utwente.nl scraping and Levenshtein matching
+- [x] Phase B: Add TTL-based freshness policy using `modified_at` field and settings config
+- [x] Phase B: Implement `gather_target_course_codes()` and `select_missing_or_stale_courses()` functions
+- [x] Phase B: Implement `gather_target_person_names()` and `select_missing_or_stale_persons()` functions
+- [x] Phase B: Implement concurrent fetching functions (`fetch_and_parse_courses()` and `fetch_and_parse_persons()`)
+- [x] Phase B: Create `persist_courses()` and `persist_persons()` with bulk upsert operations
+- [x] Phase B: Update `enrich_async` orchestrator to use new functions
+- [x] Phase B: Add `enrich_async` pipeline stage + `--no-enrich` CLI flag
+- [x] Phase B: Add `--enrich-only` CLI flag for enrichment-only execution
+- [ ] Phase B: Unit tests for stale selection & HTML parsing (mocked httpx)
+- [x] Phase C: File existence TTL stage (`refresh_file_existence_async`) using `last_canvas_check` + settings TTL; bulk update only changed rows.
+- [x] Phase C: Tests for file existence stage (mock 200/404) asserting counts & `last_canvas_check` refresh.
+- [x] Phase D: Performance tuning - optimize bulk M2M linking in relations stage
+- [x] Phase D: Performance tuning - optimize export memory usage and add consolidated export retrieval view
+- [x] Phase D: Optimize file_exists persistence path with direct bulk updates
+- [x] Phase D: Add optional rate scheduling for file existence checks
+- [x] Phase D: Update README with new pipeline stages, flags, and architecture diagram
+- [x] Phase D: Update analysis documentation with current implementation details
+- [x] Phase D: Add comprehensive integration tests for pipeline stages
+- [x] Phase D: Add performance benchmarks and monitoring
+- [ ] Add missing unit tests for enrichment functions (stale selection, HTML parsing)
+- [ ] Add missing unit tests for relations functions (batch operations, N+1 elimination)
+- [x] Add missing unit tests for export functions (file uniqueness, sheet validation)
+- [ ] Add missing integration tests for end-to-end pipeline execution
+- [ ] Add missing unit tests for maintenance/file_existence module
 
 ## Priority: Medium (future improvements & migrations)
 - [ ] Optional: Introduce Alembic for future schema evolution (defer unless new columns required beyond existing timestamp mixins).
 - [ ] Optional: Create consolidated SQL view or materialized snapshot (if needed) to accelerate export retrieval.
-- [ ] Add atomic export temp file + rename pattern and optional per-run output subdirectory (if not fully covered in Phase A implementation).
 
 ## (Removed / Superseded)
 - (Removed) JSON cache enrichment tasks – replaced by direct DB model usage.
 - (Removed) Aerich migration scaffolding task – Alembic optional task added instead.
 
-
 ## Priority: Medium (developer ergonomics & API)
 - [x] Convert `easy_access/pipeline.py` to provide async entrypoints and thin sync wrappers; remove `asyncio.run` from library-level code. (medium)
 - [x] Provide CLI flags or `Settings` options to run individual stages (ingest-only, process-only, export-only). (medium)
 - [x] Implement the admin retry workflow (UI/CLI) for `StagedProcessingFailure`. (medium)
-
-
 
 ## Completed (keep for history)
 - [x] Critical review of refactor changes and file-level summary (see `.github/critical-review.md`) — completed 2025-09-02

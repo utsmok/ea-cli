@@ -79,12 +79,12 @@ async def link_courses(settings: Settings) -> None:
     """
     Link copyright items to courses based on course codes.
 
-    Optimized to reduce N+1 queries:
-    1. Query items missing course links
+    Optimized to reduce N+1 queries using bulk operations:
+    1. Query items missing course links with prefetch_related
     2. Extract course codes using determine_course_code
     3. Batch fetch all relevant Course objects
-    4. Build relationships in memory
-    5. Bulk create CourseItem links
+    4. Pre-fetch existing M2M relationships to avoid N+1 queries
+    5. Bulk create new CourseItem links using raw SQL for maximum performance
 
     Args:
         settings: Application settings
@@ -92,7 +92,7 @@ async def link_courses(settings: Settings) -> None:
     logger.info("Linking courses to copyright items...")
 
     # Query items that don't have course links yet
-    # For ManyToMany fields, we need to use a different approach than isnull
+    # Use prefetch_related to avoid N+1 queries when checking existing relationships
     all_items = await CopyrightItem.all().prefetch_related("courses")
 
     # Filter items that have no courses
@@ -140,9 +140,27 @@ async def link_courses(settings: Settings) -> None:
 
     logger.info(f"Fetched {len(courses)} courses for {len(valid_course_codes)} course codes")
 
-    # Build relationships
+    # Build relationships - avoid N+1 by pre-checking existing relationships
     links_to_create = []
     links_added = 0
+
+    # Get all existing course-item relationships in one query to avoid N+1
+    existing_links = set()
+    if items_without_courses:
+        item_ids = [item.material_id for item in items_without_courses]
+        # Raw query to get existing M2M relationships efficiently
+        from tortoise import connections
+        conn = connections.get("default")
+
+        # Get existing course-item links for our items
+        existing_query = """
+            SELECT copyrightitem_id, course_id
+            FROM copyright_data_courses
+            WHERE copyrightitem_id IN ({})
+        """.format(','.join(['?'] * len(item_ids)))
+
+        existing_results = await conn.execute_query(existing_query, item_ids)
+        existing_links = {(row[0], row[1]) for row in existing_results[1]}
 
     for item in items_without_courses:
         item_id = item.material_id
@@ -153,18 +171,27 @@ async def link_courses(settings: Settings) -> None:
             int_code = safe_int(course_code)
             if int_code and int_code in course_map:
                 course = course_map[int_code]
-                # Check if link already exists (shouldn't but safety check)
-                if course not in await item.courses:
-                    links_to_create.append((item, course))
+                # Check if link already exists using our pre-fetched data
+                if (item_id, course.cursuscode) not in existing_links:
+                    links_to_create.append((item_id, course.cursuscode))
                     links_added += 1
 
-    # Bulk create relationships
+    # Bulk create relationships using raw SQL for maximum performance
     if links_to_create:
         async with in_transaction():
-            for item, course in links_to_create:
-                await item.courses.add(course)
+            # Use bulk insert for M2M relationships
+            values_list = []
+            for item_id, course_id in links_to_create:
+                values_list.append(f"({item_id}, {course_id})")
 
-        logger.success(f"Added {links_added} course links")
+            if values_list:
+                bulk_insert_query = f"""
+                    INSERT OR IGNORE INTO copyright_data_courses (copyrightitem_id, course_id)
+                    VALUES {', '.join(values_list)}
+                """
+                await conn.execute_query(bulk_insert_query)
+
+        logger.success(f"Added {links_added} course links using bulk operations")
     else:
         logger.info("No new course links to create")
 

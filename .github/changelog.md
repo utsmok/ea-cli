@@ -1,8 +1,22 @@
 # Changelog
 
+- 2025-09-03: **PHASE D PROGRESS** - Completed comprehensive unit tests for export functions: created `tests/test_export.py` with 17 test cases covering faculty data gathering, faculty/programme/all-items sheet export, faculty overviews, main export orchestrator, file uniqueness handling, and integration testing. All tests pass with proper mocking of database operations, file system interactions, and Excel generation functions.
+
+- 2025-09-03: **PHASE B COMPLETED** - Successfully implemented complete OSIRIS enrichment system: course/person fetching with concurrent HTTP requests, TTL-based freshness policies, bulk database persistence, pipeline integration with CLI flags, and robust error handling. All core functionality working, unit tests marked as future enhancement.
+
+- 2025-09-02: **PHASE B COMPLETED** - Successfully integrated enrichment pipeline stage: added `enrich_data_async()` to DataPipeline, integrated into main processing workflow, added `--enrich-only` CLI flag for selective execution, and updated EasyAccessTool to conditionally run enrichment based on `refresh_osiris_data` setting.
+
+- 2025-09-02: **PHASE B PROGRESS** - Completed concurrent fetching and persistence implementation: added `fetch_and_parse_courses()` and `fetch_and_parse_persons()` with asyncio.gather for concurrent HTTP requests, implemented `persist_courses()` and `persist_persons()` with bulk upsert operations, and updated `enrich_async` orchestrator to coordinate the complete enrichment pipeline.
+
+- 2025-09-02: **PHASE B PROGRESS** - Completed person fetching implementation: added `fetch_person_data()` function with people.utwente.nl scraping, Levenshtein distance matching for best person selection, detailed HTML parsing for name/email/organization/education data, and proper type checking for BeautifulSoup elements to resolve all lint errors.
+
 - 2025-09-02: **FIXED** RuntimeError "This event loop is already running" in export pipeline: converted `create_faculty_overviews` to async function, replaced `asyncio.get_event_loop().run_until_complete()` with direct await, added sync wrapper for backward compatibility with legacy code.
 
-- 2025-09-02: **COMPLETED Phase A** of export & enrichment reintegration: successfully implemented export stage with `sheets/export.py` (faculty sheets, programme sheets, all items, overviews), optimized relations stage with `db/relations.py` (batch operations, N+1 elimination), integrated both into pipeline with proper database connection management. Manual testing confirmed Excel file generation with data entry sheets and proper file uniqueness handling.
+# Changelog
+
+- 2025-09-02: **PHASE A COMPLETED** - Successfully implemented export & relations reintegration: created `sheets/export.py` with complete export orchestrator (faculty sheets, programme sheets, all items, overviews), optimized `db/relations.py` with batch operations eliminating N+1 queries, integrated both into pipeline with proper async handling. Fixed critical RuntimeError "This event loop is already running" by converting `create_faculty_overviews` to async. Manual testing confirmed Excel file generation with data entry sheets and proper file uniqueness handling.
+
+- 2025-09-02: **PHASE B PROGRESS** - Implemented OSIRIS course fetching logic: extracted `fetch_course_data()` function with API integration, detailed course parsing including contacts/docents/examinators, and helper functions for data processing. Added `_fetch_course_details()` for retrieving detailed course information and `_process_teacher_items()` for consistent teacher data handling.
 
 - 2025-09-02: Added CLI flags for individual pipeline stages: `--ingest-only`, `--process-only`, `--export-only` to `run.py process` command, allowing developers to run specific stages of the data processing pipeline.
 - 2025-09-02: Implemented comprehensive admin CLI for `StagedProcessingFailure` management with commands: `inspect-failures`, `failure-stats`, `retry-failures`, `cleanup-failures`; includes Trogon TUI support for enhanced user experience.

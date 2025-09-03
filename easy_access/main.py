@@ -47,14 +47,23 @@ class EasyAccessTool:
         """
         Executes the configured sequence of processing functions.
         """
-        pipeline = DataPipeline(settings=self.settings)
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
+
+        # Run standard pipeline
         pipeline.run()
+
+        # Conditionally run enrichment if enabled
+        if self.ea_settings.refresh_osiris_data and self.ea_settings.enrich_with_osiris_data:
+            logger.info("OSIRIS enrichment enabled, running enrichment stage...")
+            pipeline.enrich_data()
+        else:
+            logger.info("OSIRIS enrichment disabled, skipping enrichment stage")
 
     def run_ingest(self) -> None:
         """
         Executes only the data ingestion stages.
         """
-        pipeline = DataPipeline(settings=self.settings)
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
         pipeline.ingest_raw_data()
         pipeline.ingest_faculty_updates()
 
@@ -62,19 +71,33 @@ class EasyAccessTool:
         """
         Executes only the data processing stage.
         """
-        pipeline = DataPipeline(settings=self.settings)
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
         pipeline.process_data()
 
     def run_export(self) -> None:
         """
         Executes only the export stage.
         """
-        pipeline = DataPipeline(settings=self.settings)
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
         pipeline.export_reports()
 
     def run_relations(self) -> None:
         """
         Executes only the relations update stage.
         """
-        pipeline = DataPipeline(settings=self.settings)
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
         pipeline.update_relations()
+
+    def run_enrich(self) -> None:
+        """
+        Executes only the enrichment stage.
+        """
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
+        pipeline.enrich_data()
+
+    def run_verify_file_existence(self) -> None:
+        """
+        Executes only the file existence verification stage.
+        """
+        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
+        pipeline.verify_file_existence()

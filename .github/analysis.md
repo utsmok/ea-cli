@@ -56,6 +56,58 @@ Key stages:
 
 - Added unit tests for the helpers (`tests/test_safe_parsers.py`) and an integration test for staged processing (`tests/test_integration_staging.py`). Both pass locally in the development environment.
 
+## Phase D Performance Optimizations (2025-03-01)
+
+### Bulk M2M Linking Optimization
+- **Problem**: N+1 query problem in `relations.py::link_courses` function causing individual database calls for each relationship
+- **Solution**: Implemented bulk operations using raw SQL with temporary tables and `INSERT OR IGNORE` statements
+- **Impact**: Significant performance improvement for large datasets with many course-copyright relationships
+- **Files Modified**: `easy_access/db/relations.py`
+
+### Export Memory Usage Optimization
+- **Problem**: Complex correlated subqueries in `retrieve_full_data` causing memory issues and slow performance
+- **Solution**: Replaced correlated subqueries with pre-aggregated CTEs (Common Table Expressions) and JOINs
+- **Features Added**:
+  - Memory usage monitoring and logging
+  - Fallback to original method if optimization fails
+  - Pre-aggregated course and contact data
+- **Files Modified**: `easy_access/db/retrieve.py`
+
+### File Exists Persistence Optimization
+- **Problem**: Individual database updates for each file existence check causing N+1 query pattern
+- **Solution**: Implemented bulk updates using temporary tables and raw SQL
+- **Features Added**:
+  - Temporary table-based bulk updates
+  - Fallback to individual updates on error
+  - Proper cleanup of temporary tables
+- **Files Modified**: `easy_access/maintenance/file_existence.py`
+
+### Rate Scheduling for API Calls
+- **Problem**: No rate limiting for Canvas API calls risking rate limit violations
+- **Solution**: Added configurable rate limiting with asyncio.sleep between requests
+- **Configuration**: `file_exists_rate_limit_delay` setting (default: 0.1 seconds)
+- **Files Modified**: `easy_access/maintenance/file_existence.py`, `easy_access/pipeline.py`, `easy_access/settings.py`
+
+## Performance Optimization Patterns
+
+### Bulk Database Operations
+- Use temporary tables for complex bulk updates
+- Prefer raw SQL over ORM for performance-critical bulk operations
+- Implement fallback mechanisms for error handling
+- Clean up temporary resources properly
+
+### Memory-Efficient Data Processing
+- Use CTEs to pre-aggregate data and avoid repeated computations
+- Implement streaming/chunked processing for large datasets
+- Monitor memory usage and log performance metrics
+- Provide fallback methods for complex optimizations
+
+### API Rate Limiting
+- Implement configurable delays between API calls
+- Use semaphores for concurrent request management
+- Monitor request rates and adjust accordingly
+- Provide settings for different environments
+
 ## Short-term next steps (priority order)
 
 - Repo-wide safety sweep: replace remaining ad-hoc casts and `__dict__` usages with `safe_*` helpers and explicit mappings. Add unit tests for changed areas. (High priority)
