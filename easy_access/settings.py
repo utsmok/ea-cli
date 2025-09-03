@@ -429,7 +429,9 @@ class Settings:
         default_factory=UniversitySettings, init=False
     )
     backup_settings: BackupSettings = field(default_factory=BackupSettings, init=False)
-    enrichment_settings: EnrichmentSettings = field(default_factory=EnrichmentSettings, init=False)
+    enrichment_settings: EnrichmentSettings = field(
+        default_factory=EnrichmentSettings, init=False
+    )
     classification_options: list[str] = field(default_factory=list)
     dashboard_reload: bool = field(default=True, init=False)
     db_path: Path = field(default=Path("db.sqlite3"), init=False)

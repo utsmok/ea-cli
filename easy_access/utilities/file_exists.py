@@ -90,7 +90,6 @@ async def check_file_exists(
         logger.info(f"Checking {len(files_to_check)} URLs")
         start_time = time.time()
         # do a batchwise check
-        counter = 0
         async with aiometer.amap(
             partial(check_file_exists, session=session),
             files_to_check,

@@ -32,8 +32,7 @@ from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFacu
     Settings,  # Add Settings for type hint
     SettingsFaculty,
 )
-from easy_access.utils import File, standardize_dataframe, safe_float, safe_int
-
+from easy_access.utils import File, safe_float, safe_int, standardize_dataframe
 
 
 async def load_osiris_data(settings: Settings) -> None:
@@ -483,7 +482,10 @@ async def load_pdfs(settings: Settings) -> None:
 
     await Tortoise.close_connections()
 
-async def load_raw_copyright_data_to_staging(settings: Settings, data: pl.DataFrame) -> None:
+
+async def load_raw_copyright_data_to_staging(
+    settings: Settings, data: pl.DataFrame
+) -> None:
     """
     Loads raw copyright data into the staging table.
     """
@@ -494,14 +496,16 @@ async def load_raw_copyright_data_to_staging(settings: Settings, data: pl.DataFr
         await i.save()
 
 
-
-
-async def load_faculty_updates_to_staging(settings: Settings, data: pl.DataFrame) -> None:
+async def load_faculty_updates_to_staging(
+    settings: Settings, data: pl.DataFrame
+) -> None:
     """
     Loads faculty updates into the staging table.
     """
     await ensure_db_inited(settings)
-    data = data.select(["material_id", "manual_classification", "remarks", "workflow_status"])
+    data = data.select(
+        ["material_id", "manual_classification", "remarks", "workflow_status"]
+    )
     items = standardize_dataframe(data).to_dicts()
     staged_items = [StagedFacultyUpdate(**item) for item in items]
     await StagedFacultyUpdate.bulk_create(

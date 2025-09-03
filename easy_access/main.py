@@ -9,8 +9,6 @@ coordinating the various data processing workflows, including:
 - Enriching data with external sources like Osiris.
 """
 
-
-
 from loguru import logger
 
 from easy_access.pipeline import DataPipeline
@@ -53,7 +51,10 @@ class EasyAccessTool:
         pipeline.run()
 
         # Conditionally run enrichment if enabled
-        if self.ea_settings.refresh_osiris_data and self.ea_settings.enrich_with_osiris_data:
+        if (
+            self.ea_settings.refresh_osiris_data
+            and self.ea_settings.enrich_with_osiris_data
+        ):
             logger.info("OSIRIS enrichment enabled, running enrichment stage...")
             pipeline.enrich_data()
         else:

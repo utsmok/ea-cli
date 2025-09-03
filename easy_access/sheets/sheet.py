@@ -3,7 +3,6 @@ import logging
 import os
 import warnings
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 import openpyxl
@@ -17,13 +16,9 @@ from openpyxl.styles import Alignment, NamedStyle
 from openpyxl.worksheet.table import Table as ExcelTable
 from openpyxl.worksheet.table import TableStyleInfo
 
-from easy_access.db.retrieve import (
-    retrieve_copyright_items,
-)
-
 # from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting # Will be passed as parameters
 from easy_access.settings import ColInfo, DirSetting, Settings  # Keep for type hinting
-from easy_access.utils import Directory, File, standardize_dataframe
+from easy_access.utils import File, standardize_dataframe
 
 
 def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
@@ -44,12 +39,12 @@ def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            with open(os.devnull, "w") as devnull:
-                with (
-                    contextlib.redirect_stdout(devnull),
-                    contextlib.redirect_stderr(devnull),
-                ):
-                    return pl.read_excel(file_path, **kwargs)
+            with (
+                open(os.devnull, "w") as devnull,
+                contextlib.redirect_stdout(devnull),
+                contextlib.redirect_stderr(devnull),
+            ):
+                return pl.read_excel(file_path, **kwargs)
     finally:
         for name, level in prev_levels.items():
             logging.getLogger(name).setLevel(level)
@@ -65,7 +60,6 @@ def read_copyright_export(
 
     """
 
-
     try:
         if not file:
             logger.info(
@@ -79,24 +73,23 @@ def read_copyright_export(
         logger.info(f"Reading in data from:\n            {file.name}\n")
         latest_file_date = file.created.strftime("%Y-%m-%d")
         raw_copyright_data = _read_excel_quiet(file.path, sheet_name=None)
-        copyright_data= standardize_dataframe(raw_copyright_data)
+        copyright_data = standardize_dataframe(raw_copyright_data)
         copyright_data = copyright_data.with_columns(
-                pl.Series(
-                    "retrieved_from_copyright_on",
-                    [latest_file_date] * len(copyright_data),
-                ),
-                pl.Series("workflow_status", ["ToDo"] * len(copyright_data)),
-                pl.col("last_change")
-                .str.replace(r"^-", "")
-                .str.strip_chars()
-                .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-                .dt.strftime("%Y-%m-%d"),
-                pl.col("classification").str.to_lowercase(),
-                faculty=pl.col("department").replace_strict(
-                    settings.university_settings.department_mapping, default="Unmapped"
-                ),
-            )
-
+            pl.Series(
+                "retrieved_from_copyright_on",
+                [latest_file_date] * len(copyright_data),
+            ),
+            pl.Series("workflow_status", ["ToDo"] * len(copyright_data)),
+            pl.col("last_change")
+            .str.replace(r"^-", "")
+            .str.strip_chars()
+            .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+            .dt.strftime("%Y-%m-%d"),
+            pl.col("classification").str.to_lowercase(),
+            faculty=pl.col("department").replace_strict(
+                settings.university_settings.department_mapping, default="Unmapped"
+            ),
+        )
 
         # now drop rows we definitely do not want.
         # - drop row if material_id is null, None, blank, or '-'
@@ -249,10 +242,7 @@ class DataEntrySheet:
 
 
 def finalize_sheet(
-    settings: Settings,
-    file: File,
-    data: pl.DataFrame,
-    style_iter: int
+    settings: Settings, file: File, data: pl.DataFrame, style_iter: int
 ) -> int:  # Added settings, changed return type
     """
     This function takes an excel file with 'Complete Data' and adds a data entry sheet +styling.
@@ -284,9 +274,7 @@ def finalize_sheet(
 
 
 def store_complete_data(
-    settings: Settings,
-    file: File | Path,
-    data: pl.DataFrame
+    settings: Settings, file: File | Path, data: pl.DataFrame
 ) -> None:  # Added settings
     """
     Stores the given data in an excel file with 1 sheet named SETTINGS.data_settings.complete_data_name
@@ -311,7 +299,6 @@ def store_complete_data(
     logger.info(f"Stored {data.shape[0]} rows to {file}")
 
 
-
 def read_faculty_sheets(settings: Settings) -> pl.DataFrame:
     """
     Reads all faculty sheets and returns a single DataFrame.
@@ -323,14 +310,15 @@ def read_faculty_sheets(settings: Settings) -> pl.DataFrame:
         "remarks",
         "manual_classification",
     ]
-    material_ids_found: set[str] = set()
-    update_df: pl.DataFrame = pl.DataFrame(
-        schema={col: pl.Utf8 for col in select_cols}
-    )
+    pl.DataFrame(schema={col: pl.Utf8 for col in select_cols})
 
     for faculty_dir in settings.dirs[DirSetting.FACULTIES_DIR].dirs():
         for file in faculty_dir.files_r:
-            if file.extension == ".xlsx" and "overview" not in file.name and "llm" not in file.name:
+            if (
+                file.extension == ".xlsx"
+                and "overview" not in file.name
+                and "llm" not in file.name
+            ):
                 try:
                     df = _read_excel_quiet(
                         file.path, sheet_name=settings.data_settings.data_entry_name
@@ -352,6 +340,5 @@ def read_faculty_sheets(settings: Settings) -> pl.DataFrame:
                     continue
     if not all_dfs:
         return pl.DataFrame()
-
 
     return pl.concat(all_dfs)

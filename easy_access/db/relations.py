@@ -8,14 +8,11 @@ This module handles updating relationships between copyright items and other ent
 Optimized to reduce N+1 query patterns using batch operations.
 """
 
-from typing import Dict, List, Set
-
-import polars as pl
 from loguru import logger
 from tortoise.transactions import in_transaction
 
-from easy_access.db.base import ensure_db_inited, close_connections
-from easy_access.db.models import CopyrightItem, Course, PDF
+from easy_access.db.base import close_connections, ensure_db_inited
+from easy_access.db.models import PDF, CopyrightItem, Course
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
@@ -35,14 +32,16 @@ async def update_duplicates(settings: Settings) -> None:
     logger.info("Updating duplicate statuses...")
 
     # Fetch all PDFs that have replacements in one query
-    pdfs_with_replacements = await PDF.filter(replace_with_id__not_isnull=True).prefetch_related("replace_with")
+    pdfs_with_replacements = await PDF.filter(
+        replace_with_id__not_isnull=True
+    ).prefetch_related("replace_with")
 
     if not pdfs_with_replacements:
         logger.info("No PDFs with replacements found")
         return
 
     # Build mapping of material_id -> replacement_material_id
-    replacement_map: Dict[int, int] = {}
+    replacement_map: dict[int, int] = {}
     for pdf in pdfs_with_replacements:
         if pdf.replace_with:
             replacement_map[pdf.material_id] = pdf.replace_with.material_id
@@ -68,7 +67,9 @@ async def update_duplicates(settings: Settings) -> None:
             async with in_transaction():
                 for item in items_to_update:
                     if item.is_duplicate:
-                        await item.save(update_fields=["is_duplicate", "replacement_id"])
+                        await item.save(
+                            update_fields=["is_duplicate", "replacement_id"]
+                        )
 
         logger.success(f"Updated {updated_count} duplicate statuses")
     else:
@@ -108,11 +109,13 @@ async def link_courses(settings: Settings) -> None:
     logger.info(f"Found {len(items_without_courses)} items without course links")
 
     # Extract all potential course codes
-    all_course_codes: Set[str] = set()
-    item_course_map: Dict[int, List[str]] = {}
+    all_course_codes: set[str] = set()
+    item_course_map: dict[int, list[str]] = {}
 
     for item in items_without_courses:
-        course_codes = determine_course_code(item.course_code or "", item.course_name or "")
+        course_codes = determine_course_code(
+            item.course_code or "", item.course_name or ""
+        )
         if course_codes:
             course_codes_list = list(course_codes)
             item_course_map[item.material_id] = course_codes_list
@@ -123,7 +126,7 @@ async def link_courses(settings: Settings) -> None:
         return
 
     # Convert course codes to integers and filter valid ones
-    valid_course_codes: Set[int] = set()
+    valid_course_codes: set[int] = set()
     for code in all_course_codes:
         if code:
             int_code = safe_int(code)
@@ -136,9 +139,11 @@ async def link_courses(settings: Settings) -> None:
 
     # Batch fetch all relevant courses
     courses = await Course.filter(cursuscode__in=valid_course_codes)
-    course_map: Dict[int, Course] = {course.cursuscode: course for course in courses}
+    course_map: dict[int, Course] = {course.cursuscode: course for course in courses}
 
-    logger.info(f"Fetched {len(courses)} courses for {len(valid_course_codes)} course codes")
+    logger.info(
+        f"Fetched {len(courses)} courses for {len(valid_course_codes)} course codes"
+    )
 
     # Build relationships - avoid N+1 by pre-checking existing relationships
     links_to_create = []
@@ -150,6 +155,7 @@ async def link_courses(settings: Settings) -> None:
         item_ids = [item.material_id for item in items_without_courses]
         # Raw query to get existing M2M relationships efficiently
         from tortoise import connections
+
         conn = connections.get("default")
 
         # Get existing course-item links for our items
@@ -157,7 +163,7 @@ async def link_courses(settings: Settings) -> None:
             SELECT copyrightitem_id, course_id
             FROM copyright_data_courses
             WHERE copyrightitem_id IN ({})
-        """.format(','.join(['?'] * len(item_ids)))
+        """.format(",".join(["?"] * len(item_ids)))
 
         existing_results = await conn.execute_query(existing_query, item_ids)
         existing_links = {(row[0], row[1]) for row in existing_results[1]}
@@ -187,7 +193,7 @@ async def link_courses(settings: Settings) -> None:
             if values_list:
                 bulk_insert_query = f"""
                     INSERT OR IGNORE INTO copyright_data_courses (copyrightitem_id, course_id)
-                    VALUES {', '.join(values_list)}
+                    VALUES {", ".join(values_list)}
                 """
                 await conn.execute_query(bulk_insert_query)
 

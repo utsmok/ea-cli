@@ -3,7 +3,9 @@ This module contains the main data processing pipeline for the Easy Access tool.
 """
 
 import asyncio
+
 from loguru import logger
+
 
 class DataPipeline:
     """
@@ -93,12 +95,13 @@ class DataPipeline:
         """
         Ingests raw data from a copyright export Excel file into the staging table.
         """
-        from easy_access.sheets.sheet import read_copyright_export
         from easy_access.db.ingest import load_raw_copyright_data_to_staging
+        from easy_access.sheets.sheet import read_copyright_export
 
         logger.info("Ingesting raw copyright data...")
         if file_path:
             from easy_access.utils import File
+
             file = File(file_path)
             _, df = read_copyright_export(self.settings, file=file)
         else:
@@ -115,8 +118,8 @@ class DataPipeline:
         """
         Ingests data from faculty Excel sheets into the staging table.
         """
-        from easy_access.sheets.sheet import read_faculty_sheets
         from easy_access.db.ingest import load_faculty_updates_to_staging
+        from easy_access.sheets.sheet import read_faculty_sheets
 
         logger.info("Ingesting faculty updates...")
         df = read_faculty_sheets(self.settings)
@@ -132,7 +135,10 @@ class DataPipeline:
         """
         Processes the staged data and updates the main CopyrightItem table.
         """
-        from easy_access.db.update import process_staged_raw_data, process_staged_faculty_updates
+        from easy_access.db.update import (
+            process_staged_faculty_updates,
+            process_staged_raw_data,
+        )
 
         logger.info("Processing staged data...")
         await process_staged_raw_data(self.settings)
@@ -176,16 +182,16 @@ class DataPipeline:
         from easy_access.maintenance.file_existence import refresh_file_existence_async
 
         logger.info("Verifying file existence...")
-        ttl_days = getattr(self.settings, 'file_exists_ttl_days', 30)
+        ttl_days = getattr(self.settings, "file_exists_ttl_days", 30)
         # Get rate limit delay from settings or use default
-        rate_limit_delay = getattr(self.settings, 'file_exists_rate_limit_delay', 0.1)
+        rate_limit_delay = getattr(self.settings, "file_exists_rate_limit_delay", 0.1)
 
         result = await refresh_file_existence_async(
             self.settings,
             ttl_days=ttl_days,
             batch_size=1000,
             max_concurrent=50,
-            rate_limit_delay=rate_limit_delay
+            rate_limit_delay=rate_limit_delay,
         )
 
         if "error" in result:

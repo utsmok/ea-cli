@@ -153,7 +153,9 @@ class CopyrightItem(Model, TimestampMixin):
     file_exists = fields.BooleanField(
         null=True, default=None
     )  # whether the file exists on Canvas. Null = unchecked.
-    last_canvas_check = fields.DatetimeField(null=True) # when was the file existence last checked on Canvas
+    last_canvas_check = fields.DatetimeField(
+        null=True
+    )  # when was the file existence last checked on Canvas
 
     # relations
 
@@ -170,8 +172,6 @@ class CopyrightItem(Model, TimestampMixin):
         null=True, db_index=True
     )  # if this item is a duplicate, this field has the material_id of the original item
 
-
-
     class Meta:
         table = "copyright_data"
 
@@ -182,7 +182,6 @@ class CopyrightItem(Model, TimestampMixin):
             return self.status
         else:
             return Status.DELETED
-
 
     def misaligned_status(self) -> bool:
         return self.status != self.actual_status()
@@ -316,7 +315,6 @@ class Person(Model, TimestampMixin):
         return (
             self.main_name + f" ({self.faculty})" if self.main_name else self.input_name
         )
-
 
 
 class Organization(Model, TimestampMixin):
@@ -455,6 +453,7 @@ class PDF(Model, TimestampMixin):
     def __str__(self):
         return self.current_file_name + " (" + str(self.material_id) + ")"
 
+
 class StagedCopyrightItem(Model, TimestampMixin):
     """
     Staging table for raw data ingested from copyright export files.
@@ -536,10 +535,9 @@ class StagedCopyrightItem(Model, TimestampMixin):
     faculty = fields.CharField(max_length=255, null=True)
     file_exists = fields.CharField(max_length=255, null=True)
 
-
-
     class Meta:
         table = "staged_copyright_item"
+
 
 class StagedFacultyUpdate(Model, TimestampMixin):
     """

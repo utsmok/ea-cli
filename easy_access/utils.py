@@ -5,12 +5,12 @@ import os
 import pathlib
 import shutil
 import time
-from datetime import datetime
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import polars as pl
 from loguru import logger
+
 
 def safe_int(x: Any) -> int | None:
     if x is None:
@@ -23,6 +23,7 @@ def safe_int(x: Any) -> int | None:
         except Exception:
             return None
 
+
 def safe_float(x: Any) -> float | None:
     if x is None:
         return None
@@ -30,6 +31,7 @@ def safe_float(x: Any) -> float | None:
         return float(x)
     except Exception:
         return None
+
 
 def safe_date(x: Any) -> date | None:
     if x is None:
@@ -51,6 +53,7 @@ def safe_date(x: Any) -> date | None:
                     continue
     return None
 
+
 def safe_enum(enum_cls, value: Any):
     if value is None:
         return None
@@ -64,12 +67,13 @@ def safe_enum(enum_cls, value: Any):
             pass
     return None
 
+
 def safe_compare_greater(a: Any, b: Any) -> bool:
     """Return True if a > b using safe normalization for numbers and dates, else False."""
     if a is None or b is None:
         return False
     # numeric comparison
-    if isinstance(a, (int, float, str)) and isinstance(b, (int, float, str)):
+    if isinstance(a, int | float | str) and isinstance(b, int | float | str):
         try:
             fa = safe_float(a)
             fb = safe_float(b)
@@ -79,7 +83,7 @@ def safe_compare_greater(a: Any, b: Any) -> bool:
         except Exception:
             return False
     # date/datetime comparison
-    if isinstance(a, (date, datetime)) and isinstance(b, (date, datetime)):
+    if isinstance(a, date | datetime) and isinstance(b, date | datetime):
         try:
             na = (
                 datetime.combine(a, datetime.min.time())
@@ -217,6 +221,7 @@ def standardize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     if "google_search_file" in df.columns:
         df = df.drop("google_search_file")
     return df
+
 
 class Directory:
     """Represents a directory and provides operations on it.

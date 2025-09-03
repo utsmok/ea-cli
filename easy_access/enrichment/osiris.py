@@ -8,21 +8,21 @@ This module provides DB-centric enrichment functionality that:
 - Integrates with the pipeline for automated enrichment
 """
 
-from typing import Dict, List, Set
 import asyncio
-import httpx
+
 import bs4
-from bs4 import Tag
+import httpx
 import Levenshtein
+from bs4 import Tag
 from loguru import logger
 
-from easy_access.db.base import ensure_db_inited, close_connections
+from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.models import CopyrightItem, Course, Person
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
 
-async def gather_target_course_codes(settings: Settings) -> Set[int]:
+async def gather_target_course_codes(settings: Settings) -> set[int]:
     """
     Gather all unique course codes from copyright items that need enrichment.
 
@@ -33,15 +33,17 @@ async def gather_target_course_codes(settings: Settings) -> Set[int]:
 
     # Query all unique course codes from copyright items
     items = await CopyrightItem.all().distinct()
-    all_course_codes: Set[str] = set()
+    all_course_codes: set[str] = set()
 
     for item in items:
-        course_codes = determine_course_code(item.course_code or "", item.course_name or "")
+        course_codes = determine_course_code(
+            item.course_code or "", item.course_name or ""
+        )
         if course_codes:
             all_course_codes.update(course_codes)
 
     # Convert to integers and filter valid ones
-    valid_course_codes: Set[int] = set()
+    valid_course_codes: set[int] = set()
     for code in all_course_codes:
         if code:
             int_code = safe_int(code)
@@ -53,10 +55,8 @@ async def gather_target_course_codes(settings: Settings) -> Set[int]:
 
 
 async def select_missing_or_stale_courses(
-    settings: Settings,
-    course_codes: Set[int],
-    ttl_days: int | None = None
-) -> Set[int]:
+    settings: Settings, course_codes: set[int], ttl_days: int | None = None
+) -> set[int]:
     """
     Select course codes that are missing or stale based on TTL policy.
 
@@ -83,7 +83,7 @@ async def select_missing_or_stale_courses(
         return missing_codes
 
     # Check for stale courses based on TTL
-    stale_codes: Set[int] = set()
+    stale_codes: set[int] = set()
     for course in existing_courses:
         if course.modified_at is None:
             # No modification date, consider stale
@@ -91,6 +91,7 @@ async def select_missing_or_stale_courses(
         else:
             # Check if older than TTL
             from datetime import datetime
+
             age_days = (datetime.now() - course.modified_at).days
             if age_days > ttl_days:
                 stale_codes.add(course.cursuscode)
@@ -99,7 +100,7 @@ async def select_missing_or_stale_courses(
     return missing_codes | stale_codes
 
 
-async def gather_target_person_names(settings: Settings) -> Set[str]:
+async def gather_target_person_names(settings: Settings) -> set[str]:
     """
     Gather all unique person names from copyright items that need enrichment.
 
@@ -110,7 +111,7 @@ async def gather_target_person_names(settings: Settings) -> Set[str]:
 
     # Query all unique person names from copyright items
     items = await CopyrightItem.all().distinct()
-    all_person_names: Set[str] = set()
+    all_person_names: set[str] = set()
 
     for item in items:
         # Collect names from various fields
@@ -127,10 +128,8 @@ async def gather_target_person_names(settings: Settings) -> Set[str]:
 
 
 async def select_missing_or_stale_persons(
-    settings: Settings,
-    person_names: Set[str],
-    ttl_days: int | None = None
-) -> Set[str]:
+    settings: Settings, person_names: set[str], ttl_days: int | None = None
+) -> set[str]:
     """
     Select person names that are missing or stale based on TTL policy.
 
@@ -157,7 +156,7 @@ async def select_missing_or_stale_persons(
         return missing_names
 
     # Check for stale persons based on TTL
-    stale_names: Set[str] = set()
+    stale_names: set[str] = set()
     for person in existing_persons:
         if person.modified_at is None:
             # No modification date, consider stale
@@ -165,6 +164,7 @@ async def select_missing_or_stale_persons(
         else:
             # Check if older than TTL
             from datetime import datetime
+
             age_days = (datetime.now() - person.modified_at).days
             if age_days > ttl_days:
                 stale_names.add(person.input_name)
@@ -174,10 +174,8 @@ async def select_missing_or_stale_persons(
 
 
 async def fetch_and_parse_courses(
-    settings: Settings,
-    course_codes: Set[int],
-    max_concurrent: int = 10
-) -> Dict[int, Dict]:
+    settings: Settings, course_codes: set[int], max_concurrent: int = 10
+) -> dict[int, dict]:
     """
     Fetch and parse course data concurrently for multiple course codes.
 
@@ -189,7 +187,9 @@ async def fetch_and_parse_courses(
     Returns:
         Dictionary mapping course codes to parsed course data
     """
-    logger.info(f"Fetching {len(course_codes)} courses concurrently (max {max_concurrent} at a time)")
+    logger.info(
+        f"Fetching {len(course_codes)} courses concurrently (max {max_concurrent} at a time)"
+    )
 
     # Create semaphore to limit concurrent requests
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -219,10 +219,8 @@ async def fetch_and_parse_courses(
 
 
 async def fetch_and_parse_persons(
-    settings: Settings,
-    person_names: Set[str],
-    max_concurrent: int = 5
-) -> Dict[str, Dict]:
+    settings: Settings, person_names: set[str], max_concurrent: int = 5
+) -> dict[str, dict]:
     """
     Fetch and parse person data concurrently for multiple person names.
 
@@ -234,7 +232,9 @@ async def fetch_and_parse_persons(
     Returns:
         Dictionary mapping person names to parsed person data
     """
-    logger.info(f"Fetching {len(person_names)} persons concurrently (max {max_concurrent} at a time)")
+    logger.info(
+        f"Fetching {len(person_names)} persons concurrently (max {max_concurrent} at a time)"
+    )
 
     # Create semaphore to limit concurrent requests
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -263,7 +263,7 @@ async def fetch_and_parse_persons(
     return results
 
 
-async def persist_courses(courses_data: Dict[int, Dict]) -> None:
+async def persist_courses(courses_data: dict[int, dict]) -> None:
     """
     Persist course data to the database with bulk upsert operations.
 
@@ -300,23 +300,27 @@ async def persist_courses(courses_data: Dict[int, Dict]) -> None:
             try:
                 await Course.create(**course_data)
             except Exception as e:
-                logger.error(f"Error creating course {course_data.get('cursuscode')}: {e}")
+                logger.error(
+                    f"Error creating course {course_data.get('cursuscode')}: {e}"
+                )
 
     # Bulk update existing courses
     if courses_to_update:
         logger.info(f"Updating {len(courses_to_update)} existing courses")
         for course_data in courses_to_update:
             try:
-                course_code = course_data.get('cursuscode')
+                course_code = course_data.get("cursuscode")
                 if course_code:
                     await Course.filter(cursuscode=course_code).update(**course_data)
             except Exception as e:
-                logger.error(f"Error updating course {course_data.get('cursuscode')}: {e}")
+                logger.error(
+                    f"Error updating course {course_data.get('cursuscode')}: {e}"
+                )
 
     logger.info(f"Successfully persisted {len(courses_data)} courses")
 
 
-async def persist_persons(persons_data: Dict[str, Dict]) -> None:
+async def persist_persons(persons_data: dict[str, dict]) -> None:
     """
     Persist person data to the database with bulk upsert operations.
 
@@ -353,18 +357,22 @@ async def persist_persons(persons_data: Dict[str, Dict]) -> None:
             try:
                 await Person.create(**person_data)
             except Exception as e:
-                logger.error(f"Error creating person {person_data.get('input_name')}: {e}")
+                logger.error(
+                    f"Error creating person {person_data.get('input_name')}: {e}"
+                )
 
     # Bulk update existing persons
     if persons_to_update:
         logger.info(f"Updating {len(persons_to_update)} existing persons")
         for person_data in persons_to_update:
             try:
-                input_name = person_data.get('input_name')
+                input_name = person_data.get("input_name")
                 if input_name:
                     await Person.filter(input_name=input_name).update(**person_data)
             except Exception as e:
-                logger.error(f"Error updating person {person_data.get('input_name')}: {e}")
+                logger.error(
+                    f"Error updating person {person_data.get('input_name')}: {e}"
+                )
 
     logger.info(f"Successfully persisted {len(persons_data)} persons")
 
@@ -395,8 +403,8 @@ async def enrich_async(settings: Settings) -> None:
             return
 
         # Get TTL settings (default to None if not configured)
-        course_ttl = getattr(settings.enrichment_settings, 'course_ttl_days', None)
-        person_ttl = getattr(settings.enrichment_settings, 'person_ttl_days', None)
+        course_ttl = getattr(settings.enrichment_settings, "course_ttl_days", None)
+        person_ttl = getattr(settings.enrichment_settings, "person_ttl_days", None)
 
         # Select courses that need fetching
         courses_to_fetch = await select_missing_or_stale_courses(
@@ -420,11 +428,11 @@ async def enrich_async(settings: Settings) -> None:
         person_names = set()
         for course_data in courses_data.values():
             # Add teachers, contacts, etc. from course data
-            for field in ['teachers', 'contacts', 'docenten', 'examinators', 'tutors']:
+            for field in ["teachers", "contacts", "docenten", "examinators", "tutors"]:
                 if field in course_data and course_data[field]:
-                    if isinstance(course_data[field], list):
-                        person_names.update(course_data[field])
-                    elif isinstance(course_data[field], set):
+                    if isinstance(course_data[field], list) or isinstance(
+                        course_data[field], set
+                    ):
                         person_names.update(course_data[field])
 
         # Filter out empty names
@@ -473,17 +481,25 @@ def _process_teacher_items(items) -> set[str]:
 def _extract_languages(voertalen_data) -> list[str]:
     """Extract language information from voertalen data"""
     if isinstance(voertalen_data, list):
-        return [x.get("voertaal_omschrijving") for x in voertalen_data if x.get("voertaal_omschrijving")]
+        return [
+            x.get("voertaal_omschrijving")
+            for x in voertalen_data
+            if x.get("voertaal_omschrijving")
+        ]
     return []
 
 
-async def _fetch_course_details(course_data: dict, httpx_client: httpx.AsyncClient) -> None:
+async def _fetch_course_details(
+    course_data: dict, httpx_client: httpx.AsyncClient
+) -> None:
     """Fetch detailed course information including contacts from OSIRIS"""
     internal_id = course_data.get("internal_id")
     if not internal_id:
         return
 
-    url = f"https://utwente.osiris-student.nl/student/osiris/owc/cursussen/{internal_id}"
+    url = (
+        f"https://utwente.osiris-student.nl/student/osiris/owc/cursussen/{internal_id}"
+    )
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-language": "en-US,en;q=0.9,nl-NL;q=0.8,nl;q=0.7",
@@ -528,28 +544,43 @@ async def _fetch_course_details(course_data: dict, httpx_client: httpx.AsyncClie
                                             elif role_type == "Docent":
                                                 course_data["docenten"].add(person_name)
                                             elif role_type == "Examinator":
-                                                course_data["examinators"].add(person_name)
+                                                course_data["examinators"].add(
+                                                    person_name
+                                                )
                                             elif role_type == "Tutor":
                                                 course_data["tutors"].add(person_name)
                                             else:
-                                                course_data["unknown_role"].add(person_name)
+                                                course_data["unknown_role"].add(
+                                                    person_name
+                                                )
 
             # Convert sets to lists for JSON serialization
-            for field in ["teachers", "contacts", "docenten", "examinators", "tutors", "unknown_role"]:
+            for field in [
+                "teachers",
+                "contacts",
+                "docenten",
+                "examinators",
+                "tutors",
+                "unknown_role",
+            ]:
                 if isinstance(course_data.get(field), set):
                     course_data[field] = list(course_data[field])
                     # Filter out single-character entries (likely parsing errors)
-                    if len(course_data[field]) > 8 and all(len(x) == 1 for x in course_data[field]):
+                    if len(course_data[field]) > 8 and all(
+                        len(x) == 1 for x in course_data[field]
+                    ):
                         course_data[field] = []
 
         else:
-            logger.error(f"Error retrieving course details: HTTP {response.status_code}")
+            logger.error(
+                f"Error retrieving course details: HTTP {response.status_code}"
+            )
 
     except Exception as e:
         logger.error(f"Error fetching course details: {e}")
 
 
-async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -> Dict:
+async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -> dict:
     """
     Fetch course data from OSIRIS API.
 
@@ -669,7 +700,7 @@ def _remove_dot_and_lower(name: str) -> str:
     return str(name).strip().replace(".", "").lower()
 
 
-async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -> Dict:
+async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -> dict:
     """
     Fetch person data from people.utwente.nl.
 
@@ -680,7 +711,6 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
     Returns:
         Dictionary containing person data
     """
-    url = "https://people.utwente.nl/overview"
     headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "en-US,en;q=0.9",
@@ -701,7 +731,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         response = await httpx_client.get(search_url, headers=headers)
 
         if response.status_code != 200:
-            logger.warning(f"Failed to search for person {person_name}: HTTP {response.status_code}")
+            logger.warning(
+                f"Failed to search for person {person_name}: HTTP {response.status_code}"
+            )
             return {}
 
         # Parse search results
@@ -715,7 +747,7 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         # Limit to first 5 results to avoid too many matches
         matches = []
         for link in data_links[:5]:
-            if isinstance(link, Tag) and hasattr(link, 'get'):
+            if isinstance(link, Tag) and hasattr(link, "get"):
                 data_link = link.get("data-link")
                 if isinstance(data_link, str):
                     matches.append(data_link)
@@ -759,7 +791,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
             return {}
 
         if response.status_code != 200:
-            logger.warning(f"Failed to fetch person page for {person_name}: HTTP {response.status_code}")
+            logger.warning(
+                f"Failed to fetch person page for {person_name}: HTTP {response.status_code}"
+            )
             return {}
 
         # Parse person page
@@ -775,7 +809,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                 if not main_name:
                     main_name = str(string_part).strip()
                 else:
-                    other_names.append(str(string_part).strip().replace("(", "").replace(")", ""))
+                    other_names.append(
+                        str(string_part).strip().replace("(", "").replace(")", "")
+                    )
 
         if not main_name:
             logger.warning(f"No name found for person {person_name} at {person_url}")
@@ -812,10 +848,16 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                 for org_tag in org_tags:
                     if isinstance(org_tag, Tag):
                         text_content = org_tag.string
-                        if text_content and isinstance(text_content, str) and "(" in text_content:
+                        if (
+                            text_content
+                            and isinstance(text_content, str)
+                            and "(" in text_content
+                        ):
                             try:
                                 org_name = text_content.split("(")[0].strip()
-                                org_abbr = text_content.split("(")[1].split(")")[0].strip()
+                                org_abbr = (
+                                    text_content.split("(")[1].split(")")[0].strip()
+                                )
 
                                 # Check if this is a faculty
                                 if org_abbr in ["BMS", "ET", "EEMCS", "ITC", "TNW"]:
@@ -824,7 +866,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                                 else:
                                     orgs.append({"name": org_name, "abbr": org_abbr})
                             except Exception as e:
-                                logger.exception(f"Error processing org {text_content}: {e}")
+                                logger.exception(
+                                    f"Error processing org {text_content}: {e}"
+                                )
 
         # Add faculty to orgs if found
         if faculty and faculty_abbr:
@@ -847,22 +891,31 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                     href = link_tag.get("href")
                     link_text = link_tag.string
 
-                    if href and isinstance(href, str) and link_text and isinstance(link_text, str):
+                    if (
+                        href
+                        and isinstance(href, str)
+                        and link_text
+                        and isinstance(link_text, str)
+                    ):
                         if "https://utwente.osiris-student.nl" in href:
                             # This is a course
                             link_text = str(link_text).strip()
                             if " - " in link_text:
                                 code, course_name = link_text.split(" - ", 1)
-                                courses.append({
-                                    "course_code": code.strip(),
-                                    "course_name": course_name.strip(),
-                                })
+                                courses.append(
+                                    {
+                                        "course_code": code.strip(),
+                                        "course_name": course_name.strip(),
+                                    }
+                                )
                         elif "https://www.utwente.nl/" in href:
                             # This is a programme
-                            programmes.append({
-                                "name": str(link_text).strip(),
-                                "url": href,
-                            })
+                            programmes.append(
+                                {
+                                    "name": str(link_text).strip(),
+                                    "url": href,
+                                }
+                            )
 
         # Build person data structure
         person_data = {

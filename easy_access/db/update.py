@@ -48,26 +48,31 @@ from easy_access.utils import (
 # Custom exceptions for better error handling
 class MergeError(Exception):
     """Base exception for merge-related errors."""
+
     pass
 
 
 class MergeConflictError(MergeError):
     """Raised when there are conflicts during field merging."""
+
     pass
 
 
 class TypeCastError(MergeError):
     """Raised when type casting fails during field comparison."""
+
     pass
 
 
 class DatabaseOperationError(MergeError):
     """Raised when database operations fail."""
+
     pass
 
 
 class ValidationError(MergeError):
     """Raised when data validation fails."""
+
     pass
 
 
@@ -79,7 +84,9 @@ MIN_CHANGES_THRESHOLD = 3
 class FieldComparisonStrategy:
     """Base class for field comparison strategies."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: Any) -> tuple[bool, str]:
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: Any
+    ) -> tuple[bool, str]:
         """
         Determine if a field should be updated.
 
@@ -97,7 +104,9 @@ class FieldComparisonStrategy:
 class RankedFieldStrategy(FieldComparisonStrategy):
     """Strategy for ranked fields (higher priority = lower index)."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: list) -> tuple[bool, str]:
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: list
+    ) -> tuple[bool, str]:
         if not isinstance(ordering, list):
             return False, ""
 
@@ -118,7 +127,9 @@ class RankedFieldStrategy(FieldComparisonStrategy):
 class StringFieldStrategy(FieldComparisonStrategy):
     """Strategy for string fields (longer strings take precedence)."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: Any) -> tuple[bool, str]:
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: Any
+    ) -> tuple[bool, str]:
         if not (isinstance(new_value, str) and isinstance(old_value, str)):
             return False, ""
 
@@ -134,7 +145,9 @@ class StringFieldStrategy(FieldComparisonStrategy):
 class NumericFieldStrategy(FieldComparisonStrategy):
     """Strategy for numeric/date fields using safe comparison."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: Any) -> tuple[bool, str]:
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: Any
+    ) -> tuple[bool, str]:
         try:
             if safe_compare_greater(new_value, old_value):
                 return True, "new > old"
@@ -147,8 +160,13 @@ class NumericFieldStrategy(FieldComparisonStrategy):
 class DateFieldStrategy(FieldComparisonStrategy):
     """Strategy for date/datetime fields (newer dates take precedence)."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: Any) -> tuple[bool, str]:
-        if not (isinstance(new_value, (date, datetime)) and isinstance(old_value, (date, datetime))):
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: Any
+    ) -> tuple[bool, str]:
+        if not (
+            isinstance(new_value, date | datetime)
+            and isinstance(old_value, date | datetime)
+        ):
             return False, ""
 
         if new_value > old_value:
@@ -160,7 +178,9 @@ class DateFieldStrategy(FieldComparisonStrategy):
 class EnumFieldStrategy(FieldComparisonStrategy):
     """Strategy for enum fields (uses ranking if provided, otherwise no update)."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: Any) -> tuple[bool, str]:
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: Any
+    ) -> tuple[bool, str]:
         # If ordering is provided, use ranked comparison
         if isinstance(ordering, list) and ordering:
             new_rank = DEFAULT_RANK
@@ -180,11 +200,15 @@ class EnumFieldStrategy(FieldComparisonStrategy):
 class FileExistsStrategy(FieldComparisonStrategy):
     """Strategy for file_exists field (always update when received)."""
 
-    def should_update(self, new_value: Any, old_value: Any, ordering: Any) -> tuple[bool, str]:
+    def should_update(
+        self, new_value: Any, old_value: Any, ordering: Any
+    ) -> tuple[bool, str]:
         return True, "file_exists value received, always update"
 
 
-def get_comparison_strategy(field: str, db_item: CopyrightItem | None = None) -> FieldComparisonStrategy:
+def get_comparison_strategy(
+    field: str, db_item: CopyrightItem | None = None
+) -> FieldComparisonStrategy:
     """
     Get the appropriate comparison strategy for a field.
 
@@ -203,7 +227,7 @@ def get_comparison_strategy(field: str, db_item: CopyrightItem | None = None) ->
     if db_item is not None:
         try:
             old_value = getattr(db_item, field)
-            if isinstance(old_value, (date, datetime)):
+            if isinstance(old_value, date | datetime):
                 return DateFieldStrategy()
             elif isinstance(old_value, Enum):
                 return EnumFieldStrategy()
@@ -216,7 +240,9 @@ def get_comparison_strategy(field: str, db_item: CopyrightItem | None = None) ->
     return NumericFieldStrategy()
 
 
-async def preprocess_input_data(data: pl.DataFrame | list[dict]) -> tuple[list[dict], list[dict]]:
+async def preprocess_input_data(
+    data: pl.DataFrame | list[dict],
+) -> tuple[list[dict], list[dict]]:
     """
     Preprocess input data by standardizing and separating new items from existing items.
 
@@ -321,11 +347,15 @@ async def process_new_items(new_items: list[dict]) -> list[CopyrightItem]:
                 try:
                     await item.save()
                 except Exception as save_error:
-                    logger.error(f"Failed to save item {item.material_id}: {save_error}")
+                    logger.error(
+                        f"Failed to save item {item.material_id}: {save_error}"
+                    )
                     failed_items.append(item.material_id)
 
             if failed_items:
-                raise DatabaseOperationError(f"Failed to create items with material_ids: {failed_items}") from e
+                raise DatabaseOperationError(
+                    f"Failed to create items with material_ids: {failed_items}"
+                ) from e
         logger.success(f"Created {len(new_objects)} new copyright items in db.")
 
     return new_objects
@@ -335,7 +365,7 @@ async def process_existing_items(
     update_items: list[dict],
     added_fields: dict,
     changeable_fields: dict,
-    overwrite: bool = False
+    overwrite: bool = False,
 ) -> tuple[list[CopyrightItem], dict]:
     """
     Process updates to existing copyright items.
@@ -377,7 +407,9 @@ async def process_existing_items(
             raise
         except Exception as e:
             # Log unexpected errors but continue processing other items
-            logger.error(f"Unexpected error processing item {new_item.get('material_id')}: {e}")
+            logger.error(
+                f"Unexpected error processing item {new_item.get('material_id')}: {e}"
+            )
             continue
 
     return changelist, updates
@@ -437,7 +469,9 @@ async def _process_item_overwrite(
     except Exception as e:
         logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
         logger.warning(traceback.format_exc())
-        raise DatabaseOperationError(f"Failed to process item {new_item.get('material_id')} in overwrite mode: {e}") from e
+        raise DatabaseOperationError(
+            f"Failed to process item {new_item.get('material_id')} in overwrite mode: {e}"
+        ) from e
 
     return changes, db_item
 
@@ -470,7 +504,9 @@ async def _process_item_normal(
         )
     except Exception as e:
         logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
-        raise DatabaseOperationError(f"Failed to process item {new_item.get('material_id')}: {e}") from e
+        raise DatabaseOperationError(
+            f"Failed to process item {new_item.get('material_id')}: {e}"
+        ) from e
 
     return changes, db_item
 
@@ -481,7 +517,7 @@ async def execute_bulk_database_operations(
     cur_user: str | dict | None,
     new_objects: list[CopyrightItem],
     update_relations: bool,
-    settings: Settings
+    settings: Settings,
 ) -> None:
     """
     Execute bulk database operations including updates and changelog creation.
@@ -514,8 +550,13 @@ async def execute_bulk_database_operations(
             await CopyrightItem.bulk_update(change_batch, fields=changed_fields)
 
         if cur_user:
-            user_email = cur_user.get("email") if isinstance(cur_user, dict) else cur_user
-            [changes.update({"modified_by": user_email}) for changes in updates.values()]
+            user_email = (
+                cur_user.get("email") if isinstance(cur_user, dict) else cur_user
+            )
+            [
+                changes.update({"modified_by": user_email})
+                for changes in updates.values()
+            ]
             logger.info(f"items modified by {user_email}")
 
         for update_batch in batched(
@@ -547,7 +588,12 @@ async def execute_bulk_database_operations(
 
 
 def record_field_change(
-    changes: dict, field: str, new_value: Any, old_value: Any, reason: str, db_item: Any = None
+    changes: dict,
+    field: str,
+    new_value: Any,
+    old_value: Any,
+    reason: str,
+    db_item: Any = None,
 ) -> dict:
     """
     Record a field change in the changes dictionary and update the database item.
@@ -628,7 +674,9 @@ def compare_and_update_fields(
 
         # Type casting for comparison
         try:
-            cast_success = _cast_values_for_comparison(field, new_value, old_value, db_item)
+            cast_success = _cast_values_for_comparison(
+                field, new_value, old_value, db_item
+            )
             if not cast_success:
                 continue
         except TypeCastError as e:
@@ -649,12 +697,16 @@ def compare_and_update_fields(
             reason = "no old value"
 
         if should_update:
-            changes = record_field_change(changes, field, new_value, old_value, reason, db_item)
+            changes = record_field_change(
+                changes, field, new_value, old_value, reason, db_item
+            )
 
     return changes, db_item
 
 
-def _cast_values_for_comparison(field: str, new_value: Any, old_value: Any, db_item: CopyrightItem) -> bool:
+def _cast_values_for_comparison(
+    field: str, new_value: Any, old_value: Any, db_item: CopyrightItem
+) -> bool:
     """
     Cast values for comparison and update them in place.
 
@@ -683,7 +735,9 @@ def _cast_values_for_comparison(field: str, new_value: Any, old_value: Any, db_i
             new_value = _cast_numeric_value(new_value, int)
         return True
     except Exception as e:
-        logger.debug(f"Error {e} while typecasting data for field comparison of {field}")
+        logger.debug(
+            f"Error {e} while typecasting data for field comparison of {field}"
+        )
         raise TypeCastError(f"Failed to cast values for field '{field}': {e}") from e
 
 
@@ -959,22 +1013,30 @@ async def process_staged_raw_data(settings: Settings) -> None:
                         )
                         continue
 
-                    logger.debug(f"[STAGED][PROCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Starting processing")
+                    logger.debug(
+                        f"[STAGED][PROCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Starting processing"
+                    )
 
                     existing_item = await CopyrightItem.get_or_none(material_id=mid)
 
                     if not existing_item:
                         # Create new item using canonical normalizer
-                        logger.debug(f"[STAGED][CREATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Creating new item")
+                        logger.debug(
+                            f"[STAGED][CREATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Creating new item"
+                        )
                         new_item = await copyright_item_from_dict(item_dict)
                         if new_item:
                             await new_item.save()
                             smid = safe_int(mid)
                             if smid is not None:
                                 batch_processed_ids.append(smid)
-                            logger.info(f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Created new item")
+                            logger.info(
+                                f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Created new item"
+                            )
                         else:
-                            logger.warning(f"[STAGED][FAIL] material_id={mid}, faculty={faculty_val}, stage=raw_data: Failed to create item from dict")
+                            logger.warning(
+                                f"[STAGED][FAIL] material_id={mid}, faculty={faculty_val}, stage=raw_data: Failed to create item from dict"
+                            )
                     else:
                         # Check if this item has complex fields that need merging
                         mergeable_fields = get_mergeable_fields()
@@ -986,7 +1048,9 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
                         if has_complex_fields:
                             # Delegate to canonical merge path
-                            logger.debug(f"[STAGED][MERGE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Delegating to complex merge")
+                            logger.debug(
+                                f"[STAGED][MERGE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Delegating to complex merge"
+                            )
                             complex_item_dicts.append(item_dict)
                             smid = safe_int(mid)
                             if smid is not None:
@@ -1016,42 +1080,63 @@ async def process_staged_raw_data(settings: Settings) -> None:
                                         parsed_dt = datetime.fromisoformat(lc_val)
                                         parsed_date = parsed_dt.date()
                                     except Exception:
-                                        for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                                        for fmt in (
+                                            "%Y-%m-%d %H:%M:%S%z",
+                                            "%Y-%m-%d %H:%M:%S",
+                                            "%Y-%m-%d",
+                                        ):
                                             try:
-                                                parsed_dt = datetime.strptime(lc_val, fmt)
+                                                parsed_dt = datetime.strptime(
+                                                    lc_val, fmt
+                                                )
                                                 parsed_date = parsed_dt.date()
                                                 break
                                             except Exception:
                                                 continue
-                                if parsed_date and existing_item.last_change != parsed_date:
+                                if (
+                                    parsed_date
+                                    and existing_item.last_change != parsed_date
+                                ):
                                     existing_item.last_change = parsed_date
                                     update_fields.append("last_change")
 
                             if update_fields:
-                                logger.debug(f"[STAGED][UPDATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updating fields {update_fields}")
+                                logger.debug(
+                                    f"[STAGED][UPDATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updating fields {update_fields}"
+                                )
                                 await existing_item.save(update_fields=update_fields)
                                 smid = safe_int(mid)
                                 if smid is not None:
                                     batch_processed_ids.append(smid)
-                                logger.info(f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updated existing item")
+                                logger.info(
+                                    f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updated existing item"
+                                )
 
                 except Exception as e:
                     err_msg = str(e)
-                    mid_val = getattr(staged_item, 'material_id', None)
-                    faculty_val = getattr(staged_item, 'faculty', None)
+                    mid_val = getattr(staged_item, "material_id", None)
+                    faculty_val = getattr(staged_item, "faculty", None)
                     logger.error(
                         f"[STAGED][ERROR] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {err_msg}"
                     )
-                    logger.debug(f"[STAGED][TRACE] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {traceback.format_exc()}")
+                    logger.debug(
+                        f"[STAGED][TRACE] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {traceback.format_exc()}"
+                    )
                     # Record failure in the DB for later inspection/retry
                     try:
-                        payload = {f: getattr(staged_item, f, None) for f in staged_fields}
+                        payload = {
+                            f: getattr(staged_item, f, None) for f in staged_fields
+                        }
                         await StagedProcessingFailure.create(
-                            material_id=safe_int(getattr(staged_item, "material_id", None)),
+                            material_id=safe_int(
+                                getattr(staged_item, "material_id", None)
+                            ),
                             staged_payload=payload,
                             error_message=err_msg[:1900],
                         )
-                        logger.info(f"[STAGED][RECORDED] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Failure recorded in StagedProcessingFailure")
+                        logger.info(
+                            f"[STAGED][RECORDED] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Failure recorded in StagedProcessingFailure"
+                        )
                     except Exception as record_error:
                         logger.error(
                             f"[STAGED][RECORD_FAIL] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Could not record failure: {record_error}"
@@ -1060,10 +1145,16 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
         # Process complex merges outside transaction since update_copyright_items does its own operations
         if complex_item_dicts:
-            logger.info(f"Processing {len(complex_item_dicts)} complex merges for batch {batch_idx}")
+            logger.info(
+                f"Processing {len(complex_item_dicts)} complex merges for batch {batch_idx}"
+            )
             try:
-                await update_copyright_items(settings=settings, data=complex_item_dicts, update_relations=False)
-                logger.info(f"Successfully processed {len(complex_item_dicts)} complex merges")
+                await update_copyright_items(
+                    settings=settings, data=complex_item_dicts, update_relations=False
+                )
+                logger.info(
+                    f"Successfully processed {len(complex_item_dicts)} complex merges"
+                )
             except Exception as e:
                 logger.exception(f"Error processing complex merges: {e}")
                 # Don't fail the whole batch, just log the error
@@ -1071,13 +1162,22 @@ async def process_staged_raw_data(settings: Settings) -> None:
         # After successful transaction, remove successfully processed staged rows
         if batch_processed_ids:
             try:
-                await StagedCopyrightItem.filter(material_id__in=batch_processed_ids).delete()
-                logger.info(f"Cleared {len(batch_processed_ids)} processed staged rows.")
+                await StagedCopyrightItem.filter(
+                    material_id__in=batch_processed_ids
+                ).delete()
+                logger.info(
+                    f"Cleared {len(batch_processed_ids)} processed staged rows."
+                )
                 processed_ids.extend(batch_processed_ids)
             except Exception as e:
-                logger.exception(f"Error deleting staged rows {batch_processed_ids}: {e}")
+                logger.exception(
+                    f"Error deleting staged rows {batch_processed_ids}: {e}"
+                )
 
-    logger.info(f"Finished processing staged raw data. Successfully processed {len(processed_ids)} rows.")
+    logger.info(
+        f"Finished processing staged raw data. Successfully processed {len(processed_ids)} rows."
+    )
+
 
 async def process_staged_faculty_updates(settings: Settings) -> None:
     """
@@ -1099,54 +1199,87 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
             for update in batch:
                 try:
                     mid = update.material_id
-                    logger.debug(f"[STAGED][PROCESS] material_id={mid}, stage=faculty_update: Starting processing")
+                    logger.debug(
+                        f"[STAGED][PROCESS] material_id={mid}, stage=faculty_update: Starting processing"
+                    )
 
                     item = await CopyrightItem.get_or_none(material_id=mid)
                     if not item:
-                        logger.warning(f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: Item not found in database")
+                        logger.warning(
+                            f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: Item not found in database"
+                        )
                         continue
 
                     update_fields = []
-                    if update.manual_classification and item.manual_classification != update.manual_classification:
+                    if (
+                        update.manual_classification
+                        and item.manual_classification != update.manual_classification
+                    ):
                         item.manual_classification = update.manual_classification
                         update_fields.append("manual_classification")
-                        logger.debug(f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating manual_classification")
+                        logger.debug(
+                            f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating manual_classification"
+                        )
 
                     if update.remarks and item.remarks != update.remarks:
                         item.remarks = update.remarks
                         update_fields.append("remarks")
-                        logger.debug(f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating remarks")
+                        logger.debug(
+                            f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating remarks"
+                        )
 
-                    if update.workflow_status and item.workflow_status != update.workflow_status:
+                    if (
+                        update.workflow_status
+                        and item.workflow_status != update.workflow_status
+                    ):
                         wf_st = safe_enum(WorkflowStatus, update.workflow_status)
                         if wf_st:
                             item.workflow_status = wf_st
                             update_fields.append("workflow_status")
-                            logger.debug(f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status")
+                            logger.debug(
+                                f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status"
+                            )
 
                     if update_fields:
                         await item.save(update_fields=update_fields)
                         smid = safe_int(mid)
                         if smid is not None:
                             batch_processed.append(smid)
-                        logger.info(f"[STAGED][SUCCESS] material_id={mid}, stage=faculty_update: Updated fields {update_fields}")
+                        logger.info(
+                            f"[STAGED][SUCCESS] material_id={mid}, stage=faculty_update: Updated fields {update_fields}"
+                        )
                     else:
-                        logger.debug(f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: No fields to update")
+                        logger.debug(
+                            f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: No fields to update"
+                        )
 
                 except Exception as e:
-                    mid_val = getattr(update, 'material_id', None)
-                    logger.error(f"[STAGED][ERROR] material_id={mid_val}, stage=faculty_update: {str(e)}")
-                    logger.debug(f"[STAGED][TRACE] material_id={mid_val}, stage=faculty_update: {traceback.format_exc()}")
+                    mid_val = getattr(update, "material_id", None)
+                    logger.error(
+                        f"[STAGED][ERROR] material_id={mid_val}, stage=faculty_update: {str(e)}"
+                    )
+                    logger.debug(
+                        f"[STAGED][TRACE] material_id={mid_val}, stage=faculty_update: {traceback.format_exc()}"
+                    )
 
         if batch_processed:
             try:
-                await StagedFacultyUpdate.filter(material_id__in=batch_processed).delete()
-                logger.info(f"Cleared {len(batch_processed)} processed staged faculty updates.")
+                await StagedFacultyUpdate.filter(
+                    material_id__in=batch_processed
+                ).delete()
+                logger.info(
+                    f"Cleared {len(batch_processed)} processed staged faculty updates."
+                )
                 processed_updates.extend(batch_processed)
             except Exception:
-                logger.exception(f"Error deleting processed staged faculty updates: {batch_processed}")
+                logger.exception(
+                    f"Error deleting processed staged faculty updates: {batch_processed}"
+                )
 
-    logger.info(f"Finished processing staged faculty updates. Successfully processed {len(processed_updates)} rows.")
+    logger.info(
+        f"Finished processing staged faculty updates. Successfully processed {len(processed_updates)} rows."
+    )
+
 
 async def calculate_derived_fields(settings: Settings) -> None:
     """

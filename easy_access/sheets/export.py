@@ -10,22 +10,20 @@ This module provides functions to export copyright data to various Excel formats
 All functions follow the new DB-first architecture and use the Settings system.
 """
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
 
 import polars as pl
 from loguru import logger
 
 from easy_access.db.retrieve import retrieve_full_data
-from easy_access.sheets.analysis import create_faculty_overviews
-from easy_access.sheets.sheet import store_complete_data, finalize_sheet
 from easy_access.settings import DirSetting, Settings
+from easy_access.sheets.analysis import create_faculty_overviews
+from easy_access.sheets.sheet import finalize_sheet, store_complete_data
 from easy_access.utils import Directory, File
 
 
-async def gather_faculty_data(settings: Settings) -> Dict[str, pl.DataFrame]:
+async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
     """
     Retrieves and organizes copyright data by faculty.
 
@@ -58,7 +56,9 @@ async def gather_faculty_data(settings: Settings) -> Dict[str, pl.DataFrame]:
     return faculty_data
 
 
-async def export_faculty_sheets(settings: Settings, faculty_data: Dict[str, pl.DataFrame], style_iter: int = 9) -> int:
+async def export_faculty_sheets(
+    settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
+) -> int:
     """
     Creates individual Excel sheets for each faculty.
 
@@ -85,27 +85,27 @@ async def export_faculty_sheets(settings: Settings, faculty_data: Dict[str, pl.D
         filename_base = f"{faculty}_{today}"
         output_file_path = _get_unique_filepath(faculty_dir.full, filename_base)
 
-        logger.info(f"Creating faculty sheet: {output_file_path.name} ({data.shape[0]} items)")
+        logger.info(
+            f"Creating faculty sheet: {output_file_path.name} ({data.shape[0]} items)"
+        )
 
         # Store complete data
-        store_complete_data(
-            settings=settings,
-            file=output_file_path,
-            data=data
-        )
+        store_complete_data(settings=settings, file=output_file_path, data=data)
 
         # Add data entry sheet and styling
         style_iter = finalize_sheet(
             settings=settings,
             file=File(str(output_file_path)),
             data=data,
-            style_iter=style_iter
+            style_iter=style_iter,
         )
 
     return style_iter
 
 
-async def export_programme_sheets(settings: Settings, faculty_data: Dict[str, pl.DataFrame], style_iter: int = 9) -> int:
+async def export_programme_sheets(
+    settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
+) -> int:
     """
     Creates programme sheets within each faculty directory.
 
@@ -126,16 +126,22 @@ async def export_programme_sheets(settings: Settings, faculty_data: Dict[str, pl
         # Check if faculty has course mapping
         course_mapping = settings.university_settings.course_mapping.get(faculty)
         if not course_mapping:
-            logger.info(f"No course mapping for faculty {faculty}, skipping programme sheets")
+            logger.info(
+                f"No course mapping for faculty {faculty}, skipping programme sheets"
+            )
             continue
 
         # Create programme directory
-        programme_dir = Directory(settings.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme")
+        programme_dir = Directory(
+            settings.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme"
+        )
         programme_dir.full.mkdir(parents=True, exist_ok=True)
 
         # Group data by department/course
         if "department" not in data.columns:
-            logger.warning(f"'department' column not found in data for faculty {faculty}")
+            logger.warning(
+                f"'department' column not found in data for faculty {faculty}"
+            )
             continue
 
         # Create sheets for each course mapping
@@ -149,19 +155,19 @@ async def export_programme_sheets(settings: Settings, faculty_data: Dict[str, pl
             filename_base = f"{group_name}_{today}"
             output_file_path = _get_unique_filepath(programme_dir.full, filename_base)
 
-            logger.info(f"Creating programme sheet: {output_file_path.name} ({course_data.shape[0]} items)")
+            logger.info(
+                f"Creating programme sheet: {output_file_path.name} ({course_data.shape[0]} items)"
+            )
 
             store_complete_data(
-                settings=settings,
-                file=output_file_path,
-                data=course_data
+                settings=settings, file=output_file_path, data=course_data
             )
 
             style_iter = finalize_sheet(
                 settings=settings,
                 file=File(str(output_file_path)),
                 data=course_data,
-                style_iter=style_iter
+                style_iter=style_iter,
             )
 
     return style_iter
@@ -196,27 +202,27 @@ async def export_all_items_sheet(settings: Settings, style_iter: int = 9) -> int
     filename_base = f"all_items_{today}"
     output_file_path = _get_unique_filepath(all_items_dir.full, filename_base)
 
-    logger.info(f"Creating all items sheet: {output_file_path.name} ({all_data.shape[0]} items)")
+    logger.info(
+        f"Creating all items sheet: {output_file_path.name} ({all_data.shape[0]} items)"
+    )
 
     # Store data
-    store_complete_data(
-        settings=settings,
-        file=output_file_path,
-        data=all_data
-    )
+    store_complete_data(settings=settings, file=output_file_path, data=all_data)
 
     # Add data entry sheet
     style_iter = finalize_sheet(
         settings=settings,
         file=File(str(output_file_path)),
         data=all_data,
-        style_iter=style_iter
+        style_iter=style_iter,
     )
 
     return style_iter
 
 
-async def export_faculty_overviews(settings: Settings, faculty_data: Dict[str, pl.DataFrame], style_iter: int = 9) -> int:
+async def export_faculty_overviews(
+    settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
+) -> int:
     """
     Creates overview sheets for each faculty.
 
@@ -235,7 +241,7 @@ async def export_faculty_overviews(settings: Settings, faculty_data: Dict[str, p
         settings=settings,
         faculty_data=faculty_data,
         style_iter=style_iter,
-        disable_writes=False
+        disable_writes=False,
     )
 
     return updated_style_iter

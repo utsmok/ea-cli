@@ -154,20 +154,26 @@ def retrieve_full_data(
                 return pl.DataFrame()
             conn.execute(text("DROP TABLE IF EXISTS temp_material_ids;"))
             conn.execute(
-                text("CREATE TEMP TABLE temp_material_ids (material_id INTEGER PRIMARY KEY);")
+                text(
+                    "CREATE TEMP TABLE temp_material_ids (material_id INTEGER PRIMARY KEY);"
+                )
             )
             conn.execute(
                 text("INSERT INTO temp_material_ids (material_id) VALUES (?)"),
                 [{"material_id": mat_id} for mat_id in selected_material_ids],
             )
-            material_join_clause = "INNER JOIN temp_material_ids tmid ON cd.material_id = tmid.material_id"
+            material_join_clause = (
+                "INNER JOIN temp_material_ids tmid ON cd.material_id = tmid.material_id"
+            )
 
         # Handle exclusions
         if excluded_material_ids is not None:
             excluded_list = list(excluded_material_ids)
             if excluded_list:
                 excluded_ids_string = ", ".join(map(str, excluded_list))
-                material_exclusion_clause = f"AND cd.material_id NOT IN ({excluded_ids_string})"
+                material_exclusion_clause = (
+                    f"AND cd.material_id NOT IN ({excluded_ids_string})"
+                )
 
         # Handle faculty filtering
         if selected_faculties:
@@ -233,11 +239,15 @@ def retrieve_full_data(
 
         try:
             # Execute optimized query
-            df = pl.read_database(query=query, connection=conn, infer_schema_length=None)
+            df = pl.read_database(
+                query=query, connection=conn, infer_schema_length=None
+            )
 
             # Log memory usage for monitoring
             memory_mb = df.estimated_size() / (1024 * 1024)
-            logger.info(f"Optimized retrieve_full_data completed. Memory usage: {memory_mb:.1f} MB, Rows: {len(df)}")
+            logger.info(
+                f"Optimized retrieve_full_data completed. Memory usage: {memory_mb:.1f} MB, Rows: {len(df)}"
+            )
 
             # Clean up temporary table
             if selected_material_ids is not None:
@@ -251,16 +261,18 @@ def retrieve_full_data(
                 selected_material_ids=selected_material_ids,
                 selected_faculties=selected_faculties,
                 excluded_material_ids=excluded_material_ids,
-                settings=settings
+                settings=settings,
             )
 
     # Apply the same cleanup as original function
-    df = df.drop([
-        "created_at",
-        "modified_at",
-        "possible_fine",
-        "infringement",
-    ]).rename(mapping={"faculty_id": "faculty"})
+    df = df.drop(
+        [
+            "created_at",
+            "modified_at",
+            "possible_fine",
+            "infringement",
+        ]
+    ).rename(mapping={"faculty_id": "faculty"})
 
     if df.is_empty():
         return df

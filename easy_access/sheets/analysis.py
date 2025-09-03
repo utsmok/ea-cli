@@ -195,10 +195,11 @@ def create_faculty_overviews_sync(
     Synchronous wrapper for create_faculty_overviews.
     Used by legacy synchronous code that hasn't been migrated to async.
     """
-    import asyncio
-    return asyncio.run(create_faculty_overviews(
-        settings=settings,
-        faculty_data=faculty_data,
-        style_iter=style_iter,
-        disable_writes=disable_writes
-    ))
+    return asyncio.run(
+        create_faculty_overviews(
+            settings=settings,
+            faculty_data=faculty_data,
+            style_iter=style_iter,
+            disable_writes=disable_writes,
+        )
+    )

@@ -8,7 +8,6 @@ Extracted from legacy update_copyright_items logic.
 from easy_access.db.models import Classification, Infringement, WorkflowStatus
 from easy_access.settings import Settings
 
-
 # Fields that can be added/updated with priorities (list for ordered preferences, None for no priority)
 added_fields = {
     "workflow_status": [
@@ -77,17 +76,29 @@ def build_merge_rules_from_settings(settings: Settings) -> tuple[dict, dict]:
                     break
 
         if classification_priorities:
-            dynamic_changeable_fields["manual_classification"] = classification_priorities
+            dynamic_changeable_fields["manual_classification"] = (
+                classification_priorities
+            )
 
     # Update workflow_status priorities from data_entry_cols dropdown
-    if settings.data_settings and hasattr(settings.data_settings, 'data_entry_cols') and settings.data_settings.data_entry_cols:
+    if (
+        settings.data_settings
+        and hasattr(settings.data_settings, "data_entry_cols")
+        and settings.data_settings.data_entry_cols
+    ):
         for col_info in settings.data_settings.data_entry_cols:
             if col_info.name == "workflow_status" and col_info.dropdown_options:
                 # Parse dropdown options (format: '"ToDo,Done,InProgress"')
                 options_str = col_info.dropdown_options.strip()
-                if options_str.startswith('"') and options_str.endswith('"') and ',' in options_str:
+                if (
+                    options_str.startswith('"')
+                    and options_str.endswith('"')
+                    and "," in options_str
+                ):
                     options_str = options_str.strip('"')
-                    workflow_options = [opt.strip() for opt in options_str.split(',') if opt.strip()]
+                    workflow_options = [
+                        opt.strip() for opt in options_str.split(",") if opt.strip()
+                    ]
                     if workflow_options:
                         dynamic_added_fields["workflow_status"] = workflow_options
 
@@ -137,6 +148,4 @@ def is_trivial_update(field: str, new_value, old_value) -> bool:
     Determine if an update is trivial (simple overwrite) or needs complex merge logic.
     For now, consider status and last_change as trivial if they differ.
     """
-    if field in ["status", "last_change"]:
-        return True
-    return False
+    return field in ["status", "last_change"]

@@ -231,12 +231,10 @@ async def update_osiris_data(
                                                         persoon.get("docent")
                                                     )
                                                 else:
-                                                    try:
+                                                    with contextlib.suppress(Exception):
                                                         newdatadict[course][
                                                             "unknown_role"
                                                         ].add(persoon.get("docent"))
-                                                    except Exception:
-                                                        pass
                                 for field in [
                                     "teachers",
                                     "docenten",
@@ -584,12 +582,14 @@ async def update_osiris_data(
         logger.info(f"Found {len(lookup_values)} course codes to look up in OSIRIS")
 
     osiris_data_w_contacts_file = {}
-    with contextlib.suppress(Exception):
-        with open(
+    with (
+        contextlib.suppress(Exception),
+        open(
             settings.files[FileSetting.OSIRIS_DATA_W_CONTACTS].path,
             encoding="utf-8",
-        ) as f:
-            osiris_data_w_contacts_file = json.load(f)
+        ) as f,
+    ):
+        osiris_data_w_contacts_file = json.load(f)
 
     course_codes_already_retrieved = set(osiris_data_w_contacts_file.keys())
     retrieve_course_data = True

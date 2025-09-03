@@ -10,7 +10,7 @@ from loguru import logger
 from sqlalchemy import Engine, create_engine
 from tortoise import Model, Tortoise
 
-from easy_access.db.models import CopyrightItem, Faculty, Classification, Status
+from easy_access.db.models import Classification, CopyrightItem, Faculty, Status
 from easy_access.settings import Settings
 
 # Module-level flag to memoize initialization
@@ -75,8 +75,6 @@ async def create() -> None:
 async def close_connections() -> None:
     """Close all Tortoise ORM database connections."""
     await Tortoise.close_connections()
-
-
 
 
 async def copyright_item_from_dict(
@@ -148,7 +146,11 @@ async def copyright_item_from_dict(
         if not item.get("status"):
             item["status"] = Status.PUBLISHED.value
 
-        item["material_id"] = int(item.get("material_id")) if isinstance(item.get("material_id"), (str, int)) else 0  # type: ignore[arg-type]
+        item["material_id"] = (
+            int(item.get("material_id"))
+            if isinstance(item.get("material_id"), str | int)
+            else 0
+        )  # type: ignore[arg-type]
 
         # Validate that material_id is present and valid
         if not item.get("material_id") or item["material_id"] == 0:
@@ -168,19 +170,35 @@ async def copyright_item_from_dict(
             else None
         )
 
-        item["pagecount"] = int(item.get("pagecount")) if isinstance(item.get("pagecount"), (str, int)) else 0  # type: ignore[arg-type]
-        item["wordcount"] = int(item.get("wordcount")) if isinstance(item.get("wordcount"), (str, int)) else 0  # type: ignore[arg-type]
+        item["pagecount"] = (
+            int(item.get("pagecount"))
+            if isinstance(item.get("pagecount"), str | int)
+            else 0
+        )  # type: ignore[arg-type]
+        item["wordcount"] = (
+            int(item.get("wordcount"))
+            if isinstance(item.get("wordcount"), str | int)
+            else 0
+        )  # type: ignore[arg-type]
         item["picturecount"] = (
-            int(item.get("picturecount")) if isinstance(item.get("picturecount"), (str, int)) else 0  # type: ignore[arg-type]
+            int(item.get("picturecount"))
+            if isinstance(item.get("picturecount"), str | int)
+            else 0  # type: ignore[arg-type]
         )
         item["reliability"] = (
-            int(item.get("reliability")) if isinstance(item.get("reliability"), (str, int)) else 0  # type: ignore[arg-type]
+            int(item.get("reliability"))
+            if isinstance(item.get("reliability"), str | int)
+            else 0  # type: ignore[arg-type]
         )
         item["pages_x_students"] = (
-            int(item.get("pages_x_students")) if isinstance(item.get("pages_x_students"), (str, int)) else 0  # type: ignore[arg-type]
+            int(item.get("pages_x_students"))
+            if isinstance(item.get("pages_x_students"), str | int)
+            else 0  # type: ignore[arg-type]
         )
         item["count_students_registered"] = (
-            int(item.get("count_students_registered")) if isinstance(item.get("count_students_registered"), (str, int)) else 0  # type: ignore[arg-type]
+            int(item.get("count_students_registered"))
+            if isinstance(item.get("count_students_registered"), str | int)
+            else 0  # type: ignore[arg-type]
         )
         item["filetype"] = (
             item.get("filetype", "unknown") if item.get("filetype") else "unknown"
@@ -193,6 +211,7 @@ async def copyright_item_from_dict(
 
         # Normalize file_exists before checking if it's falsy
         from easy_access.db.update import _normalize_file_exists
+
         original_file_exists = item.get("file_exists")
 
         # Only set to None if the original value was None or empty string

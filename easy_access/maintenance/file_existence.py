@@ -11,23 +11,22 @@ This module provides incremental file existence checking that:
 import asyncio
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import Any
 
 import httpx
 from loguru import logger
 
-from easy_access.db.base import ensure_db_inited, close_connections
+from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.models import CopyrightItem
 from easy_access.settings import Settings
-from easy_access.utilities.file_exists import check_file_exists
 
 
 async def select_items_needing_file_check(
     settings: Settings,
     ttl_days: int | None = None,
     batch_size: int = 1000,
-    force: bool = False
-) -> List[Dict[str, Any]]:
+    force: bool = False,
+) -> list[dict[str, Any]]:
     """
     Select copyright items that need file existence verification.
 
@@ -73,22 +72,23 @@ async def select_items_needing_file_check(
     result = []
     for item in items:
         # Access attributes from raw query result
-        material_id = getattr(item, 'material_id', None)
-        url = getattr(item, 'url', None)
+        material_id = getattr(item, "material_id", None)
+        url = getattr(item, "url", None)
         if material_id and url:
-            result.append({
-                "material_id": material_id,
-                "url": url,
-            })
+            result.append(
+                {
+                    "material_id": material_id,
+                    "url": url,
+                }
+            )
 
     logger.info(f"Selected {len(result)} items for file existence verification")
     return result
 
 
 async def check_single_file_existence(
-    item_data: Dict[str, Any],
-    session: httpx.AsyncClient
-) -> Dict[str, Any]:
+    item_data: dict[str, Any], session: httpx.AsyncClient
+) -> dict[str, Any]:
     """
     Check file existence for a single item.
 
@@ -126,7 +126,9 @@ async def check_single_file_existence(
             }
 
     except Exception as e:
-        logger.error(f"Error checking file existence for material_id {material_id}: {e}")
+        logger.error(
+            f"Error checking file existence for material_id {material_id}: {e}"
+        )
         return {
             "material_id": material_id,
             "file_exists": False,
@@ -134,9 +136,7 @@ async def check_single_file_existence(
         }
 
 
-async def update_file_existence_batch(
-    results: List[Dict[str, Any]]
-) -> None:
+async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
     """
     Update file existence status for a batch of items using bulk operations.
 
@@ -146,7 +146,9 @@ async def update_file_existence_batch(
     if not results:
         return
 
-    logger.info(f"Updating file existence for {len(results)} items using bulk operations")
+    logger.info(
+        f"Updating file existence for {len(results)} items using bulk operations"
+    )
 
     # Prepare data for bulk update
     material_ids = []
@@ -174,8 +176,10 @@ async def update_file_existence_batch(
 
         # Bulk insert into temporary table
         values_list = []
-        for i, result in enumerate(results):
-            values_list.append(f"({result['material_id']}, {result['file_exists']}, '{result['last_canvas_check'].isoformat()}')")
+        for _i, result in enumerate(results):
+            values_list.append(
+                f"({result['material_id']}, {result['file_exists']}, '{result['last_canvas_check'].isoformat()}')"
+            )
 
         if values_list:
             values_str = ", ".join(values_list)
@@ -205,8 +209,7 @@ async def update_file_existence_batch(
             last_canvas_check = result["last_canvas_check"]
 
             await CopyrightItem.filter(material_id=material_id).update(
-                file_exists=file_exists,
-                last_canvas_check=last_canvas_check
+                file_exists=file_exists, last_canvas_check=last_canvas_check
             )
         logger.info(f"Successfully updated {len(results)} items using fallback method")
 
@@ -224,8 +227,8 @@ async def refresh_file_existence_async(
     batch_size: int = 1000,
     max_concurrent: int = 50,
     force: bool = False,
-    rate_limit_delay: float = 0.1  # Add configurable rate limiting
-) -> Dict[str, Any]:
+    rate_limit_delay: float = 0.1,  # Add configurable rate limiting
+) -> dict[str, Any]:
     """
     Refresh file existence status for copyright items based on TTL policy.
 
@@ -247,7 +250,7 @@ async def refresh_file_existence_async(
 
     try:
         # Get API token from settings
-        api_token = getattr(settings.university_settings, 'canvas_api_token', None)
+        api_token = getattr(settings.university_settings, "canvas_api_token", None)
         if not api_token:
             logger.error("Canvas API token not found in settings")
             return {"error": "No API token", "checked": 0, "exists": 0, "not_exists": 0}
@@ -264,18 +267,17 @@ async def refresh_file_existence_async(
         # Set up HTTP client
         headers = {"Authorization": f"Bearer {api_token}"}
         async with httpx.AsyncClient(
-            headers=headers,
-            follow_redirects=True,
-            timeout=20.0
+            headers=headers, follow_redirects=True, timeout=20.0
         ) as session:
-
             logger.info(f"Checking file existence for {len(items_to_check)} items")
 
             # Check files concurrently with rate limiting
             semaphore = asyncio.Semaphore(max_concurrent)
             results = []
 
-            async def check_with_semaphore_and_rate_limit(item_data: Dict[str, Any]) -> None:
+            async def check_with_semaphore_and_rate_limit(
+                item_data: dict[str, Any],
+            ) -> None:
                 async with semaphore:
                     result = await check_single_file_existence(item_data, session)
                     results.append(result)
@@ -284,7 +286,9 @@ async def refresh_file_existence_async(
                         await asyncio.sleep(rate_limit_delay)
 
             # Create tasks
-            tasks = [check_with_semaphore_and_rate_limit(item) for item in items_to_check]
+            tasks = [
+                check_with_semaphore_and_rate_limit(item) for item in items_to_check
+            ]
 
             # Execute concurrently
             start_time = time.time()
@@ -293,7 +297,7 @@ async def refresh_file_existence_async(
 
             logger.info(
                 f"Completed file existence checks in {duration:.2f} seconds "
-                f"({len(results)/max(duration, 0.001):.1f} req/sec)"
+                f"({len(results) / max(duration, 0.001):.1f} req/sec)"
             )
 
             # Update database using optimized bulk operations
