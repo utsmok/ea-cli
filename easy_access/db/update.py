@@ -626,8 +626,8 @@ def record_field_change(
 
 
 def compare_and_update_fields(
-    new_item: dict, db_item: CopyrightItem, fielddict: dict, changes: dict
-) -> tuple[dict, CopyrightItem]:
+    new_item: dict, db_item: Any, fielddict: dict, changes: dict
+) -> tuple[dict, Any]:
     """
     Compare fields between new item and database item, updating the database item
     and recording changes according to merge rules.
@@ -689,6 +689,28 @@ def compare_and_update_fields(
         # Use strategy pattern for field-specific comparison
         strategy = get_comparison_strategy(field, db_item)
         should_update, reason = strategy.should_update(new_value, old_value, ordering)
+
+        # Hard safety net for workflow_status: never allow downgrade regardless of ordering.
+        if field == "workflow_status" and isinstance(ordering, list):
+            try:
+                # Canonical rank map (lower index = higher priority)
+                canonical = [
+                    WorkflowStatus.Done.value,
+                    WorkflowStatus.InProgress.value,
+                    WorkflowStatus.ToDo.value,
+                ]
+                if new_value in canonical and old_value in canonical:
+                    new_rank = canonical.index(new_value)
+                    old_rank = canonical.index(old_value)
+                    # Only update if new has higher priority (smaller index) or old is None
+                    if new_rank < old_rank:
+                        should_update = True
+                        reason = "workflow_status upgrade (canonical ordering)"
+                    elif new_rank >= old_rank and old_value is not None:
+                        should_update = False
+                        reason = "workflow_status downgrade prevented"
+            except Exception:
+                pass
 
         # Handle null-to-value case
         if new_value is not None and old_value is None:

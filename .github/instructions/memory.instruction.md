@@ -18,6 +18,7 @@ Recent milestones (trimmed):
 - Phase B (enrichment): OSIRIS-person enrichment implemented; unit tests for parsing/stale-selection remain.
 - Phase C (file-existence): TTL-based file existence checks implemented.
 - Ongoing: Phase D – performance tuning, comprehensive tests, and documentation.
+- 2025-09-03 Fixes: Person enrichment robustness (URL encoding, cookie wall detection, selector fallback) and workflow_status canonical priority & downgrade guard (prevent repeated Done->ToDo updates). Regression tests added.
 
 Testing / safety notes:
 - Staged processing hardened: explicit field mapping, batched transactions, per-row failure persistence (`StagedProcessingFailure`).

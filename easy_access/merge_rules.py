@@ -100,7 +100,33 @@ def build_merge_rules_from_settings(settings: Settings) -> tuple[dict, dict]:
                         opt.strip() for opt in options_str.split(",") if opt.strip()
                     ]
                     if workflow_options:
-                        dynamic_added_fields["workflow_status"] = workflow_options
+                        # Always enforce canonical priority order: Done > InProgress > ToDo.
+                        # Some spreadsheets list values in another order (e.g. ToDo first),
+                        # which previously caused downgrades (Done -> ToDo) because the
+                        # RankedFieldStrategy treats lower index as higher priority.
+                        canonical_order = [
+                            WorkflowStatus.Done.value,
+                            WorkflowStatus.InProgress.value,
+                            WorkflowStatus.ToDo.value,
+                        ]
+                        priority_index = {
+                            v: i for i, v in enumerate(canonical_order)
+                        }
+                        # Keep only known values, preserve canonical priority
+                        sorted_opts = sorted(
+                            (opt for opt in workflow_options if opt in priority_index),
+                            key=lambda v: priority_index[v],
+                        )
+                        # Append any unexpected / custom statuses at the end so they never outrank core ones
+                        extras = [
+                            opt
+                            for opt in workflow_options
+                            if opt not in priority_index
+                        ]
+                        dynamic_added_fields["workflow_status"] = [
+                            *sorted_opts,
+                            *extras,
+                        ]
 
     return dynamic_added_fields, dynamic_changeable_fields
 

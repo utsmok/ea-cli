@@ -3,6 +3,7 @@
 Recent milestones
 
 - 2025-09-03: Incorporated external code review; added tasks for decoupling test mocks from production (`db/relations.py`), pipeline asyncio wrapper refactor, helper consolidation, and teardown leak detection.
+- 2025-09-03: Fixed person data enrichment (URL encoding, cookie wall detection, resilient selectors) and enforced canonical workflow_status priority (preventing Done -> ToDo downgrades & repeat updates).
 - 2025-09-03: Legacy cleanup completed - deleted `old_main.py` and `sheets/enrichment.py`; removed legacy relations functions from `db/update.py` and deprecated `load_raw_copyright_data` from `db/ingest.py`.
 - 2025-09-03: Consolidated integration plan (export/enrichment/relations/file existence) and refreshed TODO with precise Phase D gaps (atomic Excel writes, enrichment TTL tests, raw SQL relations path, bulk persistence optimization).
 

@@ -763,9 +763,16 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
     }
 
     try:
-        # Search for the person
-        search_url = f"https://people.utwente.nl/overview?query={person_name}"
-        response = await httpx_client.get(search_url, headers=headers)
+        # Pre-normalize person name: strip spacing artifacts sometimes present in sheets
+        raw_query = person_name.strip().replace("  ", " ")
+        # People search appears to require URL encoding of commas / spaces; older code relied on browser encoding
+        import urllib.parse as _u
+
+        encoded_query = _u.quote(raw_query, safe="")
+        search_url = f"https://people.utwente.nl/overview?query={encoded_query}"
+        response = await httpx_client.get(
+            search_url, headers=headers, follow_redirects=True
+        )
 
         if response.status_code != 200:
             logger.warning(
@@ -775,7 +782,18 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
 
         # Parse search results
         soup = bs4.BeautifulSoup(response.text, "lxml")
+        # The site recently introduced a cookie consent wall; if present, skip parsing
+        if soup.find(string=lambda s: isinstance(s, str) and "We use cookies" in s):
+            logger.warning(
+                f"Cookie wall encountered for person {person_name}; search HTML not parsed."
+            )
+            return {}
+
+        # New layout variants: anchor tags may contain data-link attribute OR be inside elements with data-link
         data_links = soup.find_all("a", {"data-link": True})
+        if not data_links:
+            # Fallback: look for anchors inside search result cards
+            data_links = soup.select("div.searchresult a[href][title]")
 
         if not data_links:
             logger.warning(f"No search results found for person {person_name}")
@@ -798,7 +816,10 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         compare_name = _remove_dot_and_lower(name_parsed_str)
 
         best_match = matches[0]
-        best_ratio = Levenshtein.ratio(compare_name, _remove_dot_and_lower(best_match))
+        try:
+            best_ratio = Levenshtein.ratio(compare_name, _remove_dot_and_lower(best_match))
+        except Exception:
+            best_ratio = 0
 
         # Check other matches for better similarity
         for match in matches[1:]:
@@ -819,8 +840,10 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
             return {}
 
         # Fetch detailed person page
-        person_url = "https://people.utwente.nl/" + best_match
-        response = await httpx_client.get(person_url, headers=headers)
+        person_url = ("https://people.utwente.nl/" + best_match).rstrip("/")
+        response = await httpx_client.get(
+            person_url, headers=headers, follow_redirects=True
+        )
 
         if response.status_code in [500, 502]:
             logger.warning(f"Server error for person {person_name}, retrying...")
@@ -835,6 +858,11 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
 
         # Parse person page
         soup = bs4.BeautifulSoup(response.text, "lxml")
+        if soup.find(string=lambda s: isinstance(s, str) and "We use cookies" in s):
+            logger.warning(
+                f"Cookie wall on detail page for {person_name}; cannot extract person data"
+            )
+            return {}
 
         # Extract main name
         name_tag = soup.find("h1", class_="pageheader__title")
