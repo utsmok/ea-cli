@@ -17,6 +17,7 @@ Tests cover:
 import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
+from tests.helpers import QuerySetMock
 from datetime import datetime, timedelta
 import asyncio
 
@@ -481,8 +482,8 @@ class TestFileExistenceIntegration:
             mock_client.get.return_value = mock_response
 
             # Mock database update
-            mock_update = AsyncMock()
-            mock_filter.return_value.update = mock_update
+            mock_filter.return_value = QuerySetMock()
+            mock_filter.return_value.update = AsyncMock()
 
             # Execute the workflow
             result = await refresh_file_existence_async(settings)
@@ -492,8 +493,10 @@ class TestFileExistenceIntegration:
             assert result["exists"] == 1
             assert result["not_exists"] == 0
 
-            # Verify database was updated
-            mock_update.assert_called_once()
+            # Verify database was updated (update is on the filter() return value)
+            filter_ret = mock_filter.return_value
+            assert hasattr(filter_ret, 'update')
+            filter_ret.update.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_error_handling_in_concurrent_processing(self):

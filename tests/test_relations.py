@@ -10,6 +10,7 @@ Tests cover:
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from tests.helpers import QuerySetMock
 from datetime import datetime
 
 from easy_access.db.relations import (
@@ -57,8 +58,7 @@ class TestUpdateDuplicates:
              patch('easy_access.db.relations.CopyrightItem.bulk_update') as mock_bulk_update:
 
             # Mock queryset for PDFs with prefetch_related capability
-            mock_queryset = AsyncMock()
-            mock_queryset.prefetch_related.return_value = [mock_pdf]
+            mock_queryset = QuerySetMock([mock_pdf])
             mock_filter.return_value = mock_queryset
 
             mock_item_filter.return_value = [mock_item]
@@ -82,8 +82,7 @@ class TestUpdateDuplicates:
              patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter:
 
             # Mock queryset for PDFs
-            mock_queryset = AsyncMock()
-            mock_queryset.prefetch_related.return_value = [mock_pdf]
+            mock_queryset = QuerySetMock([mock_pdf])
             mock_filter.return_value = mock_queryset
 
             mock_item_filter.return_value = []  # No matching items
