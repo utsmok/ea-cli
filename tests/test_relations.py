@@ -90,11 +90,13 @@ class TestUpdateDuplicates:
             await update_duplicates(settings)
 
             # Should not fail, just log that no items were updated
+            # Reset the mock call count to ensure the next invocation is measured
+            mock_item_filter.reset_mock()
             mock_item_filter.return_value = []  # No items to update
 
             await update_duplicates(settings)
 
-            # Should not call bulk_update
+            # Should have been called once during the second run
             mock_item_filter.assert_called_once()
 
 

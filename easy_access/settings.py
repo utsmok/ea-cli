@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import sys
@@ -298,6 +299,54 @@ class UniversitySettings:
     faculties: list[SettingsFaculty] = field(default_factory=list, init=False)
     programmes: set[SettingsProgramme] = field(default_factory=set, init=False)
     manual_department_mappings: dict[str, str] = field(default_factory=dict, init=False)
+    canvas_api_token: str | None = None
+
+    def __post_init__(self):
+        """
+        After initing this class, it will try to find an api token in:
+        - environment
+        - .env / .secret file(s)
+        - api_keys.py module
+        in that order of precedence.
+        """
+        self.canvas_api_token = (
+            os.getenv("CANVAS_API_TOKEN")
+            or self._load_env_file()
+            or self._load_api_keys_module()
+        )
+
+    def _load_env_file(self) -> str | None:
+        """Loads the API token from a .env or .secret file in
+        cwd or parent dir (max 2 levels deep)."""
+        env_files = [".env", ".secret"]
+
+        folders_to_search = [os.getcwd()]
+        for i in range(2):  #
+            folders_to_search.append(os.path.dirname(folders_to_search[-1]))
+
+        for folder in folders_to_search:
+            for env_file in env_files:
+                env_file_path = os.path.join(folder, env_file)
+                if os.path.exists(env_file_path):
+                    with open(env_file_path) as f:
+                        for line in f:
+                            if line.startswith("CANVAS_API_TOKEN="):
+                                return line.split("=", 1)[1].strip()
+        return None
+
+    def _load_api_keys_module(self) -> str | None:
+        """Loads the API token from the api_keys.py module."""
+        found_token = None
+        with contextlib.suppress(ImportError, ModuleNotFoundError):
+            from api_keys import CANVAS_API_TOKEN
+            found_token = CANVAS_API_TOKEN
+            if found_token:
+                return found_token
+            from easy_access.api_keys import CANVAS_API_TOKEN
+            found_token = CANVAS_API_TOKEN
+            if found_token:
+                return found_token
+        return None
 
     def make_programme_set(self) -> None:
         """Populates the `programmes` set from the list of faculties.
