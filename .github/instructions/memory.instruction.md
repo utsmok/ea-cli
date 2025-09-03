@@ -33,5 +33,7 @@ External review anchors (2025-09-03):
 - Need pipeline asyncio wrapper refactor to avoid nested `asyncio.run` in library code.
 - Duplicate `QuerySetMock` (tests/helpers vs test_enrichment) to be consolidated.
 - Pending enrichment TTL tests, raw SQL relations path test, atomic Excel write, bulk_create optimization.
+- Backup module integration: add pre/post stages to pipeline for file backup/restore.
+- Legacy cleanup: remove globals from settings.py **COMPLETED** - global constants refactored to Settings properties, eliminate update_db from export, enforce read-only export.
 
 This memory is intentionally concise and focused on actionable anchors.

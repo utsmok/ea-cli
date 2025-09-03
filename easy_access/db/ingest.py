@@ -483,8 +483,23 @@ async def load_raw_copyright_data_to_staging(
     await ensure_db_inited(settings)
     items = standardize_dataframe(data).to_dicts()
     staged_items = [StagedCopyrightItem(**item) for item in items]
-    for i in staged_items:
-        await i.save()
+
+    # Define fields to update on conflict (all fields except primary key)
+    update_fields = [
+        "period", "department", "course_code", "course_name", "url", "filename",
+        "title", "owner", "filetype", "classification", "manual_classification",
+        "manual_identifier", "scope", "remarks", "ml_prediction", "isbn", "doi",
+        "in_collection", "pagecount", "wordcount", "picturecount", "author",
+        "publisher", "auditor", "last_change", "status", "reliability",
+        "pages_x_students", "count_students_registered", "retrieved_from_copyright_on",
+        "workflow_status", "faculty", "file_exists"
+    ]
+
+    await StagedCopyrightItem.bulk_create(
+        staged_items,
+        on_conflict=["material_id"],
+        update_fields=update_fields,
+    )
 
 
 async def load_faculty_updates_to_staging(

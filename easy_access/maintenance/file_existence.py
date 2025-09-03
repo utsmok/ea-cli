@@ -271,6 +271,7 @@ async def refresh_file_existence_async(
         api_token = getattr(settings.university_settings, "canvas_api_token", None)
         if not api_token:
             logger.error("Canvas API token not found in settings")
+            logger.debug(settings.university_settings.__dict__)
             return {"error": "No API token", "checked": 0, "exists": 0, "not_exists": 0}
 
         # Select items needing verification

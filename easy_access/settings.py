@@ -301,7 +301,7 @@ class UniversitySettings:
     manual_department_mappings: dict[str, str] = field(default_factory=dict, init=False)
     canvas_api_token: str | None = None
 
-    def __post_init__(self):
+    def add_api_key(self):
         """
         After initing this class, it will try to find an api token in:
         - environment
@@ -309,11 +309,13 @@ class UniversitySettings:
         - api_keys.py module
         in that order of precedence.
         """
-        self.canvas_api_token = (
-            os.getenv("CANVAS_API_TOKEN")
-            or self._load_env_file()
-            or self._load_api_keys_module()
-        )
+        if not self.canvas_api_token:
+            self.canvas_api_token = os.getenv("CANVAS_API_TOKEN")
+        if not self.canvas_api_token:
+            self.canvas_api_token = self._load_env_file()
+        if not self.canvas_api_token:
+            self.canvas_api_token = self._load_api_keys_module()
+
 
     def _load_env_file(self) -> str | None:
         """Loads the API token from a .env or .secret file in
@@ -335,17 +337,15 @@ class UniversitySettings:
         return None
 
     def _load_api_keys_module(self) -> str | None:
-        """Loads the API token from the api_keys.py module."""
-        found_token = None
+        """Tries to loads the API token from the api_keys.py module."""
         with contextlib.suppress(ImportError, ModuleNotFoundError):
             from api_keys import CANVAS_API_TOKEN
             found_token = CANVAS_API_TOKEN
-            if found_token:
-                return found_token
+            return found_token
+        with contextlib.suppress(ImportError, ModuleNotFoundError):
             from easy_access.api_keys import CANVAS_API_TOKEN
             found_token = CANVAS_API_TOKEN
-            if found_token:
-                return found_token
+            return found_token
         return None
 
     def make_programme_set(self) -> None:
@@ -568,6 +568,7 @@ class Settings:
             logger.warning(f"Faculties data is not a list: {faculties_data}")
         self.university_settings.faculties = parsed_faculties
         self.university_settings.make_programme_set()
+        self.university_settings.add_api_key()
 
     def parse_data_settings(self, data_settings_yaml: dict[str, Any]) -> None:
         """Parses the 'data_settings' section of settings.yaml.

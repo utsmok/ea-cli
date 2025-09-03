@@ -3,6 +3,7 @@
 Recent milestones
 
 - 2025-09-03: Incorporated external code review; added tasks for decoupling test mocks from production (`db/relations.py`), pipeline asyncio wrapper refactor, helper consolidation, and teardown leak detection.
+- 2025-09-03: Legacy cleanup completed - deleted `old_main.py` and `sheets/enrichment.py`; removed legacy relations functions from `db/update.py` and deprecated `load_raw_copyright_data` from `db/ingest.py`.
 - 2025-09-03: Consolidated integration plan (export/enrichment/relations/file existence) and refreshed TODO with precise Phase D gaps (atomic Excel writes, enrichment TTL tests, raw SQL relations path, bulk persistence optimization).
 
 - 2025-09-03: Phase D progress — added unit tests for export; improved pytest teardown and diagnostics (`hang_diagnostics.txt`) to reduce intermittent hangs.
@@ -11,6 +12,7 @@ Recent milestones
 - 2025-09-02: Pipeline improvements — async entrypoints and CLI flags added for stage control (`--ingest-only`, `--process-only`, `--export-only`, `--enrich-only`).
 - 2025-09-02: Safety and reliability — replaced `__dict__` uses, added `safe_*` parsers, transactionized staged processing, and added `StagedProcessingFailure` persistence.
 - 2025-03-09: Major refactor — `update_copyright_items` decomposed into modular, testable components with strategy patterns and broad test coverage.
+- 2025-03-10: Settings cleanup analysis completed - confirmed global constants (DEPARTMENT_MAPPING, COURSE_MAPPING, FINE_AMOUNT) have been properly refactored into Settings class properties. Global SETTINGS singleton is acceptable pattern.
 
 Top remaining work
 

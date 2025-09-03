@@ -6,17 +6,61 @@ Guidance:
 - Keep items small and testable.
 - When an item is completed, add a one-line entry to `.github/changelog.md` and check it off here.
 
-## Priority: Immediate (safety & correctness)
+## Priority: Critical (immediate safety & correctness)
+- [ ] Investigate and fix intermittent Tortoise-related pytest teardown hang: analyze `hang_diagnostics.txt` outputs, implement targeted aiosqlite shutdown, and ensure proper connection closure ordering.
+- [ ] Eliminate update_db call from export stage (sheets/analysis.py) to enforce read-only export - move database writes to dedicated pipeline stage.
+- [ ] Decouple production code from test mocks in `db/relations.py` (remove Mock-aware branching) and adjust tests accordingly.
+
+## Priority: High (testing & reliability)
+- [ ] Add missing unit tests for enrichment functions: stale selection logic, HTML parsing, and orchestrator idempotency.
+- [ ] Add missing unit tests for relations functions: batch operations, N+1 elimination, and raw SQL link path.
+- [ ] Add missing integration tests for end-to-end pipeline execution with full E2E idempotency validation.
+- [ ] Add missing unit tests for maintenance/file_existence module: rate limiting edge cases and error handling.
+- [ ] Add enrichment detail fetch error-path tests: HTTP 500 responses, malformed JSON, and timeout handling.
+- [ ] Add pipeline full E2E idempotency test (second run zero deltas) and relations raw SQL link path integration test.
+
+## Priority: High (code quality & architecture)
+- [ ] Refactor pipeline synchronous wrappers to avoid nested asyncio.run when already inside event loop.
+- [ ] Consolidate QuerySetMock definitions: remove local definitions and import from tests/helpers everywhere.
+- [ ] Add teardown leak detection utility and ensure Tortoise connection closure ordering to reduce hangs.
+- [ ] Implement atomic Excel write helper and integrate into all export paths for data safety.
+- [ ] Optimize persist_courses/persist_persons to use bulk_create for new rows + add unit test verifying reduced DB calls.
+
+## Priority: Medium (performance & optimization)
+- [ ] Performance tuning: optimize bulk M2M linking in relations stage and export memory usage.
+- [ ] Add export dataframe schema validator + unit test (missing required columns should raise clear errors).
+- [ ] Add optional rate scheduling for file existence checks with configurable delays.
+- [ ] Add performance benchmarks and monitoring for pipeline stages.
+
+## Priority: Medium (features & integration)
+- [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable.
+- [ ] Add calculate_derived_fields pipeline stage before export to handle derived fields without DB writes in export.
+
+## Priority: Low (documentation & future improvements)
+- [ ] Update README with new pipeline stages, flags, and architecture diagram.
+- [ ] Update analysis documentation with current implementation details.
+- [ ] Optional: Introduce Alembic for future schema evolution (defer unless new columns required).
+- [ ] Optional: Create consolidated SQL view or materialized snapshot for accelerated export retrieval.
+
+## (Removed / Superseded)
+- (Removed) JSON cache enrichment tasks – replaced by direct DB model usage.
+- (Removed) Aerich migration scaffolding task – Alembic optional task added instead.
+- (Removed) Phase-based organization – replaced with priority-based organization.
+- (Removed) Duplicate/completed items moved to Completed section below.
+
+## Completed (keep for history)
+- [x] Critical review of refactor changes and file-level summary (see `.github/critical-review.md`) — completed 2025-09-02
+- [x] Harden staged-processing in `easy_access/db/update.py`: replaced `__dict__` usage with explicit mapping, batched transactional processing, per-row error handling, and conditional deletion of processed staged rows — completed 2025-09-02
+- [x] Add per-row failure persistence: `StagedProcessingFailure` model and recording failures during staged processing — completed 2025-09-02
+- [x] Implement small safe parsing helpers (`safe_int`, `safe_float`, `safe_date`, `safe_enum`, `safe_compare_greater`) and move them to `easy_access/utils.py` — completed 2025-09-02
+- [x] Unit tests for parsing helpers: `tests/test_safe_parsers.py` — completed 2025-09-02
+- [x] Integration test: `tests/test_integration_staging.py` verifying staging retention/deletion semantics — completed 2025-09-02
 - [x] Repo-wide safety sweep: replace ad-hoc casts and `__dict__` usage with `safe_*` helpers and explicit mappings. Add unit tests for any changed codepaths. (high)
 - [x] Route complex staged rows into canonical merge path: ensure `process_staged_raw_data` delegates non-trivial merges to `update_copyright_items` (use `copyright_item_from_dict` and `merge_rules`). (high)
 - [x] Add logging improvements for staged processing (include material_id, faculty, stage, and compact error traces). (high)
 - [x] Implement failure-inspection/retry helper: admin CLI or small script to list `StagedProcessingFailure` rows and requeue or attempt automated retries. (high)
- - [x] Improve pytest teardown to cancel pending tasks, shutdown async generators, remove Loguru handlers and close Tortoise connections (added diagnostic logging). (2025-09-03)
- - [ ] Investigate intermittent Tortoise-related pytest teardown hang observed when running `uv run pytest` on some environments; capture active threads, pending tasks, and Tortoise connection state. (high)
- - [x] Add file-based diagnostics and a short grace-and-recheck in pytest session teardown to reduce hangs and capture thread stacks for post-mortem analysis (added 2025-09-03).
- - [ ] Continue investigation of intermittent Tortoise-related pytest teardown hang: analyze `hang_diagnostics.txt` outputs across CI environments, attempt targeted aiosqlite shutdown or extend grace period as needed. (high)
-
-## Priority: High (reliability & observability)
+- [x] Improve pytest teardown to cancel pending tasks, shutdown async generators, remove Loguru handlers and close Tortoise connections (added diagnostic logging). (2025-09-03)
+- [x] Add file-based diagnostics and a short grace-and-recheck in pytest session teardown to reduce hangs and capture thread stacks for post-mortem analysis (added 2025-09-03).
 - [x] Refactor `update_copyright_items` function: break down the 400+ line monolithic function into smaller, testable components (extract nested functions, externalize field definitions, simplify comparisons). (high)
 - [x] Extract nested functions (`change`, `compare_fields`) to module-level in `easy_access/db/update.py` or new `merge_utils.py`. (high)
 - [x] Externalize `added_fields` and `changeable_fields` to `easy_access/merge_rules.py` and integrate with Settings for field definitions from `settings.yaml`. (high)
@@ -31,8 +75,6 @@ Guidance:
 - [x] Phase 4: Validate refactored functions with real data processing and update documentation. (high)
 - [x] Add DateFieldStrategy and EnumFieldStrategy for more field-specific comparisons. (medium)
 - [x] Implement comprehensive unit test coverage for all refactored components. (medium)
-
-## Priority: High (export & enrichment reintegration)
 - [x] Phase A: Implement export stage (`export_reports_async`) in `pipeline.py` coordinating all export types (faculty, program, overview, all_items).
 - [x] Phase A: Create `sheets/export.py` recreating legacy export functions: `create_faculty_sheets`, `create_programme_sheets`, `create_overviews`, `create_all_items_sheet` with file uniqueness handling.
 - [x] Phase A: Extract existing relations functions from `db/update.py` into `easy_access/db/relations.py` (move `link_courses_to_copyright_items`, `update_duplicate_status`) and optimize to eliminate N+1 queries.
@@ -51,7 +93,6 @@ Guidance:
 - [x] Phase B: Update `enrich_async` orchestrator to use new functions
 - [x] Phase B: Add `enrich_async` pipeline stage + `--no-enrich` CLI flag
 - [x] Phase B: Add `--enrich-only` CLI flag for enrichment-only execution
-- [ ] Phase B: Unit tests for stale selection & HTML parsing (mocked httpx)
 - [x] Phase C: File existence TTL stage (`refresh_file_existence_async`) using `last_canvas_check` + settings TTL; bulk update only changed rows.
 - [x] Phase C: Tests for file existence stage (mock 200/404) asserting counts & `last_canvas_check` refresh.
 - [x] Phase D: Performance tuning - optimize bulk M2M linking in relations stage
@@ -62,45 +103,12 @@ Guidance:
 - [x] Phase D: Update analysis documentation with current implementation details
 - [x] Phase D: Add comprehensive integration tests for pipeline stages
 - [x] Phase D: Add performance benchmarks and monitoring
-- [ ] Add missing unit tests for enrichment functions (stale selection, HTML parsing)
-- [ ] Add missing unit tests for relations functions (batch operations, N+1 elimination)
 - [x] Add missing unit tests for export functions (file uniqueness, sheet validation)
-- [ ] Add missing integration tests for end-to-end pipeline execution
-- [ ] Add missing unit tests for maintenance/file_existence module
- - [ ] Add enrichment TTL selection tests (courses/persons) and orchestrator idempotency
- - [ ] Add enrichment detail fetch error-path tests (`_fetch_course_details` HTTP 500, malformed JSON)
- - [ ] Implement atomic Excel write helper and integrate into export paths
- - [ ] Add pipeline full E2E idempotency test (second run zero deltas)
- - [ ] Add relations raw SQL link path integration test (no mocked bulk_update)
- - [ ] Optimize persist_courses/persist_persons to use bulk_create for new rows + add unit test verifying reduced create calls
- - [ ] Add export dataframe schema validator + unit test (missing required cols raises)
- - [ ] Add file existence rate_limit_delay=0 edge case test
- - [ ] Decouple production code from mocks in `db/relations.py` (remove Mock-aware branching); adjust tests
- - [ ] Refactor pipeline synchronous wrappers to avoid nested asyncio.run when already inside loop
- - [ ] Consolidate QuerySetMock definitions (import from tests/helpers everywhere)
- - [ ] Add teardown leak detection & ensure Tortoise close ordering (reduce hangs)
-
-## Priority: Medium (future improvements & migrations)
-- [ ] Optional: Introduce Alembic for future schema evolution (defer unless new columns required beyond existing timestamp mixins).
-- [ ] Optional: Create consolidated SQL view or materialized snapshot (if needed) to accelerate export retrieval.
-
-## (Removed / Superseded)
-- (Removed) JSON cache enrichment tasks – replaced by direct DB model usage.
-- (Removed) Aerich migration scaffolding task – Alembic optional task added instead.
-
-## Priority: Medium (developer ergonomics & API)
 - [x] Convert `easy_access/pipeline.py` to provide async entrypoints and thin sync wrappers; remove `asyncio.run` from library-level code. (medium)
 - [x] Provide CLI flags or `Settings` options to run individual stages (ingest-only, process-only, export-only). (medium)
 - [x] Implement the admin retry workflow (UI/CLI) for `StagedProcessingFailure`. (medium)
-
-## Completed (keep for history)
-- [x] Critical review of refactor changes and file-level summary (see `.github/critical-review.md`) — completed 2025-09-02
-- [x] Harden staged-processing in `easy_access/db/update.py`: replaced `__dict__` usage with explicit mapping, batched transactional processing, per-row error handling, and conditional deletion of processed staged rows — completed 2025-09-02
-- [x] Add per-row failure persistence: `StagedProcessingFailure` model and recording failures during staged processing — completed 2025-09-02
-- [x] Implement small safe parsing helpers (`safe_int`, `safe_float`, `safe_date`, `safe_enum`, `safe_compare_greater`) and move them to `easy_access/utils.py` — completed 2025-09-02
-- [x] Unit tests for parsing helpers: `tests/test_safe_parsers.py` — completed 2025-09-02
-- [x] Integration test: `tests/test_integration_staging.py` verifying staging retention/deletion semantics — completed 2025-09-02
+- [x] Remove global constants from settings.py (DEPARTMENT_MAPPING, COURSE_MAPPING, etc.) - **COMPLETED**: Global constants have been refactored into Settings class properties. Commented imports in sheet.py and analysis.py confirm cleanup.
 
 ## Notes
 - Work in the `new-dataflow` branch. Add changelog entries for completed items.
-
+- Last cleanup: 2025-09-03 - Reorganized by actual priority, combined related items, removed duplicates, and verified against current repo state.

@@ -673,7 +673,7 @@ def compare_and_update_fields(
 
         # Type casting for comparison
         try:
-            cast_success = _cast_values_for_comparison(
+            cast_success, new_value, old_value = _cast_values_for_comparison(
                 field, new_value, old_value, db_item
             )
             if not cast_success:
@@ -705,18 +705,18 @@ def compare_and_update_fields(
 
 def _cast_values_for_comparison(
     field: str, new_value: Any, old_value: Any, db_item: CopyrightItem
-) -> bool:
+) -> tuple[bool, Any, Any]:
     """
-    Cast values for comparison and update them in place.
+    Cast values for comparison and return the modified values.
 
     Args:
         field: Field name
-        new_value: New value (will be modified)
-        old_value: Old value (will be modified)
+        new_value: New value
+        old_value: Old value
         db_item: Database item for context
 
     Returns:
-        True if casting succeeded, False otherwise
+        Tuple of (success, new_value, old_value)
 
     Raises:
         TypeCastError: When type casting fails
@@ -726,13 +726,14 @@ def _cast_values_for_comparison(
             new_value = _cast_datetime_value(new_value)
             old_value = old_value.replace(tzinfo=UTC) if old_value else old_value
         elif isinstance(old_value, Enum):
-            old_value = _cast_enum_value(old_value, type(old_value))
+            new_value = _cast_enum_value(new_value, type(old_value))
+            old_value = old_value.value
         elif isinstance(old_value, float):
             new_value = _cast_numeric_value(new_value, float)
             old_value = round(old_value, 2)
         elif isinstance(old_value, int):
             new_value = _cast_numeric_value(new_value, int)
-        return True
+        return True, new_value, old_value
     except Exception as e:
         logger.debug(
             f"Error {e} while typecasting data for field comparison of {field}"

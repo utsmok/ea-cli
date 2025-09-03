@@ -1,4 +1,10 @@
-# Export, Enrichment & File Existence Integration Plan (Concise)
+# Export, Enrichment & File Existence Integration Plan 10. Documentation: architecture diagram (PNG/SVG), README section on stage idempotency & CLI flags, minimal troubleshooting table.
+ 11. Decouple production code from test mocks in `db/relations.py` (remove Mock-aware branching) + adjust tests.
+ 12. Refactor pipeline synchronous wrappers to avoid nested asyncio.run misuse; provide loop-safe dispatcher.
+ 13. Consolidate duplicated `QuerySetMock` (remove local definition in `tests/test_enrichment.py`).
+ 14. Strengthen teardown reliability: isolate aiosqlite / Tortoise connection closure ordering; add leak detection utility.
+15. Integrate backup module: add optional pre/post backup stages to pipeline with settings-driven enable/disable.
+16. Complete legacy cleanup: remove global constants from `settings.py` **COMPLETED** - refactored to Settings properties, eliminate `update_db` call from export stage, enforce read-only export.
 
 Date: 2025-09-03 (refreshed)
 

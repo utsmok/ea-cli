@@ -583,7 +583,7 @@ class TestCastValuesForComparison:
         db_item = Mock()
         db_item.last_change = datetime(2023, 1, 1, tzinfo=UTC)
 
-        success = _cast_values_for_comparison("last_change", "2023-06-01", datetime(2023, 1, 1, tzinfo=UTC), db_item)
+        success, new_val, old_val = _cast_values_for_comparison("last_change", "2023-06-01", datetime(2023, 1, 1, tzinfo=UTC), db_item)
 
         assert success is True
 
@@ -592,7 +592,7 @@ class TestCastValuesForComparison:
         db_item = Mock()
         db_item.status = Status.PUBLISHED
 
-        success = _cast_values_for_comparison("status", "Unpublished", Status.PUBLISHED, db_item)
+        success, new_val, old_val = _cast_values_for_comparison("status", "Unpublished", Status.PUBLISHED, db_item)
 
         assert success is True
 
@@ -601,7 +601,7 @@ class TestCastValuesForComparison:
         db_item = Mock()
         db_item.pagecount = 100
 
-        success = _cast_values_for_comparison("pagecount", "150", 100, db_item)
+        success, new_val, old_val = _cast_values_for_comparison("pagecount", "150", 100, db_item)
 
         assert success is True
 
@@ -611,7 +611,7 @@ class TestCastValuesForComparison:
         db_item.pagecount = 100
 
         # This should work fine - int to int casting
-        success = _cast_values_for_comparison("pagecount", "150", 100, db_item)
+        success, new_val, old_val = _cast_values_for_comparison("pagecount", "150", 100, db_item)
         assert success is True
 
 

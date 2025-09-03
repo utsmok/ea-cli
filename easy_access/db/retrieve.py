@@ -194,9 +194,9 @@ def retrieve_full_data(
             WITH CourseAggregations AS (
                 SELECT
                     cdcd.copyright_data_id,
-                    GROUP_CONCAT(DISTINCT CAST(cd.cursuscode AS TEXT), ' | ') as cursuscodes,
-                    GROUP_CONCAT(DISTINCT cd.programme, ' | ') as programmes,
-                    GROUP_CONCAT(DISTINCT cd.name, ' | ') as course_names
+                    GROUP_CONCAT(cd.cursuscode, ' | ') as cursuscodes,
+                    GROUP_CONCAT(cd.programme, ' | ') as programmes,
+                    GROUP_CONCAT(cd.name, ' | ') as course_names
                 FROM copyright_data_course_data cdcd
                 JOIN course_data cd ON cdcd.course_id = cd.cursuscode
                 GROUP BY cdcd.copyright_data_id
@@ -205,10 +205,10 @@ def retrieve_full_data(
             ContactAggregations AS (
                 SELECT
                     cdcd.copyright_data_id,
-                    GROUP_CONCAT(DISTINCT pd.main_name, ' | ') as course_contacts_names,
-                    GROUP_CONCAT(DISTINCT pd.email, ' | ') as course_contacts_emails,
-                    GROUP_CONCAT(DISTINCT f.abbreviation, ' | ') as course_contacts_faculties,
-                    GROUP_CONCAT(DISTINCT org.full_abbreviation, ' | ') as course_contacts_organizations
+                    GROUP_CONCAT(pd.main_name, ' | ') as course_contacts_names,
+                    GROUP_CONCAT(pd.email, ' | ') as course_contacts_emails,
+                    GROUP_CONCAT(f.abbreviation, ' | ') as course_contacts_faculties,
+                    GROUP_CONCAT(org.full_abbreviation, ' | ') as course_contacts_organizations
                 FROM copyright_data_course_data cdcd
                 JOIN course_employee ce ON cdcd.course_id = ce.course_id
                 JOIN person_data pd ON ce.person_id = pd.id
@@ -348,7 +348,7 @@ def retrieve_full_data_original(
             WITH CourseDataAggregated AS (
                 SELECT
                     cdcd.copyright_data_id,
-                    (SELECT GROUP_CONCAT(cursuscode, ' | ') FROM (SELECT DISTINCT CAST(cd.cursuscode AS TEXT) as cursuscode FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS cursuscodes,
+                    (SELECT GROUP_CONCAT(cursuscode, ' | ') FROM (SELECT DISTINCT cd.cursuscode FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS cursuscodes,
                     (SELECT GROUP_CONCAT(programme, ' | ') FROM (SELECT DISTINCT cd.programme FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS programmes,
                     (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT DISTINCT cd.name FROM course_data cd WHERE cd.cursuscode = cdcd.course_id)) AS course_names
                 FROM copyright_data_course_data cdcd
