@@ -28,4 +28,10 @@ Operational notes:
 - Prefer `new-dataflow` branch when acting on the repo.
 - When adding todo items, also add a one-line changelog entry.
 
+External review anchors (2025-09-03):
+- Production/test coupling detected in `db/relations.py` (Mock-aware logic) slated for removal.
+- Need pipeline asyncio wrapper refactor to avoid nested `asyncio.run` in library code.
+- Duplicate `QuerySetMock` (tests/helpers vs test_enrichment) to be consolidated.
+- Pending enrichment TTL tests, raw SQL relations path test, atomic Excel write, bulk_create optimization.
+
 This memory is intentionally concise and focused on actionable anchors.

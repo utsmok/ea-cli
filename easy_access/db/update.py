@@ -584,7 +584,6 @@ async def execute_bulk_database_operations(
 
     if (changelist or new_objects) and update_relations:
         logger.success("Updating relations for all CopyrightItems.")
-        await update_copyright_relations(settings=settings)
 
 
 def record_field_change(
@@ -786,89 +785,6 @@ def _cast_enum_value(value: Any, enum_class: type) -> Any:
     if isinstance(value, enum_class):
         return value.value
     return value
-
-
-async def link_courses_to_copyright_items() -> None:
-    items_w_prefetch = await CopyrightItem.all()
-    logger.info(f"got {len(items_w_prefetch)} items from db")
-
-    # for each of the items, extract the course code (using determine_course_code)
-    # then match with existing course item in db
-    # if missing, add to list to retrieve later
-
-    links_added = 0
-    course_codes_found = 0
-    for item in items_w_prefetch:
-        course_codes = determine_course_code(item.course_code, item.course_name)
-        if not course_codes or len(course_codes) == 0:
-            logger.warning(
-                f"Could not determine course code for item {item.material_id} with input course code {item.course_code} and course name {item.course_name}."
-            )
-        course_codes = list(course_codes)
-
-        for course_code in course_codes:
-            if not course_code:
-                continue
-            try:
-                cursuscode = safe_int(course_code)
-                if cursuscode is None:
-                    continue
-                course_codes_found += 1
-
-                course = await Course.get_or_none(cursuscode=cursuscode)
-                if course:
-                    await item.courses.add(course)
-                    links_added += 1
-            except Exception as e:
-                logger.warning(
-                    f"Error while trying to get course {course_code} for item {item.material_id}: {e}"
-                )
-    logger.success(
-        f"Added {links_added} links to {course_codes_found} found coursecodes."
-    )
-
-
-async def update_duplicate_status() -> None:
-    """
-    For each item, retrieve the PDF
-    if the PDF has value in 'replace_with', set the item's is_duplicate status to True
-    grab the material_id from the replace_with field and store it in the 'replacement_id' field
-    """
-
-    items = await CopyrightItem.all()
-    duplicates = 0
-    for item in items:
-        item.is_duplicate = False
-        # leave replacement_id untouched unless we find a replacement
-        mat_id = item.material_id
-        pdf = await PDF.get_or_none(material_id=mat_id)
-        if pdf:
-            # use the foreign-key id to safely resolve the replacement without awaiting a possibly-None relation
-            rid = getattr(pdf, "replace_with_id", None)
-            replaced_item = None
-            if rid:
-                try:
-                    replaced_item = await PDF.get_or_none(material_id=rid)
-                except Exception:
-                    replaced_item = None
-            if replaced_item:
-                item.is_duplicate = True
-                item.replacement_id = replaced_item.material_id
-                duplicates += 1
-        await item.save(update_fields=["is_duplicate", "replacement_id"])
-    logger.success(f"Updated {duplicates} duplicate statuses.")
-
-
-async def update_copyright_relations(settings: Settings) -> None:
-    """
-    Go through the copyright items in the db
-    use the values of the item fields to find links to other tables.
-    """
-    await ensure_db_inited(settings)
-    await update_duplicate_status()
-
-    await link_courses_to_copyright_items()
-    await Tortoise.close_connections()
 
 
 class DataSource(StrEnum):

@@ -6,7 +6,7 @@ import polars as pl
 from loguru import logger
 
 from easy_access.db.ingest import load_base_data
-from easy_access.db.update import update_copyright_items, update_copyright_relations
+from easy_access.db.update import update_copyright_items
 
 # from easy_access.settings import COURSE_MAPPING, FINE_AMOUNT, SETTINGS, DirSetting # Will be passed
 from easy_access.settings import DirSetting, Settings  # Keep for type hinting
@@ -182,7 +182,6 @@ async def update_db(settings: Settings, datalist: list[pl.DataFrame]):  # Added 
 
     await update_copyright_items(settings, df)
 
-    await update_copyright_relations(settings=settings)  # Pass settings
 
 
 def create_faculty_overviews_sync(

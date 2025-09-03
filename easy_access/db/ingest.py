@@ -414,15 +414,6 @@ async def load_base_data(settings: Settings) -> None:
     await Tortoise.close_connections()
 
 
-async def load_raw_copyright_data(
-    settings: Settings, file: File | pl.DataFrame | None = None
-) -> None:
-    """
-    This function is now a placeholder and will be replaced by the processing logic
-    in the DataPipeline class.
-    """
-    logger.warning("load_raw_copyright_data is deprecated and will be removed.")
-    pass
 
 
 async def load_pdfs(settings: Settings) -> None:

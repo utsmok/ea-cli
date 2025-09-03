@@ -67,6 +67,18 @@ Guidance:
 - [x] Add missing unit tests for export functions (file uniqueness, sheet validation)
 - [ ] Add missing integration tests for end-to-end pipeline execution
 - [ ] Add missing unit tests for maintenance/file_existence module
+ - [ ] Add enrichment TTL selection tests (courses/persons) and orchestrator idempotency
+ - [ ] Add enrichment detail fetch error-path tests (`_fetch_course_details` HTTP 500, malformed JSON)
+ - [ ] Implement atomic Excel write helper and integrate into export paths
+ - [ ] Add pipeline full E2E idempotency test (second run zero deltas)
+ - [ ] Add relations raw SQL link path integration test (no mocked bulk_update)
+ - [ ] Optimize persist_courses/persist_persons to use bulk_create for new rows + add unit test verifying reduced create calls
+ - [ ] Add export dataframe schema validator + unit test (missing required cols raises)
+ - [ ] Add file existence rate_limit_delay=0 edge case test
+ - [ ] Decouple production code from mocks in `db/relations.py` (remove Mock-aware branching); adjust tests
+ - [ ] Refactor pipeline synchronous wrappers to avoid nested asyncio.run when already inside loop
+ - [ ] Consolidate QuerySetMock definitions (import from tests/helpers everywhere)
+ - [ ] Add teardown leak detection & ensure Tortoise close ordering (reduce hangs)
 
 ## Priority: Medium (future improvements & migrations)
 - [ ] Optional: Introduce Alembic for future schema evolution (defer unless new columns required beyond existing timestamp mixins).

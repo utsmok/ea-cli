@@ -72,9 +72,9 @@ def pytest_sessionfinish(session, exitstatus):
     diag_path = os.path.join(ROOT, "hang_diagnostics.txt")
     try:
         with open(diag_path, "a", encoding="utf-8") as diag:
-            from datetime import datetime
+            from datetime import datetime, UTC
 
-            diag.write(f"\n=== pytest_sessionfinish at {datetime.utcnow().isoformat()}Z ===\n")
+            diag.write(f"\n=== pytest_sessionfinish at {datetime.now(UTC).isoformat()}Z ===\n")
 
             # Threads
             try:

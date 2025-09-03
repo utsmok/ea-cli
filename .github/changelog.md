@@ -2,6 +2,9 @@
 
 Recent milestones
 
+- 2025-09-03: Incorporated external code review; added tasks for decoupling test mocks from production (`db/relations.py`), pipeline asyncio wrapper refactor, helper consolidation, and teardown leak detection.
+- 2025-09-03: Consolidated integration plan (export/enrichment/relations/file existence) and refreshed TODO with precise Phase D gaps (atomic Excel writes, enrichment TTL tests, raw SQL relations path, bulk persistence optimization).
+
 - 2025-09-03: Phase D progress — added unit tests for export; improved pytest teardown and diagnostics (`hang_diagnostics.txt`) to reduce intermittent hangs.
 - 2025-09-03: Phase B completed — OSIRIS enrichment implemented (concurrent fetch, TTLs, bulk persistence). Parsing and stale-selection unit tests pending.
 - 2025-09-02: Phase A completed — export orchestrator (`sheets/export.py`) and optimized relations (`easy_access/db/relations.py`) implemented and integrated; manual export validation completed.

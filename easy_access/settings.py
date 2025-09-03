@@ -1317,12 +1317,4 @@ def load_osiris_data() -> dict[str, Any] | None:
 install(show_locals=True)
 
 # initialize settings from (default: read from 'settings.yaml')
-
 SETTINGS: Settings = Settings()
-# SAMPLESETTINGS: SampleSettings = SampleSettings()
-
-# create global variables from certain settings for easier access [NOTE: remove these and replace with SETTINGS.<attr> in the future for consistency/robustness]
-DEPARTMENT_MAPPING: dict[str, str] = SETTINGS.university_settings.department_mapping
-COURSE_MAPPING: dict[str, dict[str, str]] = SETTINGS.university_settings.course_mapping
-FINE_AMOUNT: float = SETTINGS.fine_amount
-OSIRIS_DATA: dict[str, Any] | None = load_osiris_data()

@@ -500,7 +500,7 @@ class StagedCopyrightItem(Model, TimestampMixin):
 
     """
 
-    material_id = fields.IntField(pk=True)
+    material_id = fields.IntField(primary_key=True)
     period = fields.CharField(max_length=255, null=True)
     department = fields.CharField(max_length=2048, null=True)
     course_code = fields.CharField(max_length=255, null=True)
@@ -544,7 +544,7 @@ class StagedFacultyUpdate(Model, TimestampMixin):
     Staging table for updates from faculty sheets.
     """
 
-    material_id = fields.IntField(pk=True)
+    material_id = fields.IntField(primary_key=True)
     manual_classification = fields.CharField(max_length=2048, null=True)
     remarks = fields.CharField(max_length=10000, null=True)
     workflow_status = fields.CharField(max_length=255, null=True)
@@ -560,7 +560,7 @@ class StagedProcessingFailure(Model, TimestampMixin):
     (as JSON), and an error message to aid debugging/retry.
     """
 
-    id = fields.IntField(pk=True)
+    id = fields.IntField(primary_key=True)
     material_id = fields.IntField(null=True, db_index=True)
     staged_payload = fields.JSONField(null=True)
     error_message = fields.CharField(max_length=2000, null=True)

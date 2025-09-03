@@ -1,79 +1,102 @@
-# Export, Enrichment & File Existence Integration Plan
+# Export, Enrichment & File Existence Integration Plan (Concise)
 
-Date: 2025-09-02
+Date: 2025-09-03 (refreshed)
 
-This document analyses the missing functional areas (Excel exports, OSIRIS & course enrichment, file existence verification) after the dataflow refactor and defines a concrete, testable reintegration plan aligned with the new staging -> processing architecture.
+Purpose: Single source of truth for the post‑refactor export, enrichment, relations & file‑existence stages, their status, remaining gaps, and acceptance criteria.
 
-## 1. Current State (Post‑Refactor) - Updated Analysis
-Pipeline stages implemented:
-- ingest_raw_data_async -> loads raw export into staging
-- ingest_faculty_updates_async -> loads data-entry edits into staging
-- process_data_async -> merges staged rows into main tables via refactored merge logic
+## 1. Current State
+Implemented pipeline stages (async, idempotent):
+1. ingest_raw_data_async
+2. ingest_faculty_updates_async
+3. process_data_async
+4. enrich_async (OSIRIS courses + persons)
+5. update_relations_async (duplicates + course links)
+6. refresh_file_existence_async (Canvas file API)
+7. export_reports_async (faculty/programme/all-items + overviews)
 
-**Critical Findings from Code Review**:
-- **Relations functions exist** but need extraction: `link_courses_to_copyright_items()` and `update_duplicate_status()` are in `db/update.py` with N+1 query patterns (await per item in loop).
-- **Export functions completely missing**: Legacy `old_main.py` references `create_export_sheet` but function doesn't exist in current codebase; all export orchestration removed.
-- **Pipeline export stage stubbed**: `pipeline.py` shows `# await self.export_reports_async() # To be implemented`.
-- **Sheet formatting mature**: `DataEntrySheet` class fully functional with dropdown validation, width calculation, table styling.
-- **Legacy export workflow complex**: `old_main.py` shows sophisticated sheet types (faculty, program, overview, all_items) with file uniqueness handling.
+Status summary:
+- Phase A (export & relations): COMPLETE ✅
+- Phase B (OSIRIS enrichment core): COMPLETE ✅ (selection & parsing tests still missing)
+- Phase C (file existence): COMPLETE ✅ (broad unit + integration tests present)
+- Phase D (performance, documentation & residual test gaps): IN PROGRESS 🚧
 
-**✅ PHASE A COMPLETED**: Successfully implemented export stage with `sheets/export.py`, optimized relations stage with `db/relations.py`, integrated both into pipeline with proper database connection management. Manual testing confirmed Excel file generation with data entry sheets and proper file uniqueness handling. Fixed RuntimeError "This event loop is already running" by converting `create_faculty_overviews` to async and adding sync wrapper for backward compatibility.
+## 2. Design Principles (Retained)
+- Idempotent reruns; zero side‑effect second pass.
+- Separation of retrieval / transform / persist / export.
+- Settings‑driven concurrency + TTLs.
+- Incremental refresh (only stale / missing).
+- Observability via structured log counts + durations.
+- Testability with mocked IO (httpx) & small fixtures.
 
-**✅ PHASE B COMPLETED**: Successfully implemented complete OSIRIS enrichment system with concurrent HTTP requests, TTL-based freshness policies, bulk database persistence, pipeline integration with CLI flags, and robust error handling. All core functionality working, unit tests marked as future enhancement.
+## 3. Implemented Modules
+| Module | Role | Notable Gaps |
+|--------|------|-------------|
+| `easy_access/sheets/export.py` | Orchestrates all Excel exports | Lacks atomic write + dataframe validation helper |
+| `easy_access/enrichment/osiris.py` | Course & person enrichment (concurrent) | TTL selection + `_fetch_course_details` path tests missing; per-row create (no bulk) |
+| `easy_access/db/relations.py` | Duplicate detection & course linking (batch) | Raw SQL link path not covered by tests |
+| `easy_access/maintenance/file_existence.py` | TTL-based Canvas file existence | Mostly covered; add rate limiting edge test (0 delay) |
+| `easy_access/pipeline.py` | Stage orchestrator + CLI flags | Full end‑to‑end idempotency test missing |
 
-**✅ PHASE C COMPLETED**: Successfully implemented file existence verification with TTL-based freshness policies, concurrent processing, database integration, pipeline integration, and CLI flags. Tested CLI functionality and confirmed no errors.
+## 4. Confirmed Test Coverage (Snapshot)
+- Export: unit + integration (uniqueness, orchestration) ✅
+- Relations: unit tests for duplicate + link + orchestration (mocked bulk paths) ✅ (missing raw-SQL path)
+- File existence: selection, single check, batch update, refresh orchestration (incl. concurrency & errors) ✅
+- Enrichment: fetch_course_data, fetch_person_data, persist_* basics ✅ (selection/TTL + detail fetch + orchestrator not explicitly asserted)
 
-Not yet implemented / incomplete:
-- **Phase D: Performance & Documentation** - Optimize performance, improve persistence, add comprehensive tests, and update documentation.
+## 5. Remaining High-Value Gaps
+1. Enrichment selection TTL logic tests (courses & persons) + negative cases (no stale, all stale, mixed age).
+2. Enrichment `_fetch_course_details` branch & error handling (HTTP 500 / malformed JSON) tests.
+3. Enrichment orchestrator end-to-end test with mocked HTTP + ensuring persons fetched only from returned course data.
+4. Relations raw SQL link creation path integration test (no mocked `bulk_update`).
+5. Pipeline full E2E test: run all stages twice; assert second run performs zero new links / zero new enrich ops (log or DB delta assertion).
+6. Export atomic write helper (temp file + rename) with failure simulation test.
+7. Export dataframe schema validator + test (required columns present; raise early if missing).
+8. Bulk insertion optimization for `persist_courses` / `persist_persons` (replace per-item `create` with `bulk_create`) + perf assertion (time or call count).
+9. Optional: add lightweight performance benchmark harness (timing a mid-size dataset) to guard regressions (behind marker, not default).
+10. Documentation: architecture diagram (PNG/SVG), README section on stage idempotency & CLI flags, minimal troubleshooting table.
+ 11. Decouple production code from test mocks in `db/relations.py` (remove Mock-aware branching) + adjust tests.
+ 12. Refactor pipeline synchronous wrappers to avoid nested `asyncio.run` misuse; provide loop-safe dispatcher.
+ 13. Consolidate duplicated `QuerySetMock` (remove local definition in `tests/test_enrichment.py`).
+ 14. Strengthen teardown reliability: isolate aiosqlite / Tortoise connection closure ordering; add leak detection utility.
 
-## 2. Design Principles
-1. Deterministic, idempotent stages: Each stage can be re-run safely.
-2. Separation of concerns: Retrieval, transformation, persistence, and export are distinct modules.
-3. Observability: Structured logging (counts, durations, deltas), minimal broad exception masking.
-4. Incremental where possible: Re-check only missing/expired file existence or OSIRIS data.
-5. Settings-driven: Concurrency limits, TTLs, enable/disable flags.
-6. Testability: Unit + integration tests with small fixtures, no reliance on external network for core logic (mock httpx).
+## 6. Risks / Technical Debt
+- Per-row persistence may become bottleneck at scale (optimize before large dataset adoption).
+- Lack of atomic Excel writes risks partial files on crash / interruption.
+- Absence of idempotency regression test could hide duplicate linking regressions.
+- Enrichment scraping selectors brittle to upstream HTML changes (need selector health test / fallback strategy).
+- Test-contaminated production logic in `db/relations.py` increases complexity & obscures true runtime paths.
+- Repeated `asyncio.run` in library code limits embedding in other async systems (potential event loop errors).
+- Duplicate test helpers risk divergent behavior (QuerySetMock variants).
 
-## 3. Proposed New/Updated Modules
-| Area | Module | Responsibility |
-|------|--------|---------------|
-| Export Orchestration | `easy_access/sheets/export.py` | High-level export orchestrator (faculties, programmes, all items) invoking existing sheet helpers. |
-| OSIRIS Enrichment | `easy_access/enrichment/osiris.py` (new subpkg) | Split retrieval (courses), person enrichment, merge, persistence, TTL logic. |
-| Relations Update | `easy_access/db/relations.py` | Duplicate detection, course linking, future: staff/course person linkage. |
-| File Existence | `easy_access/maintenance/file_existence.py` | Incremental file existence refresh + TTL policy wrapper around existing core checker. |
-| Pipeline | `easy_access/pipeline.py` | Add async stages: `enrich_async()`, `update_relations_async()`, `refresh_file_existence_async()`, `export_reports_async()` with sync wrappers. |
+## 7. Acceptance Criteria (Final State)
+| Area | Criteria |
+|------|----------|
+| Enrichment | TTL selection & detail fetch paths fully unit-tested; bulk create optimization implemented |
+| Relations | Both mocked and raw-SQL paths covered; idempotent second-run verified |
+| File Existence | Concurrency + rate-limiting edge (0 delay) tested; metrics logged |
+| Export | Atomic write + schema validation; uniqueness & rerun behavior tested |
+| Pipeline | Full E2E (all stages) green twice in a row; second run zero deltas |
+| Docs | Updated README + diagram + troubleshooting; plan & TODO reflect reality |
 
-## 4. Export Stage Detailed Plan
-### Inputs
-- DB (post-processing) via retrieval functions (`retrieve_full_data`, or a new optimized retrieval returning per-faculty partitions).
+## 8. Immediate Next Steps (Ordered)
+1. Add enrichment selection & TTL tests (courses/persons) + orchestrator test.
+2. Implement atomic_excel_save(file) utility + integrate into export paths.
+3. Decouple `db/relations.py` from mocks; refactor tests accordingly (maintain coverage for duplicate + linking + raw SQL path).
+4. Refactor pipeline sync wrappers to be loop-aware (avoid nested asyncio.run) and add regression test.
+5. Add idempotent pipeline E2E double-run test (assert zero deltas).
+6. Add bulk_create optimization for new courses/persons (retain safe fallback) + unit test verifying call counts.
+7. Cover relations raw SQL path by disabling / not mocking `bulk_update` in integration test.
+8. Consolidate `QuerySetMock` usage (remove duplication).
+9. Enhance teardown diagnostics to isolate any lingering connections and threads; add automated leak assertion.
 
-### Outputs
-- Per faculty overview sheet (Complete Data + Data Entry sheet) – file naming: `{FACULTY}_total_overview_updated_{DATE}.xlsx`.
-- Per programme sheets under `faculty/per_programme/` (grouping by course_mapping).
-- All items sheet (optionally only new items since last run – later improvement).
+## 9. Deferred / Optional Enhancements
+- Structured metrics emitter (JSON logs -> future dashboard).
+- Materialized view for export retrieval if row counts grow (>100k) to reduce memory.
+- Retry / backoff strategy for transient 5xx in enrichment detail fetch.
 
-### Implementation Steps
-1. Create `sheets/export.py` with functions:
-   - `gather_faculty_data(settings) -> dict[str, pl.DataFrame]` (DB fetch + fac filtering).
-   - `export_faculty_overviews(settings, faculty_data)` (leverages existing `create_faculty_overviews`).
-   - `export_all_items(settings)`.
-2. Refactor duplicated logic now in legacy `old_main.py` but ensure use of standardized functions in `sheets/analysis.py` & `sheets/sheet.py` (minimal changes – adapt to DB‑first flow).
-3. Add `export_reports_async()` to pipeline calling the above.
-4. Add CLI flag(s) (already partial: `--export-only`) to include new stage; adjust run sequence ordering: enrichment -> relations -> file existence -> export.
-5. Tests:
-   - Unit: ensure file naming uniqueness helper works; ensure exported DataFrames have required columns.
-   - Integration: run minimal pipeline on sample dataset; assert files created under temp directory; open a sheet and validate presence of data entry sheet with dropdown columns.
-
-### Edge Cases
-- Faculty with zero rows: skip and log.
-- Programme course mapping referencing department with no rows: skip (current logic already covers this).
-- Re-run same day: unique file naming adds suffix `_1`, `_2`, etc.
-
-# Export, Enrichment & File Existence Integration Plan
-
-Date: 2025-09-03
-
-This concise plan documents the current state of the export/enrichment/file-existence reintegration, the design principles, and the minimal, testable implementation plan for the remaining work.
+## 10. Maintenance Notes
+- All new tests should avoid real network; mock `httpx.AsyncClient`.
+- Keep test data small; prefer deterministic timestamps via `freezegun` (future) or manual patching of `datetime.now`.
 
 ## Current state
 - Ingest and processing pipeline stages are implemented (staging -> processing -> main tables).
@@ -95,11 +118,8 @@ This concise plan documents the current state of the export/enrichment/file-exis
 - `easy_access/maintenance/file_existence.py` — file existence TTL checking (implemented).
 - `easy_access/pipeline.py` — pipeline stages: ingest, process, enrich, relations, file-existence, export (implemented with async entrypoints and CLI flags).
 
-## Remaining work (high priority)
-1. Add unit tests for enrichment functions (HTML parsing, stale-selection logic).
-2. Add unit tests for relations functions (batch linking / N+1 elimination).
-3. Add integration tests for end-to-end pipeline runs in a temp dir (export file assertions).
-4. Performance tuning (bulk M2M linking, export memory usage) — Phase D.
+## (Superseded Older Section) Remaining work (see sections above instead)
+This section is kept for reference; should not be used directly.
 
 ## Export notes
 - Export files follow the existing, validated patterns: per-faculty overviews, per-programme sheets, and an all-items sheet. File-uniqueness and data-entry sheet formatting implemented.
@@ -120,14 +140,8 @@ This concise plan documents the current state of the export/enrichment/file-exis
 6. refresh_file_existence_async
 7. export_reports_async
 
-## Tests and verification
-- Priorities: add unit tests for enrichment and relations, then integration tests for exports. Use mocked HTTP for enrichment and temp directories for export verification.
-
----
-Status: concise plan saved. Phase D remains for performance and documentation work.
-2. **Architecture Diagrams**: Data flow, module relationships
-3. **API Documentation**: Function signatures, usage examples
-4. **Deployment Guide**: Setup, configuration, troubleshooting
+## Tests and verification (updated)
+- See sections 4–8 above for precise gaps and priorities.
 
 ### Implementation Steps
 1. Add missing unit tests for all modules
@@ -177,5 +191,3 @@ See updated `.github/todo.md` for revised, DB‑centric tasks and sheet refactor
 - Enrichment stage stores JSON caches, skips already fresh entries, and exposes enrichment counts.
 - File existence stage processes only selected items & persists results correctly.
 
----
-Prepared to guide implementation phases; update this document as phases complete.

@@ -57,8 +57,6 @@ dependencies = [
 [tool.uv.sources]
 ea-cli = { workspace = true }
 
-[tool.uv.workspace]
-members = ["pdf_downloads"]
 
 
 [tool.ruff.lint]
