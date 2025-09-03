@@ -11,6 +11,10 @@ Guidance:
 - [x] Route complex staged rows into canonical merge path: ensure `process_staged_raw_data` delegates non-trivial merges to `update_copyright_items` (use `copyright_item_from_dict` and `merge_rules`). (high)
 - [x] Add logging improvements for staged processing (include material_id, faculty, stage, and compact error traces). (high)
 - [x] Implement failure-inspection/retry helper: admin CLI or small script to list `StagedProcessingFailure` rows and requeue or attempt automated retries. (high)
+ - [x] Improve pytest teardown to cancel pending tasks, shutdown async generators, remove Loguru handlers and close Tortoise connections (added diagnostic logging). (2025-09-03)
+ - [ ] Investigate intermittent Tortoise-related pytest teardown hang observed when running `uv run pytest` on some environments; capture active threads, pending tasks, and Tortoise connection state. (high)
+ - [x] Add file-based diagnostics and a short grace-and-recheck in pytest session teardown to reduce hangs and capture thread stacks for post-mortem analysis (added 2025-09-03).
+ - [ ] Continue investigation of intermittent Tortoise-related pytest teardown hang: analyze `hang_diagnostics.txt` outputs across CI environments, attempt targeted aiosqlite shutdown or extend grace period as needed. (high)
 
 ## Priority: High (reliability & observability)
 - [x] Refactor `update_copyright_items` function: break down the 400+ line monolithic function into smaller, testable components (extract nested functions, externalize field definitions, simplify comparisons). (high)

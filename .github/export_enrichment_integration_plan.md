@@ -69,180 +69,62 @@ Not yet implemented / incomplete:
 - Programme course mapping referencing department with no rows: skip (current logic already covers this).
 - Re-run same day: unique file naming adds suffix `_1`, `_2`, etc.
 
-## 5. OSIRIS / People Enrichment (Revised – DB Centric)
-### Key Update
-The repository already contains fully normalized models for enrichment data (`Course`, `Person`, `CourseEmployee`, `Programme`, `Organization`, `MissingCourse`) plus ingestion helpers (`load_osiris_data`, `load_person_data`, `load_linked_persons_for_courses`). Therefore we DO NOT need JSON cache centric logic for steady‑state operation. JSON files can be treated as an optional import source (legacy) only; enrichment should query & update the relational tables directly.
+# Export, Enrichment & File Existence Integration Plan
 
-### Current Gaps
-1. The large legacy function `update_osiris_data` both scrapes and writes JSON; it is not integrated with the staging/pipeline and duplicates logic now represented in models.
-2. Linking between `CopyrightItem.course_code` values and `Course` objects is partially handled by `link_courses_to_copyright_items` but not optimized (N+1 queries) and not part of the pipeline.
-3. Person ↔ Course linkage relies on `load_linked_persons_for_courses` but is not surfaced as an explicit pipeline stage.
-4. No standardized enrichment freshness policy. However all enrichment models inherit `TimestampMixin` (`created_at`, `modified_at`) which we can exploit as implicit freshness timestamps.
+Date: 2025-09-03
 
-### Revised Enrichment Strategy
-Pipeline enrichment stage will:
-1. (Optional) Scrape missing course / person data ONLY for course codes (derived via `determine_course_code`) that lack a `Course` row OR whose `modified_at` is older than a TTL (configurable, default disabled).
-2. Persist new/updated `Course` rows directly (no JSON). Reuse or refactor scraping logic into small functions: `fetch_course(code) -> dict`, `fetch_person(name) -> dict`.
-3. Ensure course-person-role relationships by upserting `Person` then `CourseEmployee` rows (role classification logic preserved from legacy parser; roles: contact, docent, examiner, tutor, unknown_role).
-4. Link newly (or previously) ingested `Course` objects to `CopyrightItem`s using numeric `cursuscode` extraction as part of the relations stage.
+This concise plan documents the current state of the export/enrichment/file-existence reintegration, the design principles, and the minimal, testable implementation plan for the remaining work.
 
-### Decomposition (DB Aware)
-`gather_target_course_codes(settings) -> set[int]` (distinct from items or explicit override)
-`select_missing_or_stale_courses(settings, codes, ttl_days|None) -> set[int]`
-`async fetch_and_parse_courses(codes) -> list[CourseData]`
-`derive_person_names(course_payloads) -> set[str]`
-`select_missing_or_stale_persons(names, ttl_days|None) -> set[str]`
-`async fetch_and_parse_persons(names) -> list[PersonData]`
-`persist_courses(courses)` / `persist_persons(persons)` / `persist_course_employees(relations)` (bulk create with `on_conflict` if supported; otherwise prefetch existing -> diff -> create)
+## Current state
+- Ingest and processing pipeline stages are implemented (staging -> processing -> main tables).
+- Phase A (export + relations) completed and manually validated.
+- Phase B (OSIRIS enrichment) implemented; unit tests for parsing/staleness selection are still outstanding.
+- Phase C (file-existence checking) implemented.
+- Phase D (performance, docs, comprehensive tests) is remaining.
 
-### Freshness (TTL) Policy
-Use `modified_at` from the corresponding table; TTL comparison done in SQL (or Polars after retrieval) to reduce Python filtering overhead. Config keys (added to Settings):
-`enrichment.course_ttl_days`, `enrichment.person_ttl_days` (None or 0 disables refresh based on age).
+## Design principles
+- Deterministic, idempotent stages.
+- Clear separation of retrieval, transformation, persistence, and export.
+- Settings-driven concurrency and TTLs.
+- Observability: counts, durations, deltas.
 
-### Error Handling & Observability
-- Count: requested, fetched, created, updated for each entity type.
-- Structured log per stage (courses, persons, relations) with duration & throughput.
+## Modules (implemented or planned)
+- `easy_access/sheets/export.py` — export orchestrator (implemented).
+- `easy_access/enrichment/` — OSIRIS/person enrichment (implemented; tests pending).
+- `easy_access/db/relations.py` — optimized relations (implemented).
+- `easy_access/maintenance/file_existence.py` — file existence TTL checking (implemented).
+- `easy_access/pipeline.py` — pipeline stages: ingest, process, enrich, relations, file-existence, export (implemented with async entrypoints and CLI flags).
 
-### Testing
-- Unit: parser for course payload, parser for person page HTML (pure input → dict).
-- Unit: selection logic for stale vs fresh given synthetic timestamps.
-- Integration: mocked httpx scenario with mixed existing & missing records verifying incremental persistence.
+## Remaining work (high priority)
+1. Add unit tests for enrichment functions (HTML parsing, stale-selection logic).
+2. Add unit tests for relations functions (batch linking / N+1 elimination).
+3. Add integration tests for end-to-end pipeline runs in a temp dir (export file assertions).
+4. Performance tuning (bulk M2M linking, export memory usage) — Phase D.
 
-### Removal of JSON Tasks
-Tasks related to JSON cache diffing, atomic JSON writes, and JSON-based TTL have been removed from the TODO in favor of direct DB usage.
+## Export notes
+- Export files follow the existing, validated patterns: per-faculty overviews, per-programme sheets, and an all-items sheet. File-uniqueness and data-entry sheet formatting implemented.
 
-## 6. Relations Update Stage (Code-Informed)
-**Existing Functions Found**: `link_courses_to_copyright_items()` and `update_duplicate_status()` in `db/update.py` (lines 737+) with current N+1 patterns.
+## Enrichment notes
+- Enrichment is DB-centric: fetch missing/stale Course and Person records, persist directly to models, then run relations linking.
+- Settings keys used: `enrichment.course_ttl_days`, `enrichment.person_ttl_days`.
 
-### Current Implementation Issues
-- `link_courses_to_copyright_items()`: Loops through all items, awaits `Course.get_or_none()` per course code per item
-- `update_duplicate_status()`: Loops through all items, awaits `PDF.get_or_none()` per item, then saves each item individually
-- Both functions called by `update_copyright_relations()` but not integrated into new pipeline
+## File existence notes
+- Uses `file_exists` and `last_canvas_check` fields; re-check when NULL or older than TTL.
 
-### Optimized Relations Module (`db/relations.py`)
-Extract and optimize existing functions:
-`async def update_duplicates(settings)` –
-1. Batch prefetch all PDFs with `replace_with_id` (single query with filter)
-2. Build replacement mapping dict in memory
-3. Bulk update only items where duplicate status changes (compare before/after)
-
-`async def link_courses(settings)` –
-1. Query items missing course links using anti-join or LEFT JOIN WHERE course_id IS NULL
-2. Extract all potential course codes using `determine_course_code()` in Polars (vectorized)
-3. Batch fetch all relevant Course objects (single query with IN clause)
-4. Build M2M relationships in memory, then bulk create CourseItem links
-5. Log link counts per course for observability
-
-`async def update_relations_async(settings)` – orchestrator calling both functions sequentially
-Expose `async def update_relations_async(settings)` orchestrating both; call after enrichment (so new course codes may exist) and before export.
-
-## 7. File Existence Verification
-### Leverage Existing Schema
-Model already exposes `file_exists` (bool) and `last_canvas_check` (datetime). So TTL requires no schema change; we compute age using `last_canvas_check` and re-check when NULL or older than `file_exists.ttl_days` (settings key to add).
-
-### Proposed Flow
-`refresh_file_existence_async(settings, force: bool=False)`:
-1. Select candidate items via query filters (NULL `file_exists` OR `last_canvas_check < now()-ttl` OR force) limiting batch size.
-2. Use existing concurrency pattern (aiometer/httpx); reuse extraction logic for file_id but move it to a pure helper so both DB and Excel paths share code.
-3. Persist updates with one of:
-   - Direct bulk update using Tortoise `.bulk_update` if supported for changed fields.
-   - Fallback: per-item update only when status changed (compare old vs new in memory first).
-4. Log hit ratio & mean requests/sec.
-
-### Future Optimization (Optional)
-Maintain rolling schedule (e.g. cap daily checks) – not in immediate phase.
-
-### Testing
-- Mock httpx client returning 200/404 pattern; verify join logic and counts.
-
-## 8. Pipeline Ordering (Revised)
+## Pipeline ordering (final)
 1. ingest_raw_data_async
 2. ingest_faculty_updates_async
 3. process_data_async
-4. enrich_async (OSIRIS) [optional via flag]
-5. update_relations_async (duplicates, course links)
-6. refresh_file_existence_async (optional or scheduled)
+4. enrich_async (optional via flag)
+5. update_relations_async
+6. refresh_file_existence_async
 7. export_reports_async
 
-CLI flags to control inclusion (already partial for ingest/process/export): add `--no-enrich`, `--no-file-exists`, `--no-relations` if needed.
+## Tests and verification
+- Priorities: add unit tests for enrichment and relations, then integration tests for exports. Use mocked HTTP for enrichment and temp directories for export verification.
 
-## 9. Incremental Delivery Phases
-Phase A (High Priority / Minimal Viable): ✅ **COMPLETED**
-- Implement export stage (faculties, programmes, all_items) using existing helpers.
-- Integrate relations update stage (move logic, ensure idempotent).
-- **Status**: Successfully implemented with `sheets/export.py`, `db/relations.py`, pipeline integration, and manual testing validation.
-
-Phase B (Current Priority): **IN PROGRESS** - DB-centric enrichment stage
-- ✅ **COMPLETED**: Added enrichment settings configuration to Settings class (EnrichmentSettings dataclass with course_ttl_days/person_ttl_days, parser method, enum integration)
-- ✅ **COMPLETED**: Created `easy_access/enrichment/` module with OSIRIS course fetching functions (`fetch_course_data`, `_fetch_course_details`, helper functions)
-- Implement TTL-based freshness policy using `modified_at` field
-- Add `enrich_async` pipeline stage with `--no-enrich` CLI flag
-- Unit tests for stale selection & HTML parsing (mocked httpx)
-- **Next Steps**:
-  1. ✅ Analyze existing `update_osiris_data` function for reusable components
-  2. ✅ Create enrichment module structure with osiris.py
-  3. Implement course/person fetching with TTL logic
-  4. Add pipeline integration and CLI flags
-  5. Add comprehensive tests
-
-Phase C:
-- Add file existence stage (TTL using existing `last_canvas_check`).
-- Add tests (mock httpx) for selection & persistence.
-
-Phase D:
-- Performance tuning (bulk update strategies, reduce N+1 in linking functions).
-- Optional: create consolidated retrieval view/function for export to minimize Python-side joins.
-
-## 10. Risks & Mitigations
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Large OSIRIS requests rate-limited | Slow / failures | Bounded semaphore, backoff retry wrapper. |
-| Excel writing race conditions (parallel runs) | Corrupted files | Use unique temp file & atomic rename; maintain per-run output dir optional (future). |
-| Network dependency in tests | Flaky CI | Mock httpx layer; isolate network code behind small functions. |
-| Inefficient sheet generation (repeated formatting) | Slow exports | Refactor sheet formatting into reusable style registry & vectorized width calc. |
-| Memory spikes exporting very large datasets | OOM risk | Stream partitioned faculty exports; avoid holding all faculty DataFrames simultaneously (process sequentially). |
-
-
-## 10. Phase D: Performance Tuning, Persistence & Documentation (Next Priority)
-### Overview
-Focus on optimizing performance, improving data persistence, adding comprehensive tests, and updating documentation for production readiness.
-
-### Key Components
-- **Performance Optimization**: Bulk operations, memory optimization, query optimization
-- **Data Persistence**: Improved bulk updates, atomic operations, error recovery
-- **Comprehensive Testing**: Unit tests, integration tests, performance benchmarks
-- **Documentation**: README updates, API documentation, architecture diagrams
-
-### Performance Tuning
-1. **Bulk M2M Linking**: Optimize relations stage with batch prefetch and bulk updates
-2. **Export Memory Optimization**: Stream processing for large datasets, avoid memory spikes
-3. **Query Optimization**: Add database indexes, optimize N+1 queries
-4. **File Existence Rate Limiting**: Optional scheduling to prevent API rate limits
-
-### Data Persistence Improvements
-1. **Atomic Bulk Updates**: Direct bulk update operations for file_exists
-2. **Transaction Optimization**: Better transaction boundaries and rollback handling
-3. **Error Recovery**: Improved failure handling and retry mechanisms
-4. **Data Consistency**: Validation and integrity checks
-
-### Testing Expansion
-1. **Missing Unit Tests**:
-   - Enrichment functions (stale selection, HTML parsing)
-   - Relations functions (batch operations verification)
-   - Export functions (file uniqueness, sheet validation)
-   - Maintenance functions (file existence logic)
-
-2. **Integration Tests**:
-   - End-to-end pipeline execution
-   - Cross-stage data consistency
-   - Performance benchmarks
-
-3. **Mock Testing**:
-   - HTTP request mocking for enrichment
-   - Database operation mocking for performance tests
-
-### Documentation Updates
-1. **README**: Pipeline stages, CLI flags, configuration options
+---
+Status: concise plan saved. Phase D remains for performance and documentation work.
 2. **Architecture Diagrams**: Data flow, module relationships
 3. **API Documentation**: Function signatures, usage examples
 4. **Deployment Guide**: Setup, configuration, troubleshooting
