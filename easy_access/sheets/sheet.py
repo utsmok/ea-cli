@@ -74,12 +74,22 @@ def read_copyright_export(
         latest_file_date = file.created.strftime("%Y-%m-%d")
         raw_copyright_data = _read_excel_quiet(file.path, sheet_name=None)
         copyright_data = standardize_dataframe(raw_copyright_data)
+
+        # Only set default workflow_status if the column doesn't exist or is all null/empty
+        columns_to_add = {
+            "retrieved_from_copyright_on": [latest_file_date] * len(copyright_data),
+        }
+
+        if "workflow_status" not in copyright_data.columns:
+            columns_to_add["workflow_status"] = ["ToDo"] * len(copyright_data)
+        elif copyright_data["workflow_status"].is_null().all() or (
+            copyright_data["workflow_status"].str.strip_chars().eq("").all()
+        ):
+            columns_to_add["workflow_status"] = ["ToDo"] * len(copyright_data)
+
         copyright_data = copyright_data.with_columns(
-            pl.Series(
-                "retrieved_from_copyright_on",
-                [latest_file_date] * len(copyright_data),
-            ),
-            pl.Series("workflow_status", ["ToDo"] * len(copyright_data)),
+            **{k: pl.Series(k, v) for k, v in columns_to_add.items()},
+        ).with_columns(
             pl.col("last_change")
             .str.replace(r"^-", "")
             .str.strip_chars()

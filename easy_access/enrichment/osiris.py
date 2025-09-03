@@ -469,13 +469,50 @@ async def enrich_async(settings: Settings) -> None:
 
 def _process_teacher_items(items) -> set[str]:
     """Helper function to process teacher items into a consistent set format"""
+    teacher_names = set()
+
     if isinstance(items, list):
-        return set(items)
+        for item in items:
+            if isinstance(item, dict):
+                # Try to extract name from common dictionary keys
+                name = None
+                for key in ['name', 'docent', 'teacher', 'person_name', 'main_name']:
+                    if key in item and item[key]:
+                        name = str(item[key]).strip()
+                        break
+                # If no specific key found, try to find any string value
+                if not name:
+                    for value in item.values():
+                        if isinstance(value, str) and value.strip():
+                            name = value.strip()
+                            break
+                if name:
+                    teacher_names.add(name)
+            elif isinstance(item, str):
+                teacher_names.add(item.strip())
     elif isinstance(items, str):
-        return {items}
+        teacher_names.add(items.strip())
     elif isinstance(items, set):
-        return items
-    return set()
+        # Handle existing sets
+        for item in items:
+            if isinstance(item, str):
+                teacher_names.add(item.strip())
+    elif isinstance(items, dict):
+        # Handle single dictionary
+        name = None
+        for key in ['name', 'docent', 'teacher', 'person_name', 'main_name']:
+            if key in items and items[key]:
+                name = str(items[key]).strip()
+                break
+        if not name:
+            for value in items.values():
+                if isinstance(value, str) and value.strip():
+                    name = value.strip()
+                    break
+        if name:
+            teacher_names.add(name)
+
+    return teacher_names
 
 
 def _extract_languages(voertalen_data) -> list[str]:
