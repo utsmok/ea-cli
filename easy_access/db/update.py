@@ -19,9 +19,7 @@ from easy_access.db.base import (
     ensure_db_inited,
 )
 from easy_access.db.models import (
-    PDF,
     CopyrightItem,
-    Course,
     Infringement,
     ItemUpdate,
     StagedCopyrightItem,
@@ -36,7 +34,6 @@ from easy_access.merge_rules import (
 )
 from easy_access.settings import Settings
 from easy_access.utils import (
-    determine_course_code,
     safe_compare_greater,
     safe_enum,
     safe_float,
@@ -543,7 +540,7 @@ async def execute_bulk_database_operations(
         changed_fields.append("modified_at")
 
         # process in batches of max 50:
-        for change_batch in batched(changelist, 50):
+        for change_batch in batched(changelist, 500):
             logger.info(
                 f"Updating fields {changed_fields} for {len(change_batch)} items that were changed."
             )
@@ -560,7 +557,7 @@ async def execute_bulk_database_operations(
             logger.info(f"items modified by {user_email}")
 
         for update_batch in batched(
-            [(mat_id, changes) for mat_id, changes in updates.items()], 50
+            [(mat_id, changes) for mat_id, changes in updates.items()], 500
         ):
             logger.info(f"Updating {len(update_batch)} changelog items in db.")
 
@@ -929,8 +926,7 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
     processed_ids: list[int] = []
 
-    # Process in batches to limit transaction size
-    for batch_idx, batch in enumerate(batched(staged_items, 50)):
+    for batch_idx, batch in enumerate(batched(staged_items, 500)):
         batch_processed_ids: list[int] = []
         complex_item_dicts: list[dict] = []
         logger.info(f"Processing batch {batch_idx} with {len(batch)} items")
@@ -947,35 +943,36 @@ async def process_staged_raw_data(settings: Settings) -> None:
                     mid = item_dict.get("material_id")
                     faculty_val = item_dict.get("faculty")
                     if mid is None:
-                        logger.warning(
-                            f"[STAGED][SKIP] material_id=None, faculty={faculty_val}, stage=raw_data: Missing required material_id"
-                        )
+                        # logger.warning(
+                        #    f"[STAGED][SKIP] material_id=None, faculty={faculty_val}, stage=raw_data: Missing required material_id"
+                        # )
                         continue
 
-                    logger.debug(
-                        f"[STAGED][PROCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Starting processing"
-                    )
+                    # logger.debug(
+                    #    f"[STAGED][PROCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Starting processing"
+                    # )
 
                     existing_item = await CopyrightItem.get_or_none(material_id=mid)
 
                     if not existing_item:
                         # Create new item using canonical normalizer
-                        logger.debug(
-                            f"[STAGED][CREATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Creating new item"
-                        )
+                        # logger.debug(
+                        #    f"[STAGED][CREATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Creating new item"
+                        # )
                         new_item = await copyright_item_from_dict(item_dict)
                         if new_item:
                             await new_item.save()
                             smid = safe_int(mid)
                             if smid is not None:
                                 batch_processed_ids.append(smid)
-                            logger.info(
-                                f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Created new item"
-                            )
+                            # logger.info(
+                            #    f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Created new item"
+                            # )
                         else:
-                            logger.warning(
-                                f"[STAGED][FAIL] material_id={mid}, faculty={faculty_val}, stage=raw_data: Failed to create item from dict"
-                            )
+                            # logger.warning(
+                            #    f"[STAGED][FAIL] material_id={mid}, faculty={faculty_val}, stage=raw_data: Failed to create item from dict"
+                            # )
+                            ...
                     else:
                         # Check if this item has complex fields that need merging
                         mergeable_fields = get_mergeable_fields()
@@ -987,9 +984,9 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
                         if has_complex_fields:
                             # Delegate to canonical merge path
-                            logger.debug(
-                                f"[STAGED][MERGE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Delegating to complex merge"
-                            )
+                            # logger.debug(
+                            #    f"[STAGED][MERGE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Delegating to complex merge"
+                            # )
                             complex_item_dicts.append(item_dict)
                             smid = safe_int(mid)
                             if smid is not None:
@@ -1040,27 +1037,27 @@ async def process_staged_raw_data(settings: Settings) -> None:
                                     update_fields.append("last_change")
 
                             if update_fields:
-                                logger.debug(
-                                    f"[STAGED][UPDATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updating fields {update_fields}"
-                                )
+                                # logger.debug(
+                                #    f"[STAGED][UPDATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updating fields {update_fields}"
+                                # )
                                 await existing_item.save(update_fields=update_fields)
                                 smid = safe_int(mid)
                                 if smid is not None:
                                     batch_processed_ids.append(smid)
-                                logger.info(
-                                    f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updated existing item"
-                                )
+                                # logger.info(
+                                #    f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updated existing item"
+                                # )
 
                 except Exception as e:
                     err_msg = str(e)
                     mid_val = getattr(staged_item, "material_id", None)
                     faculty_val = getattr(staged_item, "faculty", None)
-                    logger.error(
-                        f"[STAGED][ERROR] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {err_msg}"
-                    )
-                    logger.debug(
-                        f"[STAGED][TRACE] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {traceback.format_exc()}"
-                    )
+                    # logger.error(
+                    #    f"[STAGED][ERROR] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {err_msg}"
+                    # )
+                    # logger.debug(
+                    #    f"[STAGED][TRACE] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {traceback.format_exc()}"
+                    # )
                     # Record failure in the DB for later inspection/retry
                     try:
                         payload = {
@@ -1073,13 +1070,14 @@ async def process_staged_raw_data(settings: Settings) -> None:
                             staged_payload=payload,
                             error_message=err_msg[:1900],
                         )
-                        logger.info(
-                            f"[STAGED][RECORDED] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Failure recorded in StagedProcessingFailure"
-                        )
-                    except Exception as record_error:
-                        logger.error(
-                            f"[STAGED][RECORD_FAIL] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Could not record failure: {record_error}"
-                        )
+                        # logger.info(
+                        #    f"[STAGED][RECORDED] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Failure recorded in StagedProcessingFailure"
+                        # )
+                    except Exception:
+                        # logger.error(
+                        #    f"[STAGED][RECORD_FAIL] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Could not record failure: {record_error}"
+                        # )
+                        ...
                     # Do not re-raise; keep other rows processing. Failed staged rows remain for manual inspection.
 
         # Process complex merges outside transaction since update_copyright_items does its own operations
@@ -1138,15 +1136,15 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
             for update in batch:
                 try:
                     mid = update.material_id
-                    logger.debug(
-                        f"[STAGED][PROCESS] material_id={mid}, stage=faculty_update: Starting processing"
-                    )
+                    # logger.debug(
+                    #    f"[STAGED][PROCESS] material_id={mid}, stage=faculty_update: Starting processing"
+                    # )
 
                     item = await CopyrightItem.get_or_none(material_id=mid)
                     if not item:
-                        logger.warning(
-                            f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: Item not found in database"
-                        )
+                        # logger.warning(
+                        #    f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: Item not found in database"
+                        # )
                         continue
 
                     update_fields = []
@@ -1156,16 +1154,16 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                     ):
                         item.manual_classification = update.manual_classification
                         update_fields.append("manual_classification")
-                        logger.debug(
-                            f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating manual_classification"
-                        )
+                        # logger.debug(
+                        #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating manual_classification"
+                        # )
 
                     if update.remarks and item.remarks != update.remarks:
                         item.remarks = update.remarks
                         update_fields.append("remarks")
-                        logger.debug(
-                            f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating remarks"
-                        )
+                        # logger.debug(
+                        #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating remarks"
+                        # )
 
                     if (
                         update.workflow_status
@@ -1175,40 +1173,41 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                         if wf_st:
                             item.workflow_status = wf_st
                             update_fields.append("workflow_status")
-                            logger.debug(
-                                f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status"
-                            )
+                            # logger.debug(
+                            #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status"
+                            # )
 
                     if update_fields:
                         await item.save(update_fields=update_fields)
                         smid = safe_int(mid)
                         if smid is not None:
                             batch_processed.append(smid)
-                        logger.info(
-                            f"[STAGED][SUCCESS] material_id={mid}, stage=faculty_update: Updated fields {update_fields}"
-                        )
+                        # logger.info(
+                        #    f"[STAGED][SUCCESS] material_id={mid}, stage=faculty_update: Updated fields {update_fields}"
+                        # )
                     else:
-                        logger.debug(
-                            f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: No fields to update"
-                        )
+                        # logger.debug(
+                        #    f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: No fields to update"
+                        # )
+                        ...
 
-                except Exception as e:
+                except Exception:
                     mid_val = getattr(update, "material_id", None)
-                    logger.error(
-                        f"[STAGED][ERROR] material_id={mid_val}, stage=faculty_update: {str(e)}"
-                    )
-                    logger.debug(
-                        f"[STAGED][TRACE] material_id={mid_val}, stage=faculty_update: {traceback.format_exc()}"
-                    )
+                    # logger.error(
+                    #    f"[STAGED][ERROR] material_id={mid_val}, stage=faculty_update: {str(e)}"
+                    # )
+                    # logger.debug(
+                    #    f"[STAGED][TRACE] material_id={mid_val}, stage=faculty_update: {traceback.format_exc()}"
+                    # )
 
         if batch_processed:
             try:
                 await StagedFacultyUpdate.filter(
                     material_id__in=batch_processed
                 ).delete()
-                logger.info(
-                    f"Cleared {len(batch_processed)} processed staged faculty updates."
-                )
+                # logger.info(
+                #    f"Cleared {len(batch_processed)} processed staged faculty updates."
+                # )
                 processed_updates.extend(batch_processed)
             except Exception:
                 logger.exception(

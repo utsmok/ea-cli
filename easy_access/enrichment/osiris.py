@@ -92,7 +92,11 @@ async def select_missing_or_stale_courses(
             # Check if older than TTL
             from datetime import datetime
 
-            age_days = (datetime.now() - course.modified_at).days
+            course_modified_at = course.modified_at.astimezone(datetime.now().tzinfo)
+            age_days = (
+                datetime.now(datetime.now().tzinfo).astimezone(datetime.now().tzinfo)
+                - course_modified_at
+            ).days
             if age_days > ttl_days:
                 stale_codes.add(course.cursuscode)
 
@@ -165,7 +169,11 @@ async def select_missing_or_stale_persons(
             # Check if older than TTL
             from datetime import datetime
 
-            age_days = (datetime.now() - person.modified_at).days
+            person_modified_at = person.modified_at.astimezone(datetime.now().tzinfo)
+            age_days = (
+                datetime.now(datetime.now().tzinfo).astimezone(datetime.now().tzinfo)
+                - person_modified_at
+            ).days
             if age_days > ttl_days:
                 stale_names.add(person.input_name)
 
@@ -403,8 +411,8 @@ async def enrich_async(settings: Settings) -> None:
             return
 
         # Get TTL settings (default to None if not configured)
-        course_ttl = getattr(settings.enrichment_settings, "course_ttl_days", None)
-        person_ttl = getattr(settings.enrichment_settings, "person_ttl_days", None)
+        course_ttl = getattr(settings.enrichment_settings, "course_ttl_days", 1)
+        person_ttl = getattr(settings.enrichment_settings, "person_ttl_days", 1)
 
         # Select courses that need fetching
         courses_to_fetch = await select_missing_or_stale_courses(
@@ -476,7 +484,7 @@ def _process_teacher_items(items) -> set[str]:
             if isinstance(item, dict):
                 # Try to extract name from common dictionary keys
                 name = None
-                for key in ['name', 'docent', 'teacher', 'person_name', 'main_name']:
+                for key in ["name", "docent", "teacher", "person_name", "main_name"]:
                     if key in item and item[key]:
                         name = str(item[key]).strip()
                         break
@@ -500,7 +508,7 @@ def _process_teacher_items(items) -> set[str]:
     elif isinstance(items, dict):
         # Handle single dictionary
         name = None
-        for key in ['name', 'docent', 'teacher', 'person_name', 'main_name']:
+        for key in ["name", "docent", "teacher", "person_name", "main_name"]:
             if key in items and items[key]:
                 name = str(items[key]).strip()
                 break
@@ -817,7 +825,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
 
         best_match = matches[0]
         try:
-            best_ratio = Levenshtein.ratio(compare_name, _remove_dot_and_lower(best_match))
+            best_ratio = Levenshtein.ratio(
+                compare_name, _remove_dot_and_lower(best_match)
+            )
         except Exception:
             best_ratio = 0
 

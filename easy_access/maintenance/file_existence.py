@@ -12,6 +12,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Any
+from unittest import mock as _mock
 
 import httpx
 from loguru import logger
@@ -19,7 +20,6 @@ from loguru import logger
 from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.models import CopyrightItem
 from easy_access.settings import Settings
-from unittest import mock as _mock
 
 
 async def select_items_needing_file_check(
@@ -52,38 +52,55 @@ async def select_items_needing_file_check(
             conditions.append(
                 f"(file_exists IS NULL OR last_canvas_check < '{cutoff_date.isoformat()}')"
             )
+            logger.info(f"retrieving files using cutoff date: {cutoff_date}")
         else:
             # Check only unchecked items
             conditions.append("file_exists IS NULL")
+            logger.info("only checking files that have not been checked ever")
 
     # Build the query
     where_clause = " AND ".join(conditions) if conditions else "1=1"
+    offset = 0
 
-    # Query items needing check
-    items = await CopyrightItem.raw(
-        f"""
-        SELECT material_id, url
-        FROM copyright_data
-        WHERE {where_clause} AND url IS NOT NULL AND url != ''
-        ORDER BY last_canvas_check ASC NULLS FIRST
-        LIMIT {batch_size}
-        """
-    )
-
-    result = []
-    for item in items:
-        # Access attributes from raw query result
-        material_id = getattr(item, "material_id", None)
-        url = getattr(item, "url", None)
-        if material_id and url:
-            result.append(
-                {
-                    "material_id": material_id,
-                    "url": url,
-                }
+    async def retrieval(offset) -> list[dict[str, int | str]]:
+        res = []
+        offset_clause = f"OFFSET {offset}" if offset > 0 else ""
+        # Query items needing check
+        items = await CopyrightItem.raw(
+            f"""
+            SELECT material_id, url
+            FROM copyright_data
+            WHERE {where_clause} AND url IS NOT NULL AND url != ''
+            ORDER BY last_canvas_check ASC NULLS FIRST
+            LIMIT {batch_size} {offset_clause}
+            """
+        )
+        for item in items:
+            material_id = getattr(item, "material_id", None)
+            url = getattr(item, "url", None)
+            if material_id and url:
+                res.append(
+                    {
+                        "material_id": material_id,
+                        "url": url,
+                    }
+                )
+        if len(res) >= batch_size:
+            offset += batch_size
+            logger.debug(
+                f"Retrieved {len(res)} items. Now retrieving next page using offset {offset}"
             )
+            res.extend(await retrieval(offset))
 
-    logger.info(f"Selected {len(result)} items for file existence verification")
+        return res
+
+    result = await retrieval(offset)
+
+    # get the next page of items and append
+
+    logger.info(
+        f"Final selection: {len(result)} items needing file existence verification"
+    )
     return result
 
 
@@ -174,10 +191,15 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
         try:
             if isinstance(CopyrightItem.filter, _mock.Mock):
                 for result in results:
-                    await CopyrightItem.filter(material_id=result["material_id"]).update(
-                        file_exists=result["file_exists"], last_canvas_check=result["last_canvas_check"]
+                    await CopyrightItem.filter(
+                        material_id=result["material_id"]
+                    ).update(
+                        file_exists=result["file_exists"],
+                        last_canvas_check=result["last_canvas_check"],
                     )
-                logger.info(f"Updated {len(results)} items using mocked filter().update() path")
+                logger.info(
+                    f"Updated {len(results)} items using mocked filter().update() path"
+                )
                 return
         except Exception:
             # Fall through to normal bulk path

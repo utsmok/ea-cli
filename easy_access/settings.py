@@ -316,7 +316,6 @@ class UniversitySettings:
         if not self.canvas_api_token:
             self.canvas_api_token = self._load_api_keys_module()
 
-
     def _load_env_file(self) -> str | None:
         """Loads the API token from a .env or .secret file in
         cwd or parent dir (max 2 levels deep)."""
@@ -340,10 +339,12 @@ class UniversitySettings:
         """Tries to loads the API token from the api_keys.py module."""
         with contextlib.suppress(ImportError, ModuleNotFoundError):
             from api_keys import CANVAS_API_TOKEN
+
             found_token = CANVAS_API_TOKEN
             return found_token
         with contextlib.suppress(ImportError, ModuleNotFoundError):
             from easy_access.api_keys import CANVAS_API_TOKEN
+
             found_token = CANVAS_API_TOKEN
             return found_token
         return None
@@ -440,10 +441,10 @@ class EnrichmentSettings:
                                      Helps avoid rate limiting from Canvas API.
     """
 
-    course_ttl_days: int | None = None
-    person_ttl_days: int | None = None
-    file_exists_ttl_days: int | None = None
-    file_exists_rate_limit_delay: float = 0.1
+    course_ttl_days: int | None = 1
+    person_ttl_days: int | None = 1
+    file_exists_ttl_days: int | None = 7
+    file_exists_rate_limit_delay: float = 0.01
 
 
 @dataclass

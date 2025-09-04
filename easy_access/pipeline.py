@@ -182,7 +182,7 @@ class DataPipeline:
         from easy_access.maintenance.file_existence import refresh_file_existence_async
 
         logger.info("Verifying file existence...")
-        ttl_days = getattr(self.settings, "file_exists_ttl_days", 30)
+        ttl_days = getattr(self.settings, "file_exists_ttl_days", 7)
         # Get rate limit delay from settings or use default
         rate_limit_delay = getattr(self.settings, "file_exists_rate_limit_delay", 0.1)
 
