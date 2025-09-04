@@ -297,7 +297,7 @@ class Person(Model, TimestampMixin):
     match_confidence = fields.FloatField(null=True)
     first_name = fields.CharField(
         max_length=2048, null=True
-    )  #'other_names' should be a list with len 1 containing only the first name
+    )
     email = fields.CharField(max_length=2048, null=True)
     faculty = fields.ForeignKeyField(
         "models.Faculty",

@@ -184,7 +184,7 @@ class DataPipeline:
         logger.info("Verifying file existence...")
         ttl_days = getattr(self.settings, "file_exists_ttl_days", 7)
         # Get rate limit delay from settings or use default
-        rate_limit_delay = getattr(self.settings, "file_exists_rate_limit_delay", 0.1)
+        rate_limit_delay = getattr(self.settings, "file_exists_rate_limit_delay", 0.05)
 
         result = await refresh_file_existence_async(
             self.settings,
