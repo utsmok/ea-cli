@@ -52,6 +52,7 @@ class TestUpdateDuplicates:
 
         # Mock copyright item to update
         mock_item = MagicMock()
+        mock_item.material_id = 1001
 
         with patch('easy_access.db.relations.PDF.filter') as mock_filter, \
              patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter, \

@@ -55,8 +55,8 @@ Status summary:
 3. Enrichment orchestrator end-to-end test with mocked HTTP + ensuring persons fetched only from returned course data.
 4. Relations raw SQL link creation path integration test (no mocked `bulk_update`).
 5. Pipeline full E2E test: run all stages twice; assert second run performs zero new links / zero new enrich ops (log or DB delta assertion).
-6. Export atomic write helper (temp file + rename) with failure simulation test.
-7. Export dataframe schema validator + test (required columns present; raise early if missing).
+6. Export atomic write helper implemented in `easy_access/sheets/sheet.py` (writes to .tmp then atomic rename). Add failure-simulation tests.
+7. Export dataframe schema validator implemented (minimal required columns); add unit tests for schema validation and more comprehensive required-column lists.
 8. Bulk insertion optimization for `persist_courses` / `persist_persons` (replace per-item `create` with `bulk_create`) + perf assertion (time or call count).
 9. Optional: add lightweight performance benchmark harness (timing a mid-size dataset) to guard regressions (behind marker, not default).
 10. Documentation: architecture diagram (PNG/SVG), README section on stage idempotency & CLI flags, minimal troubleshooting table.
@@ -86,11 +86,11 @@ Status summary:
 
 ## 8. Immediate Next Steps (Ordered)
 1. Add enrichment selection & TTL tests (courses/persons) + orchestrator test.
-2. Implement atomic_excel_save(file) utility + integrate into export paths.
+2. Atomic Excel write helper implemented; integrate more widely and add tests.
 3. Decouple `db/relations.py` from mocks; refactor tests accordingly (maintain coverage for duplicate + linking + raw SQL path).
 4. Refactor pipeline sync wrappers to be loop-aware (avoid nested asyncio.run) and add regression test.
 5. Add idempotent pipeline E2E double-run test (assert zero deltas).
-6. Add bulk_create optimization for new courses/persons (retain safe fallback) + unit test verifying call counts.
+6. Add bulk_create optimization for new courses/persons (retain safe fallback) + unit test verifying call counts. Note: `easy_access/db/update.persist_courses` already performs bulk upserts; enrichment's `persist_courses` delegates to DB implementation unless minimal/test payload detected.
 7. Cover relations raw SQL path by disabling / not mocking `bulk_update` in integration test.
 8. Consolidate `QuerySetMock` usage (remove duplication).
 9. Enhance teardown diagnostics to isolate any lingering connections and threads; add automated leak assertion.

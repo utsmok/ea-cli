@@ -2,6 +2,7 @@
 ORM models for the database.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -35,6 +36,128 @@ class Classification(Enum):
     VERWIJDERVERZOEK_VERSTUURD = "verwijderverzoek verstuurd"
     LICENTIE_BESCHIKBAAR = "licentie beschikbaar"
 
+# V2 classification system + mapping + notes
+
+class ClassificationV2(Enum):
+    """
+    The new classification system for V2 of the copyright tool.
+    """
+    # Yes classifications
+    JA_OPEN_LICENTIE = "Ja (open licentie)"
+    JA_BIBLIOTHEEK_LICENTIE = "Ja (bibilotheek licentie)"
+    JA_DIRECTE_TOESTEMMING = "Ja (directe toestemming)"
+    JA_PUBLIEK_DOMEIN = "Ja (Publiek domein)"
+    JA_EIGEN_WERK = "Ja (eigen werk)"
+    JA_STUDENTWERK = "Ja (studentwerk)"
+    JA_EASY_ACCESS = "Ja (easy access)"
+    JA_ANDERS = "Ja (anders)"
+
+    JA_DIRECTE_TOESTEMMING_TIJDELIJK = "Ja (directe toestemming) - tijdelijk"
+    JA_BIBLIOTHEEK_LICENTIE_TIJDELIJK = "Ja (bibilotheek licentie)- tijdelijk"
+    JA_ANDERS_TIJDELIJK = "Ja (anders) - tijdelijk"
+
+    # No classifications
+    NEE_LINK_BESCHIKBAAR = "Nee (Link beschikbaar)"
+    NEE_STUDENTWERK = "Nee (studentwerk)"
+    NEE = "Nee"
+
+    # Other classifications
+    ONBEKEND = "Onbekend"
+
+
+class OvernameStatus(Enum):
+    OVERNAME_INBREUKMAKENDE = "Overname (inbreukmakende)"
+    OVERNAME_ANDERE = "Overname (andere)"
+    GEEN_OVERNAME = "Geen overname"
+    ONBEKEND = "Onbekend"
+
+class Lengte(Enum):
+    KORT = "Kort"
+    MIDDELLANG = "Middellang"
+    LANG = "Lang"
+    ONBEKEND = "Onbekend"
+
+"""
+Mapping notes:
+
+- Lange overname zou moeten mappen naar --> Ja, anders volgens SURF, denk niet dat dat klopt!
+- V1 open access kan ook publiek domein zijn in v2
+- studentwerk is in v1 niet apart, in v2 wel -- vaak als eigen werk gemarkeerd
+
+"""
+@dataclass
+class ClassificationMapping:
+    classification: ClassificationV2
+    overname_status: OvernameStatus
+    length: Lengte
+
+CLASSIFICATION_MAPPING_V1_TO_V2: dict[Classification, ClassificationMapping] = {
+    Classification.OPEN_ACCESS: ClassificationMapping(
+        classification=ClassificationV2.JA_OPEN_LICENTIE,
+        overname_status=OvernameStatus.GEEN_OVERNAME,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.EIGEN_MATERIAAL: ClassificationMapping(
+        classification=ClassificationV2.JA_EIGEN_WERK,
+        overname_status=OvernameStatus.GEEN_OVERNAME,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.EIGEN_MATERIAAL_OVERIG: ClassificationMapping(
+        classification=ClassificationV2.JA_EIGEN_WERK,
+        overname_status=OvernameStatus.GEEN_OVERNAME,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.EIGEN_MATERIAAL_POWERPOINT: ClassificationMapping(
+        classification=ClassificationV2.JA_EIGEN_WERK,
+        overname_status=OvernameStatus.GEEN_OVERNAME,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.EIGEN_MATERIAAL_TITELINDICATIE: ClassificationMapping(
+        classification=ClassificationV2.JA_EIGEN_WERK,
+        overname_status=OvernameStatus.GEEN_OVERNAME,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.KORTE_OVERNAME: ClassificationMapping(
+        classification=ClassificationV2.JA_EASY_ACCESS,
+        overname_status=OvernameStatus.OVERNAME_ANDERE,
+        length=Lengte.KORT,
+    ),
+    Classification.MIDDELLANGE_OVERNAME: ClassificationMapping(
+        classification=ClassificationV2.JA_EASY_ACCESS,
+        overname_status=OvernameStatus.OVERNAME_ANDERE,
+        length=Lengte.MIDDELLANG,
+    ),
+    Classification.LANGE_OVERNAME: ClassificationMapping(
+        classification=ClassificationV2.NEE,
+        overname_status=OvernameStatus.OVERNAME_INBREUKMAKENDE,
+        length=Lengte.LANG,
+    ),
+    Classification.ONBEKEND: ClassificationMapping(
+        classification=ClassificationV2.ONBEKEND,
+        overname_status=OvernameStatus.ONBEKEND,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.NIET_GEANALYSEERD: ClassificationMapping(
+        classification=ClassificationV2.ONBEKEND,
+        overname_status=OvernameStatus.ONBEKEND,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.IN_ONDERZOEK: ClassificationMapping(
+        classification=ClassificationV2.ONBEKEND,
+        overname_status=OvernameStatus.ONBEKEND,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.VERWIJDERVERZOEK_VERSTUURD: ClassificationMapping(
+        classification=ClassificationV2.ONBEKEND,
+        overname_status=OvernameStatus.OVERNAME_INBREUKMAKENDE,
+        length=Lengte.ONBEKEND,
+    ),
+    Classification.LICENTIE_BESCHIKBAAR: ClassificationMapping(
+        classification=ClassificationV2.NEE_LINK_BESCHIKBAAR,
+        overname_status=OvernameStatus.OVERNAME_INBREUKMAKENDE,
+        length=Lengte.ONBEKEND,
+    ),
+}
 
 class Filetype(Enum):
     PDF = "pdf"
@@ -89,6 +212,7 @@ Department = Enum(
         for department in SETTINGS.university_settings.department_mapping
     },
 )
+
 
 
 class CopyrightItem(Model, TimestampMixin):
@@ -200,6 +324,20 @@ class CopyrightItem(Model, TimestampMixin):
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"
 
+class V2Classifications(Model, TimestampMixin):
+    """
+    Stores the new classification system for V2 of the copyright tool.
+    """
+
+    id = fields.IntField(primary_key=True)
+    material_id = fields.ForeignKeyField("models.CopyrightItem", related_name="v2_classifications")
+    classification = fields.CharEnumField(enum_type=ClassificationV2, max_length=255)
+    overname_status = fields.CharEnumField(enum_type=OvernameStatus, max_length=255)
+    length = fields.CharEnumField(enum_type=Lengte, max_length=255)
+    remarks = fields.CharField(max_length=10000, null=True)
+
+    class Meta:
+        table = "v2_classifications"
 
 class ItemUpdate(Model, TimestampMixin):
     """
@@ -244,7 +382,7 @@ class Course(Model, TimestampMixin):
         null=True,
         to_field="abbreviation",
     )
-    ec = fields.IntField(null=True)
+    ec = fields.FloatField(null=True)
     programme = fields.CharField(
         max_length=2048, null=True
     )  # try to turn into a relation to Programme later.

@@ -19,7 +19,13 @@ from bs4 import Tag
 from loguru import logger
 
 from easy_access.db.base import close_connections, ensure_db_inited
-from easy_access.db.models import CopyrightItem, Course, Person
+from easy_access.db.models import (
+    CopyrightItem,
+    Course,
+    Person,
+    MissingCourse,
+)
+from easy_access.db.models import MissingCourse
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
@@ -72,38 +78,61 @@ async def select_missing_or_stale_courses(
     """
     logger.info("Selecting courses that need enrichment...")
 
-    # Get existing courses
+    from datetime import datetime
+
+    # Existing courses
     existing_courses = await Course.filter(cursuscode__in=course_codes)
-    existing_codes = {course.cursuscode for course in existing_courses}
+    existing_codes = {c.cursuscode for c in existing_courses}
 
-    # Find missing courses
-    missing_codes = course_codes - existing_codes
-    logger.info(f"Found {len(missing_codes)} missing courses")
+    # Determine missing (not in Course)
+    missing_codes_all = course_codes - existing_codes
 
-    # If no TTL specified, return only missing courses
+    # Which missing codes are already tracked as MissingCourse entries?
+    tracked_missing = await MissingCourse.filter(cursuscode__in=missing_codes_all)
+    tracked_missing_codes = {m.cursuscode for m in tracked_missing}
+    new_missing_codes = missing_codes_all - tracked_missing_codes
+
+    logger.info(
+        "Missing courses summary: total_missing=%d new_missing=%d tracked_missing=%d",
+        len(missing_codes_all),
+        len(new_missing_codes),
+        len(tracked_missing_codes),
+    )
+
     if ttl_days is None:
-        return missing_codes
+        # Fetch everything that's currently missing (new + tracked) unconditionally
+        return missing_codes_all
 
-    # Check for stale courses based on TTL
-    stale_codes: set[int] = set()
-    for course in existing_courses:
-        if course.modified_at is None:
-            # No modification date, consider stale
-            stale_codes.add(course.cursuscode)
-        else:
-            # Check if older than TTL
-            from datetime import datetime
+    # Evaluate stale existing courses
+    stale_existing: set[int] = set()
+    now = datetime.now(datetime.now().tzinfo)
+    for c in existing_courses:
+        if c.modified_at is None:
+            stale_existing.add(c.cursuscode)
+            continue
+        age_days = (now - c.modified_at.astimezone(now.tzinfo)).days
+        if age_days > ttl_days:
+            stale_existing.add(c.cursuscode)
 
-            course_modified_at = course.modified_at.astimezone(datetime.now().tzinfo)
-            age_days = (
-                datetime.now(datetime.now().tzinfo).astimezone(datetime.now().tzinfo)
-                - course_modified_at
-            ).days
-            if age_days > ttl_days:
-                stale_codes.add(course.cursuscode)
+    # Evaluate tracked-missing for retry
+    retry_missing: set[int] = set()
+    for m in tracked_missing:
+        if m.modified_at is None:
+            retry_missing.add(m.cursuscode)
+            continue
+        age_days = (now - m.modified_at.astimezone(now.tzinfo)).days
+        if age_days > ttl_days:
+            retry_missing.add(m.cursuscode)
 
-    logger.info(f"Found {len(stale_codes)} stale courses (TTL: {ttl_days} days)")
-    return missing_codes | stale_codes
+    to_fetch = new_missing_codes | retry_missing | stale_existing
+    logger.info(
+        "Course staleness: stale_existing=%d retry_missing=%d new_missing=%d -> will_fetch=%d",
+        len(stale_existing),
+        len(retry_missing),
+        len(new_missing_codes),
+        len(to_fetch),
+    )
+    return to_fetch
 
 
 async def gather_target_person_names(settings: Settings) -> set[str]:
@@ -153,34 +182,42 @@ async def select_missing_or_stale_persons(
     existing_persons = await Person.filter(input_name__in=person_names)
     existing_names = {person.input_name for person in existing_persons}
 
-    # Find missing persons
+    # Persons not represented at all yet
     missing_names = person_names - existing_names
-    logger.info(f"Found {len(missing_names)} missing persons")
+    logger.info(f"Missing persons: total={len(missing_names)}")
 
-    # If no TTL specified, return only missing persons
     if ttl_days is None:
         return missing_names
 
-    # Check for stale persons based on TTL
+    # Stale logic: include (a) unresolved placeholder persons (main_name is null), and (b) aged entries
+    from datetime import datetime
     stale_names: set[str] = set()
+    unresolved_names: set[str] = set()
     for person in existing_persons:
+        if person.main_name is None:  # previously attempted but unresolved
+            unresolved_names.add(person.input_name)
         if person.modified_at is None:
-            # No modification date, consider stale
             stale_names.add(person.input_name)
-        else:
-            # Check if older than TTL
-            from datetime import datetime
+            continue
+        age_days = (
+            datetime.now(datetime.now().tzinfo).astimezone(datetime.now().tzinfo)
+            - person.modified_at.astimezone(datetime.now().tzinfo)
+        ).days
+        if age_days > ttl_days:
+            stale_names.add(person.input_name)
 
-            person_modified_at = person.modified_at.astimezone(datetime.now().tzinfo)
-            age_days = (
-                datetime.now(datetime.now().tzinfo).astimezone(datetime.now().tzinfo)
-                - person_modified_at
-            ).days
-            if age_days > ttl_days:
-                stale_names.add(person.input_name)
-
-    logger.info(f"Found {len(stale_names)} stale persons (TTL: {ttl_days} days)")
-    return missing_names | stale_names
+    # Re-attempt unresolved only if stale by TTL (modified_at check) to avoid hammering each run
+    retry_unresolved = {name for name in unresolved_names if name in stale_names}
+    to_fetch = missing_names | stale_names | retry_unresolved
+    logger.info(
+        "Staleness summary (persons): missing=%d stale=%d unresolved=%d retry_unresolved=%d -> will_fetch=%d",
+        len(missing_names),
+        len(stale_names),
+        len(unresolved_names),
+        len(retry_unresolved),
+        len(to_fetch),
+    )
+    return to_fetch
 
 
 async def fetch_and_parse_courses(
@@ -212,9 +249,22 @@ async def fetch_and_parse_courses(
                     course_data = await fetch_course_data(course_code, client)
                     if course_data:
                         results[course_code] = course_data
-                        #logger.debug(f"Successfully fetched course {course_code}")
+                        # If it was tracked as missing, remove the entry
+                        try:
+                            await MissingCourse.filter(cursuscode=course_code).delete()
+                        except Exception:
+                            pass
                     else:
                         logger.warning(f"No data found for course {course_code}")
+                        # Upsert MissingCourse record (touch modified_at)
+                        try:
+                            existing = await MissingCourse.get_or_none(cursuscode=course_code)
+                            if existing:
+                                await MissingCourse.filter(cursuscode=course_code).update(cursuscode=course_code)
+                            else:
+                                await MissingCourse.create(cursuscode=course_code)
+                        except Exception:
+                            logger.debug(f"Could not record missing course {course_code}")
             except Exception as e:
                 logger.error(f"Error fetching course {course_code}: {e}")
 
@@ -280,7 +330,6 @@ async def persist_courses(courses_data: dict[int, dict]) -> None:
     minimal test fixture data (which omits required fields like year/internal_id).
     """
     # Detect if our Course methods are patched (AsyncMock etc.)
-    import inspect
     # Heuristic: if any provided course dict lacks internal_id or year, assume test/minimal data -> use legacy path
     minimal = any(
         not isinstance(d, dict) or any(k not in d for k in ("internal_id", "year"))
@@ -290,6 +339,7 @@ async def persist_courses(courses_data: dict[int, dict]) -> None:
         logger.info(f"[MinimalDataMode] Persisting {len(courses_data)} courses (legacy simple path)")
         existing = await Course.filter(cursuscode__in=list(courses_data.keys()))
         existing_codes = {c.cursuscode for c in existing}
+        from datetime import datetime, UTC
         for code, data in courses_data.items():
             if code in existing_codes:
                 try:
@@ -301,14 +351,26 @@ async def persist_courses(courses_data: dict[int, dict]) -> None:
                     await Course.create(**data)
                 except Exception:
                     logger.debug(f"Legacy create failed for course {code}")
+            # Bump modified_at regardless (ensures staleness reset even for no-op)
+            try:
+                await Course.filter(cursuscode=code).update(modified_at=datetime.now(UTC))
+            except Exception:
+                pass
         return
     from easy_access.db.update import persist_courses as _persist_courses_db
     await _persist_courses_db(courses_data)
+    # Bump modified_at for all processed courses (covers identical data)
+    try:
+        from datetime import datetime
+        await Course.filter(cursuscode__in=list(courses_data.keys())).update(modified_at=datetime.utcnow())
+    except Exception:
+        pass
 
 
 async def persist_persons(persons_data: dict[str, dict]) -> None:
     """Persist persons with test-aware delegation (see persist_courses)."""
-    import inspect
+    from datetime import datetime, UTC
+
     minimal = any(
         not isinstance(d, dict) or 'main_name' not in d
         for d in persons_data.values()
@@ -328,9 +390,20 @@ async def persist_persons(persons_data: dict[str, dict]) -> None:
                     await Person.create(**data)
                 except Exception:
                     logger.debug(f"Legacy create failed for person {name}")
+            # Always bump modified_at
+            try:
+                await Person.filter(input_name=name).update(modified_at=datetime.now(UTC))
+            except Exception:
+                pass
         return
     from easy_access.db.update import persist_persons as _persist_persons_db
     await _persist_persons_db(persons_data)
+    # Bump modified_at post-persist
+    try:
+        from datetime import datetime
+        await Person.filter(input_name__in=list(persons_data.keys())).update(modified_at=datetime.now(UTC))
+    except Exception:
+        pass
 
 
 async def enrich_async(settings: Settings) -> None:
@@ -637,10 +710,17 @@ async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -
                 teachers = _process_teacher_items(value)
 
         # Build course data structure
+        collegejaar = rawdata.get("collegejaar") or ""
+        year_part = None
+        if isinstance(collegejaar, str) and "-" in collegejaar:
+            try:
+                year_part = collegejaar.split("-")[0]
+            except Exception:
+                year_part = None
         course_data = {
             "cursuscode": course_code,
             "internal_id": rawdata.get("id_cursus"),
-            "year": rawdata.get("collegejaar").split("-")[0],
+            "year": year_part,
             "short_name": rawdata.get("cursus_korte_naam"),
             "name": rawdata.get("cursus_lange_naam"),
             "faculty": rawdata.get("faculteit"),

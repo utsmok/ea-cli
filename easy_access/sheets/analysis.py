@@ -167,7 +167,14 @@ async def create_faculty_overviews(
             )
         data_to_update.append(all_faculty_data)
 
-    await update_db(settings=settings, datalist=data_to_update)
+    # Persisting updates into the database is gated by `disable_writes` to
+    # ensure the export stage is read-only by default. Historically this call
+    # ran unconditionally; only perform the DB update when writes are enabled.
+    if not disable_writes:
+        await update_db(settings=settings, datalist=data_to_update)
+    else:
+        logger.info("DB update skipped because export was run with disable_writes=True")
+
     return style_iter
 
 

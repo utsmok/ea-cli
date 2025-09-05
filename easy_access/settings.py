@@ -441,8 +441,8 @@ class EnrichmentSettings:
                                      Helps avoid rate limiting from Canvas API.
     """
 
-    course_ttl_days: int | None = 1
-    person_ttl_days: int | None = 1
+    course_ttl_days: int | None = 90
+    person_ttl_days: int | None = 90
     file_exists_ttl_days: int | None = 7
     file_exists_rate_limit_delay: float = 0.01
 

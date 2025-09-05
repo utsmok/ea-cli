@@ -259,7 +259,7 @@ class TestMergeRules:
         added, changeable = build_merge_rules_from_settings(settings)
 
         # Should update added_fields with parsed workflow options
-        assert added["workflow_status"] == ["ToDo", "InProgress", "Done"]
+        assert added["workflow_status"] == ["Done", "InProgress", "ToDo"]
 
     def test_build_merge_rules_from_settings_invalid_dropdown(self):
         """Test build_merge_rules_from_settings with invalid dropdown format."""

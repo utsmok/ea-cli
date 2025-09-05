@@ -145,7 +145,7 @@ class DataEntrySheet:
     sheet: openpyxl.worksheet.worksheet.Worksheet = field(init=False)
     file_path: str
     max_row: int = 0
-    word_wrap_style: Alignment = NamedStyle(
+    word_wrap_style: NamedStyle = NamedStyle(
         name="wordwrap", alignment=Alignment(wrapText=True)
     )
 
@@ -298,6 +298,12 @@ def store_complete_data(
         size = file.stat().st_size
         if size > 0:
             File(file).delete()
+
+    def validate_export_dataframe(df: pl.DataFrame, required_cols: set[str]) -> None:
+        missing = required_cols - set(df.columns)
+        if missing:
+            raise ValueError(f"Export dataframe missing required columns: {sorted(missing)}")
+
     selectcols = [
         col
         for col in settings.data_settings.final_data_col_order
@@ -305,7 +311,24 @@ def store_complete_data(
     ]
     data = data.select(selectcols)
     data = data.unique("material_id")
-    data.write_excel(file, worksheet=settings.data_settings.complete_data_name)
+
+    # Validate minimal required columns before writing
+    validate_export_dataframe(data, required_cols={"material_id"})
+
+    # Use atomic write: write to temp file then rename into place
+    target_path = Path(file)
+    tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    try:
+        data.write_excel(tmp_path, worksheet=settings.data_settings.complete_data_name)
+        # os.replace is atomic on most platforms
+        os.replace(tmp_path, target_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
     logger.info(f"Stored {data.shape[0]} rows to {file}")
 
 

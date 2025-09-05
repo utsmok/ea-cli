@@ -13,7 +13,7 @@ import polars as pl
 from loguru import logger
 from tortoise import Tortoise
 from tortoise.transactions import in_transaction
-
+from tortoise.models import Model
 from easy_access.db.base import (
     copyright_item_from_dict,
     ensure_db_inited,
@@ -221,7 +221,7 @@ def get_comparison_strategy(
     Returns:
         FieldComparisonStrategy instance
     """
-    # Special case for file_exists
+    # Special cases for file_exists
     if field == "file_exists":
         return FileExistsStrategy()
 
@@ -1347,6 +1347,13 @@ async def persist_courses(
         cd = {k: v for k, v in cd.items() if k in allowed_course_fields or k.startswith("_")}
         cd["_relation_payload"] = relation_payload  # stash for later
 
+        if "ec" in cd:
+            if "," in str(cd["ec"]):
+                cd["ec"] = cd["ec"].replace(",", ".")
+            try:
+                cd["ec"] = float(cd["ec"])
+            except (ValueError, TypeError):
+                cd["ec"] = None
         if code in existing_codes:
             to_update.append(cd | {"cursuscode": code})
         else:
@@ -1484,7 +1491,7 @@ async def persist_persons(
     logger.info(f"Successfully persisted {len(persons_data)} persons")
 
 
-async def _apply_person_org_relations(person_obj, orgs_payload, OrganizationModel):
+async def _apply_person_org_relations(person_obj:Person, orgs_payload: dict[str,str], OrganizationModel: type[Organization]):
     if not person_obj or not orgs_payload:
         return
     for org in orgs_payload:
@@ -1501,7 +1508,21 @@ async def _apply_person_org_relations(person_obj, orgs_payload, OrganizationMode
         # Prefer lookup by full_abbreviation (unique); fallback to base abbreviation
         org_obj = await OrganizationModel.get_or_none(full_abbreviation=full_abbr)
         if not org_obj:
-            org_obj = await OrganizationModel.get_or_none(abbreviation=base_abbr)
+            try:
+                org_obj = await OrganizationModel.get_or_none(abbreviation=base_abbr)
+            except Exception:
+                # probably multiple with the same 'abbreviation'
+                # instead filter on abbreviation and hierarchy_level
+                org_obj_filtered = OrganizationModel.filter(full_abbreviation=full_abbr, name=name)
+                num_found = await org_obj_filtered.count()
+                # if exactly one match, use it
+                if not num_found:
+                    org_obj = None
+                elif num_found == 1:
+                    org_obj = await org_obj_filtered.first()
+                else:
+                    logger.error(f"Found multiple organizations matching abbreviation='{base_abbr}', hierarchy_level={hierarchy_level}, name='{name}'; cannot disambiguate, skipping")
+                    org_obj = None
         if not org_obj:
             try:
                 org_obj = await OrganizationModel.create(

@@ -27,6 +27,7 @@ async def select_items_needing_file_check(
     ttl_days: int | None = None,
     batch_size: int = 1000,
     force: bool = False,
+    limit: int = 0,
 ) -> list[dict[str, Any]]:
     """
     Select copyright items that need file existence verification.
@@ -36,7 +37,7 @@ async def select_items_needing_file_check(
         ttl_days: TTL in days (None means check all unchecked items)
         batch_size: Maximum number of items to return
         force: If True, check all items regardless of TTL
-
+        limit: maximum number of items to return (default 0 -- no limit)
     Returns:
         List of item dictionaries with material_id and url
     """
@@ -85,6 +86,8 @@ async def select_items_needing_file_check(
                         "url": url,
                     }
                 )
+        if limit and ((len(res) >= limit) | len(res) + offset >= limit):
+            return res[:limit]
         if len(res) >= batch_size:
             offset += batch_size
             logger.debug(

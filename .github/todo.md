@@ -8,23 +8,25 @@ Guidance:
 
 ## Priority: Critical (immediate safety & correctness)
 - [ ] Investigate and fix intermittent Tortoise-related pytest teardown hang: analyze `hang_diagnostics.txt` outputs, implement targeted aiosqlite shutdown, and ensure proper connection closure ordering.
-- [ ] Eliminate update_db call from export stage (sheets/analysis.py) to enforce read-only export - move database writes to dedicated pipeline stage.
-- [ ] Decouple production code from test mocks in `db/relations.py` (remove Mock-aware branching) and adjust tests accordingly.
+- [ ] Ensure export stage is read-only by default (export paths should not write to DB unless explicitly enabled via settings/CLI). NOTE: the code now gates DB updates behind `disable_writes` in `easy_access/sheets/analysis.py`.
+ - [x] Decouple production code from test mocks in `db/relations.py` (remove Mock-aware branching) and adjust tests accordingly. ✅ Implemented: `easy_access/db/relations.py` now uses deterministic resolution paths and single-call `bulk_update` semantics; tests updated and passing.
 
-## Priority: High (testing & reliability)
-- [ ] Add missing unit tests for enrichment functions: stale selection logic, HTML parsing, and orchestrator idempotency.
+- ## Priority: High (testing & reliability)
+- [x] Add missing unit tests for enrichment functions: stale selection logic (partial) — initial staleness + fetch-error tests added in `tests/test_enrichment_staleness.py` (2025-09-05). Remaining: HTML parsing unit tests and orchestrator idempotency tests.
 - [ ] Add missing unit tests for relations functions: batch operations, N+1 elimination, and raw SQL link path.
 - [ ] Add missing integration tests for end-to-end pipeline execution with full E2E idempotency validation.
 - [ ] Add missing unit tests for maintenance/file_existence module: rate limiting edge cases and error handling.
-- [ ] Add enrichment detail fetch error-path tests: HTTP 500 responses, malformed JSON, and timeout handling.
+- [x] Add enrichment detail fetch error-path tests: HTTP 500 responses, malformed JSON, and timeout handling (partial) — basic fetch error tests added for course/person endpoints (2025-09-05); expand cases remains.
 - [ ] Add pipeline full E2E idempotency test (second run zero deltas) and relations raw SQL link path integration test.
+ - [x] Add unit test for atomic Excel write (tests/test_atomic_write.py) — implemented
+ - [x] Add unit test for loop-aware pipeline sync wrapper (tests/test_run_sync_wrapper.py) — implemented
 
 ## Priority: High (code quality & architecture)
 - [ ] Refactor pipeline synchronous wrappers to avoid nested asyncio.run when already inside event loop.
 - [ ] Consolidate QuerySetMock definitions: remove local definitions and import from tests/helpers everywhere.
 - [ ] Add teardown leak detection utility and ensure Tortoise connection closure ordering to reduce hangs.
-- [ ] Implement atomic Excel write helper and integrate into all export paths for data safety.
-- [ ] Optimize persist_courses/persist_persons to use bulk_create for new rows + add unit test verifying reduced DB calls.
+ - [ ] Implement atomic Excel write helper and integrate into all export paths for data safety. NOTE: atomic write implemented in `easy_access/sheets/sheet.py` — add unit tests and integrate any remaining export paths.
+ - [ ] Optimize persist_courses/persist_persons to use bulk_create for new rows + add unit test verifying reduced DB calls. NOTE: DB-side `persist_courses` in `easy_access/db/update.py` already implements bulk create/update; ensure enrichment delegates and test call counts.
 
 ## Priority: Medium (performance & optimization)
 - [ ] Performance tuning: optimize bulk M2M linking in relations stage and export memory usage.

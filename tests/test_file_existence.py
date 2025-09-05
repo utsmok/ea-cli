@@ -96,7 +96,7 @@ class TestSelectItemsNeedingFileCheck:
 
     @pytest.mark.asyncio
     async def test_select_items_batch_size_limit(self):
-        """Test that batch size limits the number of returned items."""
+        """Test that limits the number of returned items."""
         settings = Settings()
 
         mock_items = []
@@ -110,7 +110,7 @@ class TestSelectItemsNeedingFileCheck:
             # Mock should return only up to batch_size items
             mock_raw.return_value = mock_items[:1000]
 
-            result = await select_items_needing_file_check(settings, batch_size=1000, force=True)
+            result = await select_items_needing_file_check(settings, limit=1000, force=True)
 
             assert len(result) == 1000
 
