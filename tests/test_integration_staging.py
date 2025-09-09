@@ -20,7 +20,7 @@ async def test_process_staged_raw_data_respects_partial_failures():
     # Use a temporary sqlite file for stable multi-connection behavior
     import tempfile
 
-    tf = tempfile.NamedTemporaryFile(delete=False) # noqa: SIM115
+    tf = tempfile.NamedTemporaryFile(delete=False)  # noqa: SIM115
     tf.close()
     db_path = Path(tf.name)
 

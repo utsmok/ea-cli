@@ -419,9 +419,7 @@ class TestRefreshFileExistenceAsync:
             patch(
                 "easy_access.maintenance.file_existence.select_items_needing_file_check"
             ) as mock_select,
-            patch(
-                "easy_access.maintenance.file_existence.update_file_existence_batch"
-            ),
+            patch("easy_access.maintenance.file_existence.update_file_existence_batch"),
             patch("httpx.AsyncClient") as mock_client_class,
             patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
         ):
@@ -569,9 +567,7 @@ class TestFileExistenceIntegration:
             patch(
                 "easy_access.maintenance.file_existence.select_items_needing_file_check"
             ) as mock_select,
-            patch(
-                "easy_access.maintenance.file_existence.update_file_existence_batch"
-            ),
+            patch("easy_access.maintenance.file_existence.update_file_existence_batch"),
             patch("httpx.AsyncClient") as mock_client_class,
             patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
         ):

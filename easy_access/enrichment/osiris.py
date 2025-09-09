@@ -922,7 +922,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         best = matches[0]
         if best["ratio"] < 0.25:  # configurable threshold if needed later
             logger.warning(
-                "No reliable match for '{}': best ratio {:.2f} with '{}'".format(compare_name, best["ratio"], __clean_peoplepagename(best["name"]))
+                "No reliable match for '{}': best ratio {:.2f} with '{}'".format(
+                    compare_name, best["ratio"], __clean_peoplepagename(best["name"])
+                )
             )
             return {}
 

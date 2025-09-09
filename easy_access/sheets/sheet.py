@@ -80,8 +80,10 @@ def read_copyright_export(
             "retrieved_from_copyright_on": [latest_file_date] * len(copyright_data),
         }
 
-        if "workflow_status" not in copyright_data.columns or copyright_data["workflow_status"].is_null().all() or (
-            copyright_data["workflow_status"].str.strip_chars().eq("").all()
+        if (
+            "workflow_status" not in copyright_data.columns
+            or copyright_data["workflow_status"].is_null().all()
+            or (copyright_data["workflow_status"].str.strip_chars().eq("").all())
         ):
             columns_to_add["workflow_status"] = ["ToDo"] * len(copyright_data)
 

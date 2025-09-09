@@ -32,9 +32,7 @@ async def _resolve_queryset_candidate(candidate, *prefetch_args):
     QuerySet mocks (like QuerySetMock) are supported because they are awaitable.
     """
     # If object has prefetch_related, call it first (may return awaitable)
-    if hasattr(candidate, "prefetch_related") and callable(
-        candidate.prefetch_related
-    ):
+    if hasattr(candidate, "prefetch_related") and callable(candidate.prefetch_related):
         try:
             result = candidate.prefetch_related(*prefetch_args)
             # If result is awaitable, await it and return its value

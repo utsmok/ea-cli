@@ -314,4 +314,3 @@ async def main(subset: list[int] | list[str] | None = None):
             delete_files()
             pdf_batch = []
             batch_start_time = time.time()
-

@@ -19,11 +19,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-import uvicorn
 
-# Delay importing project modules that may perform work at import-time.
-# Import them inside the command functions to avoid side-effects when
-# the module is imported just to show --help.
 from loguru import logger
 
 # Compatibility shim: some combinations of Typer and Click/Rich have a
@@ -54,7 +50,6 @@ except Exception:
     # If anything goes wrong here, fall back to normal behavior.
     pass
 
-# INIT typer apps
 
 app = typer.Typer(
     name="ea-cli",
@@ -75,8 +70,6 @@ admin_app = typer.Typer(name="admin", help="Administrative operations and failur
 app.add_typer(admin_app)
 
 # Commands for main app
-
-
 @app.command(name="process")
 def process_data(
     changes: Annotated[
@@ -242,7 +235,7 @@ def run_dashboard(
     logger.info(f"Once launched, it will be available at http://{host}:{port}.")
     logger.info("Press Ctrl+C or close this terminal window to stop the server.")
     from easy_access.settings import SETTINGS
-
+    import uvicorn
     uvicorn.run(
         "dashboard.dash:app",
         host=host,
