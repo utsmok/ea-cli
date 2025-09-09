@@ -21,7 +21,7 @@ dependencies = [
     "aiometer",
     "tortoise-orm[accel]",
     "tqdm",
-
+    "fastexcel>=0.15.1",
 ]
 
 [tool.uv]
@@ -95,12 +95,3 @@ select = [
     "I",
 ]
 ignore = ["F405", "E501", "F403"]
-
-[tool.ty]
-[tool.ty.lint]
-select = [
-    "TC",
-    "TI",
-    "UP",
-    "RUF",
-]

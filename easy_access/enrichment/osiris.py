@@ -739,10 +739,6 @@ async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -
         results = response.json().get("hits", {}).get("hits", [])
 
         if not results:
-            logger.warning(
-                f"No OSIRIS data found for course code {course_code} after initial search"
-            )
-            logger.debug(f"OSIRIS response: {response.text}")
             return {}
 
         # Process the first result (most relevant)

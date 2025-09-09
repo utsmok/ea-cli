@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-
 from loguru import logger
 
 # Compatibility shim: some combinations of Typer and Click/Rich have a
@@ -66,8 +65,11 @@ app.add_typer(preprocess_app)
 backup_app = typer.Typer(name="backup", help="Backup and restore operations.")
 app.add_typer(backup_app)
 
-admin_app = typer.Typer(name="admin", help="Administrative operations and failure management.")
+admin_app = typer.Typer(
+    name="admin", help="Administrative operations and failure management."
+)
 app.add_typer(admin_app)
+
 
 # Commands for main app
 @app.command(name="process")
@@ -171,13 +173,23 @@ def process_data(
             other_sheet = None
 
     # Validate stage selection options
-    stage_options = [ingest_only, process_only, export_only, enrich_only, file_exists_only]
+    stage_options = [
+        ingest_only,
+        process_only,
+        export_only,
+        enrich_only,
+        file_exists_only,
+    ]
     if sum(stage_options) > 1:
-        logger.error("Cannot specify multiple stage options. Choose only one: --ingest-only, --process-only, --export-only, --enrich-only, or --file-exists-only.")
+        logger.error(
+            "Cannot specify multiple stage options. Choose only one: --ingest-only, --process-only, --export-only, --enrich-only, or --file-exists-only."
+        )
         typer.Exit(1)
 
     # Determine which stages to run
-    run_ingest = ingest_only or not any(stage_options)  # Default to all if no stage specified
+    run_ingest = ingest_only or not any(
+        stage_options
+    )  # Default to all if no stage specified
     run_process = process_only or not any(stage_options)
     run_export = export_only or not any(stage_options)
     run_enrich = enrich_only or not any(stage_options)
@@ -234,8 +246,10 @@ def run_dashboard(
     logger.info("Serving the easy_access dashboard.")
     logger.info(f"Once launched, it will be available at http://{host}:{port}.")
     logger.info("Press Ctrl+C or close this terminal window to stop the server.")
-    from easy_access.settings import SETTINGS
     import uvicorn
+
+    from easy_access.settings import SETTINGS
+
     uvicorn.run(
         "dashboard.dash:app",
         host=host,
@@ -454,22 +468,18 @@ def run_all_preprocess(
 
 @admin_app.command(name="inspect-failures")
 def inspect_failures(
-    limit: Annotated[
-        int,
-        typer.Option(help="Limit number of records to show")
-    ] = 50,
+    limit: Annotated[int, typer.Option(help="Limit number of records to show")] = 50,
     material_id: Annotated[
-        int | None,
-        typer.Option(help="Filter by specific material ID")
+        int | None, typer.Option(help="Filter by specific material ID")
     ] = None,
     show_payload: Annotated[
-        bool,
-        typer.Option(help="Show full staged payload in output")
+        bool, typer.Option(help="Show full staged payload in output")
     ] = False,
 ) -> None:
     """Inspect StagedProcessingFailure records for debugging."""
-    import json
     import asyncio
+    import json
+
     from tortoise import Tortoise
 
     from easy_access.db.models import StagedProcessingFailure
@@ -482,7 +492,7 @@ def inspect_failures(
         )
 
         try:
-            query = StagedProcessingFailure.all().order_by('-created_at')
+            query = StagedProcessingFailure.all().order_by("-created_at")
 
             if material_id:
                 query = query.filter(material_id=material_id)
@@ -500,7 +510,9 @@ def inspect_failures(
                     typer.echo(f"Error: {failure.error_message}")
 
                     if show_payload and failure.staged_payload:
-                        typer.echo(f"Payload: {json.dumps(failure.staged_payload, indent=2)}")
+                        typer.echo(
+                            f"Payload: {json.dumps(failure.staged_payload, indent=2)}"
+                        )
 
                     typer.echo("-" * 80)
             else:
@@ -516,7 +528,8 @@ def inspect_failures(
 def failure_stats() -> None:
     """Show statistics about StagedProcessingFailure records."""
     import asyncio
-    from datetime import datetime, timedelta, UTC
+    from datetime import UTC, datetime, timedelta
+
     from tortoise import Tortoise
 
     from easy_access.db.models import StagedProcessingFailure
@@ -526,22 +539,26 @@ def failure_stats() -> None:
         """Categorize error messages into common patterns."""
         error_lower = error_message.lower()
 
-        if 'faculty' in error_lower and ('not found' in error_lower or 'does not exist' in error_lower):
-            return 'Faculty Lookup Error'
-        elif 'material_id' in error_lower and ('invalid' in error_lower or 'missing' in error_lower):
-            return 'Invalid Material ID'
-        elif 'classification' in error_lower:
-            return 'Classification Error'
-        elif 'database' in error_lower or 'connection' in error_lower:
-            return 'Database Error'
-        elif 'permission' in error_lower or 'access' in error_lower:
-            return 'Permission Error'
-        elif 'timeout' in error_lower:
-            return 'Timeout Error'
-        elif 'validation' in error_lower:
-            return 'Validation Error'
+        if "faculty" in error_lower and (
+            "not found" in error_lower or "does not exist" in error_lower
+        ):
+            return "Faculty Lookup Error"
+        elif "material_id" in error_lower and (
+            "invalid" in error_lower or "missing" in error_lower
+        ):
+            return "Invalid Material ID"
+        elif "classification" in error_lower:
+            return "Classification Error"
+        elif "database" in error_lower or "connection" in error_lower:
+            return "Database Error"
+        elif "permission" in error_lower or "access" in error_lower:
+            return "Permission Error"
+        elif "timeout" in error_lower:
+            return "Timeout Error"
+        elif "validation" in error_lower:
+            return "Validation Error"
         else:
-            return 'Other Error'
+            return "Other Error"
 
     async def run_stats():
         await Tortoise.init(
@@ -562,12 +579,18 @@ def failure_stats() -> None:
                     error_patterns[error_key] = error_patterns.get(error_key, 0) + 1
 
             # Get failures by material_id
-            material_failures = await StagedProcessingFailure.filter(material_id__not_isnull=True).count()
-            unknown_material_failures = await StagedProcessingFailure.filter(material_id__isnull=True).count()
+            material_failures = await StagedProcessingFailure.filter(
+                material_id__not_isnull=True
+            ).count()
+            unknown_material_failures = await StagedProcessingFailure.filter(
+                material_id__isnull=True
+            ).count()
 
             # Get recent failures (last 24 hours)
             yesterday = datetime.now(UTC) - timedelta(days=1)
-            recent_failures = await StagedProcessingFailure.filter(created_at__gte=yesterday).count()
+            recent_failures = await StagedProcessingFailure.filter(
+                created_at__gte=yesterday
+            ).count()
 
             typer.echo("\nFailure Statistics:")
             typer.echo("-" * 40)
@@ -578,7 +601,9 @@ def failure_stats() -> None:
 
             if error_patterns:
                 typer.echo("\nError Patterns:")
-                for pattern, count in sorted(error_patterns.items(), key=lambda x: x[1], reverse=True):
+                for pattern, count in sorted(
+                    error_patterns.items(), key=lambda x: x[1], reverse=True
+                ):
                     typer.echo(f"  {pattern}: {count}")
         finally:
             await Tortoise.close_connections()
@@ -590,20 +615,26 @@ def failure_stats() -> None:
 @admin_app.command(name="retry-failures")
 def retry_failures(
     material_id: Annotated[
-        int | None,
-        typer.Option(help="Retry specific material ID only")
+        int | None, typer.Option(help="Retry specific material ID only")
     ] = None,
     dry_run: Annotated[
-        bool,
-        typer.Option(help="Show what would be done without making changes")
+        bool, typer.Option(help="Show what would be done without making changes")
     ] = True,
 ) -> None:
     """Retry processing of failed StagedProcessingFailure records."""
     import asyncio
+
     from tortoise import Tortoise
 
-    from easy_access.db.models import StagedProcessingFailure, StagedCopyrightItem, StagedFacultyUpdate
-    from easy_access.db.update import process_staged_raw_data, process_staged_faculty_updates
+    from easy_access.db.models import (
+        StagedCopyrightItem,
+        StagedFacultyUpdate,
+        StagedProcessingFailure,
+    )
+    from easy_access.db.update import (
+        process_staged_faculty_updates,
+        process_staged_raw_data,
+    )
     from easy_access.settings import SETTINGS
 
     async def retry_single_failure(failure):
@@ -616,8 +647,12 @@ def retry_failures(
                 return False
 
             # Check if the original staged record still exists
-            staged_raw = await StagedCopyrightItem.filter(material_id=material_id_val).first()
-            staged_faculty = await StagedFacultyUpdate.filter(material_id=material_id_val).first()
+            staged_raw = await StagedCopyrightItem.filter(
+                material_id=material_id_val
+            ).first()
+            staged_faculty = await StagedFacultyUpdate.filter(
+                material_id=material_id_val
+            ).first()
 
             if staged_raw:
                 # Retry raw data processing
@@ -630,11 +665,15 @@ def retry_failures(
                     await process_staged_faculty_updates(SETTINGS)
                 return True
             else:
-                typer.echo(f"Warning: No staged record found for material_id {material_id_val}")
+                typer.echo(
+                    f"Warning: No staged record found for material_id {material_id_val}"
+                )
                 return False
 
         except Exception as e:
-            typer.echo(f"Error retrying failure for material_id {failure.material_id}: {str(e)}")
+            typer.echo(
+                f"Error retrying failure for material_id {failure.material_id}: {str(e)}"
+            )
             return False
 
     async def run_retry():
@@ -666,10 +705,14 @@ def retry_failures(
                                 await failure.delete()  # Remove successful retry
                         else:
                             failed_retries += 1
-                            errors.append(f"Failed to retry material_id {failure.material_id}")
+                            errors.append(
+                                f"Failed to retry material_id {failure.material_id}"
+                            )
                     else:
                         failed_retries += 1
-                        errors.append(f"Missing payload or material_id for failure {failure.id}")
+                        errors.append(
+                            f"Missing payload or material_id for failure {failure.id}"
+                        )
 
                 except Exception as e:
                     failed_retries += 1
@@ -697,17 +740,16 @@ def retry_failures(
 @admin_app.command(name="cleanup-failures")
 def cleanup_failures(
     days_old: Annotated[
-        int,
-        typer.Option(help="Delete records older than N days")
+        int, typer.Option(help="Delete records older than N days")
     ] = 30,
     dry_run: Annotated[
-        bool,
-        typer.Option(help="Show what would be done without making changes")
+        bool, typer.Option(help="Show what would be done without making changes")
     ] = True,
 ) -> None:
     """Clean up old StagedProcessingFailure records."""
     import asyncio
-    from datetime import datetime, timedelta, UTC
+    from datetime import UTC, datetime, timedelta
+
     from tortoise import Tortoise
 
     from easy_access.db.models import StagedProcessingFailure
@@ -746,6 +788,7 @@ if __name__ == "__main__":
     # Try to initialize Trogon TUI if available
     try:
         from trogon.typer import init_tui
+
         init_tui(app)
     except ImportError:
         # Trogon not installed, continue with regular CLI

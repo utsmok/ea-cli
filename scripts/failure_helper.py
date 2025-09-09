@@ -19,38 +19,46 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any
 
-import polars as pl
 from loguru import logger
 from tortoise import Tortoise
 
 # Add the project root to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from easy_access.db.models import StagedProcessingFailure, StagedCopyrightItem, StagedFacultyUpdate
-from easy_access.db.update import process_staged_raw_data, process_staged_faculty_updates
+from easy_access.db.models import (
+    StagedCopyrightItem,
+    StagedFacultyUpdate,
+    StagedProcessingFailure,
+)
+from easy_access.db.update import (
+    process_staged_faculty_updates,
+    process_staged_raw_data,
+)
 from easy_access.settings import Settings
 
 
 class FailureInspector:
     """Helper class for inspecting and managing StagedProcessingFailure records."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     async def inspect_failures(
         self,
         limit: int = 50,
-        material_id: Optional[int] = None,
-        show_payload: bool = False
-    ) -> List[Dict[str, Any]]:
+        material_id: int | None = None,
+        show_payload: bool = False,
+    ) -> list[dict[str, Any]]:
         """Inspect recent failure records."""
-        logger.info(f"Inspecting failure records (limit: {limit}, material_id: {material_id})")
+        logger.info(
+            f"Inspecting failure records (limit: {limit}, material_id: {material_id})"
+        )
 
-        query = StagedProcessingFailure.all().order_by('-created_at')
+        query = StagedProcessingFailure.all().order_by("-created_at")
 
         if material_id:
             query = query.filter(material_id=material_id)
@@ -60,17 +68,17 @@ class FailureInspector:
         results = []
         for failure in failures:
             result = {
-                'id': failure.id,
-                'material_id': failure.material_id,
-                'error_message': failure.error_message,
-                'created_at': failure.created_at,
-                'staged_payload': failure.staged_payload if show_payload else None
+                "id": failure.id,
+                "material_id": failure.material_id,
+                "error_message": failure.error_message,
+                "created_at": failure.created_at,
+                "staged_payload": failure.staged_payload if show_payload else None,
             }
             results.append(result)
 
         return results
 
-    async def get_failure_stats(self) -> Dict[str, Any]:
+    async def get_failure_stats(self) -> dict[str, Any]:
         """Get statistics about failure records."""
         logger.info("Generating failure statistics")
 
@@ -87,49 +95,59 @@ class FailureInspector:
                 error_patterns[error_key] = error_patterns.get(error_key, 0) + 1
 
         # Get failures by material_id
-        material_failures = await StagedProcessingFailure.filter(material_id__not_isnull=True).count()
-        unknown_material_failures = await StagedProcessingFailure.filter(material_id__isnull=True).count()
+        material_failures = await StagedProcessingFailure.filter(
+            material_id__not_isnull=True
+        ).count()
+        unknown_material_failures = await StagedProcessingFailure.filter(
+            material_id__isnull=True
+        ).count()
 
         # Get recent failures (last 24 hours)
         yesterday = datetime.now(UTC) - timedelta(days=1)
-        recent_failures = await StagedProcessingFailure.filter(created_at__gte=yesterday).count()
+        recent_failures = await StagedProcessingFailure.filter(
+            created_at__gte=yesterday
+        ).count()
 
         return {
-            'total_failures': total_failures,
-            'error_patterns': error_patterns,
-            'material_failures': material_failures,
-            'unknown_material_failures': unknown_material_failures,
-            'recent_failures': recent_failures
+            "total_failures": total_failures,
+            "error_patterns": error_patterns,
+            "material_failures": material_failures,
+            "unknown_material_failures": unknown_material_failures,
+            "recent_failures": recent_failures,
         }
 
     def _categorize_error(self, error_message: str) -> str:
         """Categorize error messages into common patterns."""
         error_lower = error_message.lower()
 
-        if 'faculty' in error_lower and ('not found' in error_lower or 'does not exist' in error_lower):
-            return 'Faculty Lookup Error'
-        elif 'material_id' in error_lower and ('invalid' in error_lower or 'missing' in error_lower):
-            return 'Invalid Material ID'
-        elif 'classification' in error_lower:
-            return 'Classification Error'
-        elif 'database' in error_lower or 'connection' in error_lower:
-            return 'Database Error'
-        elif 'permission' in error_lower or 'access' in error_lower:
-            return 'Permission Error'
-        elif 'timeout' in error_lower:
-            return 'Timeout Error'
-        elif 'validation' in error_lower:
-            return 'Validation Error'
+        if "faculty" in error_lower and (
+            "not found" in error_lower or "does not exist" in error_lower
+        ):
+            return "Faculty Lookup Error"
+        elif "material_id" in error_lower and (
+            "invalid" in error_lower or "missing" in error_lower
+        ):
+            return "Invalid Material ID"
+        elif "classification" in error_lower:
+            return "Classification Error"
+        elif "database" in error_lower or "connection" in error_lower:
+            return "Database Error"
+        elif "permission" in error_lower or "access" in error_lower:
+            return "Permission Error"
+        elif "timeout" in error_lower:
+            return "Timeout Error"
+        elif "validation" in error_lower:
+            return "Validation Error"
         else:
-            return 'Other Error'
+            return "Other Error"
 
     async def retry_failures(
-        self,
-        material_id: Optional[int] = None,
-        dry_run: bool = True
-    ) -> Dict[str, Any]:
+        self, material_id: int | None = None, dry_run: bool = True
+    ) -> dict[str, Any]:
         """Retry processing of failed records."""
-        logger.info(f"Retrying failures (material_id: {material_id}, dry_run: {dry_run})")
+        logger.info(
+            f"Retrying failures (material_id: {material_id}, dry_run: {dry_run})"
+        )
 
         query = StagedProcessingFailure.all()
 
@@ -139,10 +157,10 @@ class FailureInspector:
         failures = await query
 
         results = {
-            'total_attempted': len(failures),
-            'successful_retries': 0,
-            'failed_retries': 0,
-            'errors': []
+            "total_attempted": len(failures),
+            "successful_retries": 0,
+            "failed_retries": 0,
+            "errors": [],
         }
 
         for failure in failures:
@@ -151,23 +169,31 @@ class FailureInspector:
                     # Try to reprocess the staged data
                     success = await self._retry_single_failure(failure, dry_run)
                     if success:
-                        results['successful_retries'] += 1
+                        results["successful_retries"] += 1
                         if not dry_run:
                             await failure.delete()  # Remove successful retry
                     else:
-                        results['failed_retries'] += 1
-                        results['errors'].append(f"Failed to retry material_id {failure.material_id}")
+                        results["failed_retries"] += 1
+                        results["errors"].append(
+                            f"Failed to retry material_id {failure.material_id}"
+                        )
                 else:
-                    results['failed_retries'] += 1
-                    results['errors'].append(f"Missing payload or material_id for failure {failure.id}")
+                    results["failed_retries"] += 1
+                    results["errors"].append(
+                        f"Missing payload or material_id for failure {failure.id}"
+                    )
 
             except Exception as e:
-                results['failed_retries'] += 1
-                results['errors'].append(f"Error retrying failure {failure.id}: {str(e)}")
+                results["failed_retries"] += 1
+                results["errors"].append(
+                    f"Error retrying failure {failure.id}: {str(e)}"
+                )
 
         return results
 
-    async def _retry_single_failure(self, failure: StagedProcessingFailure, dry_run: bool) -> bool:
+    async def _retry_single_failure(
+        self, failure: StagedProcessingFailure, dry_run: bool
+    ) -> bool:
         """Retry processing a single failure."""
         try:
             material_id = failure.material_id
@@ -177,34 +203,40 @@ class FailureInspector:
                 return False
 
             # Check if the original staged record still exists
-            staged_raw = await StagedCopyrightItem.filter(material_id=material_id).first()
-            staged_faculty = await StagedFacultyUpdate.filter(material_id=material_id).first()
+            staged_raw = await StagedCopyrightItem.filter(
+                material_id=material_id
+            ).first()
+            staged_faculty = await StagedFacultyUpdate.filter(
+                material_id=material_id
+            ).first()
 
             if staged_raw:
                 # Retry raw data processing
                 if not dry_run:
-                    await process_staged_raw_data(self.settings, limit=1, specific_material_ids=[material_id])
+                    await process_staged_raw_data(self.settings)
                 return True
             elif staged_faculty:
                 # Retry faculty update processing
                 if not dry_run:
-                    await process_staged_faculty_updates(self.settings, limit=1, specific_material_ids=[material_id])
+                    await process_staged_faculty_updates(self.settings)
                 return True
             else:
                 logger.warning(f"No staged record found for material_id {material_id}")
                 return False
 
         except Exception as e:
-            logger.error(f"Error retrying failure for material_id {failure.material_id}: {str(e)}")
+            logger.error(
+                f"Error retrying failure for material_id {failure.material_id}: {str(e)}"
+            )
             return False
 
     async def cleanup_old_failures(
-        self,
-        days_old: int = 30,
-        dry_run: bool = True
-    ) -> Dict[str, Any]:
+        self, days_old: int = 30, dry_run: bool = True
+    ) -> dict[str, Any]:
         """Clean up old failure records."""
-        logger.info(f"Cleaning up failures older than {days_old} days (dry_run: {dry_run})")
+        logger.info(
+            f"Cleaning up failures older than {days_old} days (dry_run: {dry_run})"
+        )
 
         cutoff_date = datetime.now(UTC) - timedelta(days=days_old)
 
@@ -212,41 +244,55 @@ class FailureInspector:
         old_failures = await query
 
         results = {
-            'cutoff_date': cutoff_date,
-            'failures_to_delete': len(old_failures),
-            'deleted_count': 0
+            "cutoff_date": cutoff_date,
+            "failures_to_delete": len(old_failures),
+            "deleted_count": 0,
         }
 
         if not dry_run and old_failures:
             deleted_count = await query.delete()
-            results['deleted_count'] = deleted_count
+            results["deleted_count"] = deleted_count
 
         return results
 
 
 async def main():
     """Main entry point for the failure helper script."""
-    parser = argparse.ArgumentParser(description='Staged Processing Failure Helper')
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    parser = argparse.ArgumentParser(description="Staged Processing Failure Helper")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Inspect command
-    inspect_parser = subparsers.add_parser('inspect', help='Inspect failure records')
-    inspect_parser.add_argument('--limit', type=int, default=50, help='Limit number of records')
-    inspect_parser.add_argument('--material-id', type=int, help='Filter by material ID')
-    inspect_parser.add_argument('--show-payload', action='store_true', help='Show staged payload')
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect failure records")
+    inspect_parser.add_argument(
+        "--limit", type=int, default=50, help="Limit number of records"
+    )
+    inspect_parser.add_argument("--material-id", type=int, help="Filter by material ID")
+    inspect_parser.add_argument(
+        "--show-payload", action="store_true", help="Show staged payload"
+    )
 
     # Stats command
-    subparsers.add_parser('stats', help='Show failure statistics')
+    subparsers.add_parser("stats", help="Show failure statistics")
 
     # Retry command
-    retry_parser = subparsers.add_parser('retry', help='Retry failed processing')
-    retry_parser.add_argument('--material-id', type=int, help='Retry specific material ID')
-    retry_parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
+    retry_parser = subparsers.add_parser("retry", help="Retry failed processing")
+    retry_parser.add_argument(
+        "--material-id", type=int, help="Retry specific material ID"
+    )
+    retry_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be done"
+    )
 
     # Cleanup command
-    cleanup_parser = subparsers.add_parser('cleanup', help='Clean up old failure records')
-    cleanup_parser.add_argument('--days-old', type=int, default=30, help='Delete records older than N days')
-    cleanup_parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
+    cleanup_parser = subparsers.add_parser(
+        "cleanup", help="Clean up old failure records"
+    )
+    cleanup_parser.add_argument(
+        "--days-old", type=int, default=30, help="Delete records older than N days"
+    )
+    cleanup_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be done"
+    )
 
     args = parser.parse_args()
 
@@ -264,11 +310,11 @@ async def main():
     try:
         inspector = FailureInspector(settings)
 
-        if args.command == 'inspect':
+        if args.command == "inspect":
             failures = await inspector.inspect_failures(
                 limit=args.limit,
                 material_id=args.material_id,
-                show_payload=args.show_payload
+                show_payload=args.show_payload,
             )
 
             if failures:
@@ -281,14 +327,16 @@ async def main():
                     print(f"Created: {failure['created_at']}")
                     print(f"Error: {failure['error_message']}")
 
-                    if args.show_payload and failure['staged_payload']:
-                        print(f"Payload: {json.dumps(failure['staged_payload'], indent=2)}")
+                    if args.show_payload and failure["staged_payload"]:
+                        print(
+                            f"Payload: {json.dumps(failure['staged_payload'], indent=2)}"
+                        )
 
                     print("-" * 80)
             else:
                 print("No failure records found.")
 
-        elif args.command == 'stats':
+        elif args.command == "stats":
             stats = await inspector.get_failure_stats()
 
             print("\nFailure Statistics:")
@@ -298,15 +346,14 @@ async def main():
             print(f"Failures without material_id: {stats['unknown_material_failures']}")
             print(f"Recent failures (24h): {stats['recent_failures']}")
 
-            if stats['error_patterns']:
+            if stats["error_patterns"]:
                 print("\nError Patterns:")
-                for pattern, count in stats['error_patterns'].items():
+                for pattern, count in stats["error_patterns"].items():
                     print(f"  {pattern}: {count}")
 
-        elif args.command == 'retry':
+        elif args.command == "retry":
             results = await inspector.retry_failures(
-                material_id=args.material_id,
-                dry_run=args.dry_run
+                material_id=args.material_id, dry_run=args.dry_run
             )
 
             print(f"\nRetry Results ({'DRY RUN' if args.dry_run else 'LIVE'}):")
@@ -315,17 +362,16 @@ async def main():
             print(f"Successful retries: {results['successful_retries']}")
             print(f"Failed retries: {results['failed_retries']}")
 
-            if results['errors']:
+            if results["errors"]:
                 print("\nErrors:")
-                for error in results['errors'][:10]:  # Show first 10 errors
+                for error in results["errors"][:10]:  # Show first 10 errors
                     print(f"  {error}")
-                if len(results['errors']) > 10:
+                if len(results["errors"]) > 10:
                     print(f"  ... and {len(results['errors']) - 10} more errors")
 
-        elif args.command == 'cleanup':
+        elif args.command == "cleanup":
             results = await inspector.cleanup_old_failures(
-                days_old=args.days_old,
-                dry_run=args.dry_run
+                days_old=args.days_old, dry_run=args.dry_run
             )
 
             print(f"\nCleanup Results ({'DRY RUN' if args.dry_run else 'LIVE'}):")
@@ -338,5 +384,5 @@ async def main():
         await Tortoise.close_connections()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())

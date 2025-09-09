@@ -20,6 +20,22 @@ Recent milestones (trimmed):
 - Ongoing: Phase D – performance tuning, comprehensive tests, and documentation.
 - 2025-09-05: Added unit tests for atomic Excel write and loop-aware pipeline sync wrapper. Pipeline sync wrapper (`_run_sync`) implemented to avoid nested event loop errors.
 - 2025-09-03 Fixes: Person enrichment robustness (URL encoding, cookie wall detection, selector fallback) and workflow_status canonical priority & downgrade guard (prevent repeated Done->ToDo updates). Regression tests added.
+- **2025-09-XX: Comprehensive code review completed** - Individual file analyses and holistic review reports created in `.github/instructions/`
+
+Code Quality Findings (from recent review):
+- **Type Hints**: Inconsistent coverage - needs completion across all files
+- **Documentation**: Variable quality - critical functions lack docstrings
+- **Security**: Hardcoded credentials in `api_keys.py` - HIGH PRIORITY FIX
+- **File Size**: Several files >800 lines should be decomposed (`settings.py`, `models.py`, `sheet.py`)
+- **Error Handling**: Generic exception handling needs standardization
+- **Testing**: Limited coverage - comprehensive test suite needed
+- **Performance**: Good foundation but monitoring needed for large datasets
+
+Implementation Priorities (from code review):
+2. **HIGH**: Complete type hint coverage across all files
+3. **HIGH**: Add comprehensive docstrings to public functions
+4. **MEDIUM**: Decompose large files (>500 lines)
+6. **MEDIUM**: Standardize error handling patterns
 
 Testing / safety notes:
 - Staged processing hardened: explicit field mapping, batched transactions, per-row failure persistence (`StagedProcessingFailure`).

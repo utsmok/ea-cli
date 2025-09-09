@@ -377,29 +377,6 @@ class DataEntrySheet:
                 # Acceptable width, don't enable word wrap but fit width to contents
                 self.sheet.column_dimensions[target_col_letter].width = col.max_width
 
-            # Enforce per-cell locking: for columns with a dropdown we must allow selection
-            # (Excel requires the cell to be unlocked when the sheet is protected for users to change it)
-            try:
-                if col.has_dropdown:
-                    # make DV target cells editable (unlocked) so dropdown arrow is visible and selectable
-                    for row in range(2, self.max_row + 1):
-                        cell = self.sheet.cell(row=row, column=col_index_1based)
-                        cell.protection.locked = False
-                else:
-                    # default locked is True in Excel; make editable cols unlocked
-                    for row in range(2, self.max_row + 1):
-                        cell = self.sheet.cell(row=row, column=col_index_1based)
-                        cell.protection.locked = not bool(col.is_editable)
-                # also lock header row
-                self.sheet.cell(row=1, column=col_index_1based).protection.locked = True
-            except Exception:
-                # best-effort: if protection not supported, continue
-                pass
-
-        # Finally, enable sheet protection so locked cells become non-editable in Excel
-        with contextlib.suppress(Exception):
-            self.sheet.protection.sheet = True
-
         # Add conditional formatting to highlight "onbekend" values
         self._add_conditional_formatting()
 
@@ -417,28 +394,89 @@ class DataEntrySheet:
         self.sheet.add_table(table)
 
     def save(self) -> None:
+        try:
+            self.workbook.active = self.sheet
+        except Exception:
+            self.workbook.active = 1
+
+        self.sheet.sheet_view.tabSelected = True
+        self.workbook["Complete data"].sheet_view.tabSelected = False
         self.workbook.save(filename=self.file_path)
 
     def _add_conditional_formatting(self) -> None:
         """Add conditional formatting to highlight cells containing 'onbekend'."""
         try:
             from openpyxl.formatting.rule import CellIsRule
-            from openpyxl.styles import PatternFill
+            from openpyxl.styles import Border, Font, PatternFill, Side
 
-            # Create a red fill for "onbekend" cells
-            red_fill = PatternFill(
-                start_color="FFFF0000", end_color="FFFF0000", fill_type="solid"
+            #          'ERROR' style
+            # red color setting:
+            # subtle red fill, very dark red text, thin dark orange border
+
+            subtle_red_fill = PatternFill(
+                start_color="FFFFCCCB", end_color="FFFFCCCB", fill_type="solid"
             )
+            dark_orange_side = Side(style="thin", color="FFCC6600")
+            dark_orange_border = Border(
+                left=dark_orange_side,
+                right=dark_orange_side,
+                top=dark_orange_side,
+                bottom=dark_orange_side,
+            )
+            dark_red_font = Font(color="9C0006", bold=True)
+
+            #          'file deleted style'
+            # blue color setting:
+            # light blue fill, dark blue text, thin dark blue border
+            light_blue_fill = PatternFill(
+                start_color="FFCCFFFF", end_color="FFCCFFFF", fill_type="solid"
+            )
+            dark_blue_side = Side(style="thin", color="FF0000FF")
+            dark_blue_border = Border(
+                left=dark_blue_side,
+                right=dark_blue_side,
+                top=dark_blue_side,
+                bottom=dark_blue_side,
+            )
+            dark_blue_font = Font(color="0000FF", bold=True)
 
             # Create the conditional formatting rule
-            rule = CellIsRule(operator="equal", formula=['"onbekend"'], fill=red_fill)
-
+            rule_onbekend = CellIsRule(
+                operator="equal",
+                formula=['"onbekend"'],
+                fill=subtle_red_fill,
+                border=dark_orange_border,
+                font=dark_red_font,
+            )
+            rule_todo = CellIsRule(
+                operator="equal",
+                formula=['"ToDo"'],
+                fill=subtle_red_fill,
+                border=dark_orange_border,
+                font=dark_red_font,
+            )
+            rule_file_deleted = CellIsRule(
+                operator="equal",
+                formula=['"No"'],
+                fill=light_blue_fill,
+                border=dark_blue_border,
+                font=dark_blue_font,
+            )
             # Apply to all data columns (from column A to the last column with data)
             max_col_letter = get_column_letter(len(self.cols))
             data_range = f"A2:{max_col_letter}{self.max_row + 1}"
 
             # Add the conditional formatting rule to the worksheet
-            self.sheet.conditional_formatting.add(data_range, rule)
+            self.sheet.conditional_formatting.add(data_range, rule_onbekend)
+            self.sheet.conditional_formatting.add(data_range, rule_todo)
+
+            # find column named "file_deleted", if it exists, add conditional formatting to it
+            for idx, col in enumerate(self.cols):
+                if col.name == "file_exists":
+                    self.sheet.conditional_formatting.add(
+                        f"{get_column_letter(idx + 1)}2:{get_column_letter(idx + 1)}{self.max_row + 1}",
+                        rule_file_deleted,
+                    )
 
         except Exception as e:
             logger.warning(f"Could not add conditional formatting: {e}")

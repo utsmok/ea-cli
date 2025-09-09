@@ -6,9 +6,9 @@ Usage (PowerShell):
 
 It prints thread names and repr() of pending asyncio tasks.
 """
-import sys
-import threading
+
 import asyncio
+import threading
 
 print("=== Active threads ===")
 for t in threading.enumerate():

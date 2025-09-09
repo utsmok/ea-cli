@@ -13,32 +13,44 @@ Branch / context:
 - [ ] Ensure export stage is read-only by default (export paths should not write to DB unless explicitly enabled via settings/CLI). Confirm `disable_writes` gating across export flows.
 
 
-## Priority: High (testing, reliability & correctness)
-- [ ] Add pipeline full E2E idempotency test: run full pipeline (ingest -> process -> enrich -> relations -> file-existence -> export) twice in an isolated test DB and assert the second run produces zero net changes (no duplicate links, no new enrich writes).
+## (testing, reliability & correctness)
+
 - [ ] Add relations raw-SQL integration test: exercise `link_courses` raw-SQL path by running without mocking `CopyrightItem.bulk_update` and assert expected links are created.
 - [ ] Decouple test-aware logic from production code in these modules: `easy_access/db/relations.py`, `easy_access/maintenance/file_existence.py`, and `easy_access/enrichment/osiris.py` (where safe). Implement a small test adapter used only by tests rather than scattered mock-detection heuristics.
 - [ ] Consolidate `QuerySetMock` and related test helpers into `tests/helpers.py` and update tests to import the shared helper.
 
-## Priority: High (code quality & performance)
+##  (code quality & performance)
 - [ ] Refactor `easy_access/pipeline._run_sync` to a documented, loop-safe dispatcher (avoid relying on nested `asyncio.run` in threads); add regression tests for loop-aware behavior.
-- [ ] Optimize enrichment persistence: ensure `persist_courses` and `persist_persons` use DB-level bulk upserts for full payloads (keep a clear, documented test fallback path). Add unit tests asserting the DB-level bulk path is called when payloads are complete.
-- [ ] Optimize `easy_access/db/relations.py` linking to reduce memory & N+1 risks (bulk M2M / grouped updates). Add micro-benchmarks or call-count tests to show improvements.
 
-## Priority: Medium (export safety & validation)
+##  (export safety & validation)
 - [ ] Add export dataframe schema validator + unit test: ensure required columns (e.g., `material_id`) exist and fail early with clear errors.
 - [ ] Verify atomic Excel writes are used across all export paths and add failure-simulation tests (simulate write error leaving tmp file and ensure final file not corrupted).
-- [ ] Improve `sheets/sheet.py` I/O performance for large exports (consider write_only mode or batched table writes); add benchmark.
 
-## Priority: Medium (features & integration)
+ - [ ] Generalize conditional formatting helper in `sheet.py`: refactor `_add_conditional_formatting` so it can be applied to any column and support all current condition types. Drive conditions and targets from `settings.yaml` and `ColInfo` in `settings.py`. Define a small set of premade styles (also configurable from `settings.yaml`) for reuse across sheets.
+
+ - [ ] Ingest and persist newly-added `CopyrightItem` fields: `filehash`, `last_scan_date_university`, and `last_scan_date_course`.
+	 - Ensure these fields are read from raw inputs, validated, and included in processing and exports.
+	 - Use `filehash` for deduplication: items with identical `filehash` should be marked with `is_duplicate == true` (investigate downstream handling and sheet presentation for duplicates).
+	 - Treat `last_scan_date_university` and `last_scan_date_course` as date-only values; validate Excel-derived dates carefully to ensure correct day/month/year parsing.
+
+ - [ ] Ensure exported Excel files open showing the `Data Entry` sheet by default (both the `Complete Data` and `Data Entry` sheets must still be present).
+
+## (features & integration)
 - [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable.
 - [ ] Add calculate_derived_fields pipeline stage before export to compute non-persistent derived fields used only for reporting.
 
-## Priority: Medium (maintenance & reliability)
+ - [ ] Long-term: implement reactive faculty sheets workflow and monitor script.
+	 - Replace static `overview`/`weekly` sheets with three sheet states per export file: `new`, `to_check`, and `checked` (keep `checked` initially empty).
+	 - New items land in `new`. Items manually marked `Done` (workflowstatus) move to `checked`. Any other user edits move items to `to_check`.
+	 - Items in `checked` are considered locked and persisted to the DB. `new` and `to_check` remain live and should reflect upstream changes (raw copyright imports, file existence updates) but not overwrite user-entered data until reviewed.
+	 - Provide a periodic script that scans `faculty_sheets/`, reconciles state transitions, and updates sheets a few times per day.
+
+## (maintenance & reliability)
 ## NOTE: Only execute these if hanging-issues keep cropping up.
 - [ ] Add teardown leak-detection utility and harden Tortoise / aiosqlite shutdown ordering; run tests to verify no intermittent hangs.
 - [ ] If pytest keeps hanging: investigate and fix intermittent Tortoise-related pytest teardown hang (see `hang_diagnostics.txt`) and implement targeted aiosqlite shutdown and connection closure ordering.
 
-## Priority: Low (docs & housekeeping)
+##  (docs & housekeeping)
 - [ ] Update README with new pipeline stages, flags, and a short architecture diagram (PNG/SVG). Include quick-run commands for local testing.
 
 ## (Removed / Superseded)

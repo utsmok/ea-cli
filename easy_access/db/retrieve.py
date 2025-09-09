@@ -365,7 +365,7 @@ def retrieve_full_data_original(
                         SELECT DISTINCT pd.main_name as course_contacts_names
                         FROM course_employee ce
                         JOIN person_data pd ON ce.person_id = pd.id
-                        WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id
+                        WHERE ce.role = 'contacts' AND ce.course_id = cdcd.course_id
                     )
                 ) AS course_contacts_names,
                 (
@@ -374,7 +374,7 @@ def retrieve_full_data_original(
                         SELECT DISTINCT pd.email as course_contacts_emails
                         FROM course_employee ce
                         JOIN person_data pd ON ce.person_id = pd.id
-                        WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id
+                        WHERE ce.role = 'contacts' AND ce.course_id = cdcd.course_id
                     )
                 ) AS course_contacts_emails,
                 (
@@ -384,7 +384,7 @@ def retrieve_full_data_original(
                         FROM course_employee ce
                         JOIN person_data pd ON ce.person_id = pd.id
                         LEFT JOIN faculty f ON pd.faculty_id = f.abbreviation
-                        WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id
+                        WHERE ce.role = 'contacts' AND ce.course_id = cdcd.course_id
                     )
                 ) AS course_contacts_faculties,
                 (
@@ -395,7 +395,7 @@ def retrieve_full_data_original(
                         JOIN person_data pd ON ce.person_id = pd.id
                         LEFT JOIN person_data_organization_data pdod ON pd.id = pdod.person_data_id
                         LEFT JOIN organization_data org ON pdod.organization_id = org.id
-                        WHERE ce.role = 'contact' AND ce.course_id = cdcd.course_id
+                        WHERE ce.role = 'contacts' AND ce.course_id = cdcd.course_id
                     )
                 ) AS course_contacts_organizations
             FROM copyright_data cd
