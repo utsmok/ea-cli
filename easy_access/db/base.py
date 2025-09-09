@@ -87,15 +87,15 @@ async def init_faculties(settings: Settings) -> None:
     faculties = settings.university_settings.faculties
 
     for faculty in faculties:
-        faculty, success = await Faculty.get_or_create(
+        faculty_obj, success = await Faculty.get_or_create(
             name=faculty.name,
             abbreviation=faculty.abbreviation,
             full_abbreviation=faculty.abbreviation,
             hierarchy_level=1,
         )
-        if not faculty.parent_organization:
-            faculty.parent_organization = main_uni
-            await faculty.save()
+        if not faculty_obj.parent_organization:
+            faculty_obj.parent_organization = main_uni
+            await faculty_obj.save()
 
     # also create an "Unmapped" faculty to use as a fallback
     unmapped, success = await Faculty.get_or_create(
