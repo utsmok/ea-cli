@@ -13,25 +13,24 @@ import polars as pl
 from loguru import logger
 from tortoise import Tortoise
 from tortoise.transactions import in_transaction
-from tortoise.models import Model
+
 from easy_access.db.base import (
     copyright_item_from_dict,
     ensure_db_inited,
 )
 from easy_access.db.models import (
     CopyrightItem,
+    Course,
+    Faculty,
     Infringement,
     ItemUpdate,
+    Organization,
+    Person,
     StagedCopyrightItem,
     StagedFacultyUpdate,
     StagedProcessingFailure,
     Status,
     WorkflowStatus,
-    Course,
-    Person,
-    Faculty,
-    Organization,
-    CourseEmployee,
 )
 from easy_access.merge_rules import (
     build_merge_rules_from_settings,
@@ -946,7 +945,7 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
                     # Ensure material_id is present and castable
                     mid = item_dict.get("material_id")
-                    faculty_val = item_dict.get("faculty")
+                    item_dict.get("faculty")
                     if mid is None:
                         # logger.warning(
                         #    f"[STAGED][SKIP] material_id=None, faculty={faculty_val}, stage=raw_data: Missing required material_id"
@@ -1055,8 +1054,8 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
                 except Exception as e:
                     err_msg = str(e)
-                    mid_val = getattr(staged_item, "material_id", None)
-                    faculty_val = getattr(staged_item, "faculty", None)
+                    getattr(staged_item, "material_id", None)
+                    getattr(staged_item, "faculty", None)
                     # logger.error(
                     #    f"[STAGED][ERROR] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {err_msg}"
                     # )
@@ -1197,7 +1196,7 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                         ...
 
                 except Exception:
-                    mid_val = getattr(update, "material_id", None)
+                    getattr(update, "material_id", None)
                     # logger.error(
                     #    f"[STAGED][ERROR] material_id={mid_val}, stage=faculty_update: {str(e)}"
                     # )
@@ -1230,6 +1229,7 @@ async def calculate_derived_fields(settings: Settings) -> None:
     for all copyright items.
     """
     from easy_access.db.retrieve import retrieve_copyright_items
+
     df = retrieve_copyright_items(
         settings=settings,
         additional_cols=[
@@ -1281,7 +1281,6 @@ async def calculate_derived_fields(settings: Settings) -> None:
 
     await update_copyright_items(settings=settings, data=update_df, overwrite=True)
     logger.info("Finished calculating derived fields.")
-
 
 
 async def persist_courses(
@@ -1341,10 +1340,21 @@ async def persist_courses(
                 )
 
         # Remove non-column / relation fields before create/update (relations handled later)
-        relation_keys = {"teachers", "contacts", "docenten", "examinators", "unknown_role", "tutors"}
+        relation_keys = {
+            "teachers",
+            "contacts",
+            "docenten",
+            "examinators",
+            "unknown_role",
+            "tutors",
+        }
         relation_payload = {k: cd.pop(k) for k in list(cd.keys()) if k in relation_keys}
         # Drop unsupported keys (e.g. faculty_long, language, etc.)
-        cd = {k: v for k, v in cd.items() if k in allowed_course_fields or k.startswith("_")}
+        cd = {
+            k: v
+            for k, v in cd.items()
+            if k in allowed_course_fields or k.startswith("_")
+        }
         cd["_relation_payload"] = relation_payload  # stash for later
 
         if "ec" in cd:
@@ -1358,9 +1368,13 @@ async def persist_courses(
             to_update.append(cd | {"cursuscode": code})
         else:
             # Required minimal fields guard
-            missing_req = [k for k in ["cursuscode", "internal_id", "year", "name"] if k not in cd]
+            missing_req = [
+                k for k in ["cursuscode", "internal_id", "year", "name"] if k not in cd
+            ]
             if missing_req:
-                logger.warning(f"Skipping create for course {code}: missing {missing_req}")
+                logger.warning(
+                    f"Skipping create for course {code}: missing {missing_req}"
+                )
                 continue
             cd["cursuscode"] = code
             to_create.append(cd)
@@ -1383,7 +1397,9 @@ async def persist_courses(
             await CourseModel.filter(cursuscode=code).update(**ud)
             course_obj = await CourseModel.get_or_none(cursuscode=code)
             if course_obj:
-                await _apply_course_teacher_relations(course_obj, rel_payload, PersonModel)
+                await _apply_course_teacher_relations(
+                    course_obj, rel_payload, PersonModel
+                )
         except Exception as exc:  # pragma: no cover
             logger.error(f"Error updating course {code}: {exc}")
 
@@ -1400,9 +1416,16 @@ async def _apply_course_teacher_relations(course_obj, rel_payload: dict, PersonM
         return
     # Aggregate teacher-like sets
     teacher_sets = []
-    for key in ["teachers", "contacts", "docenten", "examinators", "unknown_role", "tutors"]:
+    for key in [
+        "teachers",
+        "contacts",
+        "docenten",
+        "examinators",
+        "unknown_role",
+        "tutors",
+    ]:
         val = rel_payload.get(key)
-        if isinstance(val, (set, list, tuple)):
+        if isinstance(val, set | list | tuple):
             teacher_sets.append(set(val))
     if not teacher_sets:
         return
@@ -1416,7 +1439,9 @@ async def _apply_course_teacher_relations(course_obj, rel_payload: dict, PersonM
         try:
             await course_obj.teachers.add(person_obj)
         except Exception as exc:  # pragma: no cover
-            logger.debug(f"Could not add teacher '{name}' to course {course_obj.cursuscode}: {exc}")
+            logger.debug(
+                f"Could not add teacher '{name}' to course {course_obj.cursuscode}: {exc}"
+            )
 
 
 async def persist_persons(
@@ -1441,7 +1466,14 @@ async def persist_persons(
     to_update: list[dict] = []
 
     # Allowed direct columns (excluding M2M + unserialized fields)
-    direct_fields = {"input_name", "main_name", "match_confidence", "first_name", "email", "people_page_url"}
+    direct_fields = {
+        "input_name",
+        "main_name",
+        "match_confidence",
+        "first_name",
+        "email",
+        "people_page_url",
+    }
 
     for input_name, pdata in persons_data.items():
         if not isinstance(pdata, dict):
@@ -1454,12 +1486,18 @@ async def persist_persons(
             if faculty_obj:
                 pd["faculty_id"] = faculty_obj.abbreviation
             else:
-                logger.debug(f"Faculty '{faculty_abbr}' not found for person {input_name}")
+                logger.debug(
+                    f"Faculty '{faculty_abbr}' not found for person {input_name}"
+                )
         # Stash org info
         orgs_payload = pd.pop("orgs", [])
         pd["_orgs_payload"] = orgs_payload
         # Drop unsupported keys
-        cleaned = {k: v for k, v in pd.items() if k in direct_fields or k.endswith("_id") or k.startswith("_")}
+        cleaned = {
+            k: v
+            for k, v in pd.items()
+            if k in direct_fields or k.endswith("_id") or k.startswith("_")
+        }
         cleaned["input_name"] = input_name  # ensure primary identifier present
         if input_name in existing_names:
             to_update.append(cleaned)
@@ -1470,7 +1508,9 @@ async def persist_persons(
     for cd in to_create:
         orgs_payload = cd.pop("_orgs_payload", [])
         try:
-            person_obj = await PersonModel.create(**{k: v for k, v in cd.items() if not k.startswith("_")})
+            person_obj = await PersonModel.create(
+                **{k: v for k, v in cd.items() if not k.startswith("_")}
+            )
         except Exception as exc:  # pragma: no cover
             logger.error(f"Error creating person {cd.get('input_name')}: {exc}")
             continue
@@ -1481,17 +1521,25 @@ async def persist_persons(
         orgs_payload = ud.pop("_orgs_payload", [])
         input_name = ud.pop("input_name")
         try:
-            await PersonModel.filter(input_name=input_name).update(**{k: v for k, v in ud.items() if not k.startswith("_")})
+            await PersonModel.filter(input_name=input_name).update(
+                **{k: v for k, v in ud.items() if not k.startswith("_")}
+            )
             person_obj = await PersonModel.get_or_none(input_name=input_name)
             if person_obj:
-                await _apply_person_org_relations(person_obj, orgs_payload, OrganizationModel)
+                await _apply_person_org_relations(
+                    person_obj, orgs_payload, OrganizationModel
+                )
         except Exception as exc:  # pragma: no cover
             logger.error(f"Error updating person {input_name}: {exc}")
 
     logger.info(f"Successfully persisted {len(persons_data)} persons")
 
 
-async def _apply_person_org_relations(person_obj:Person, orgs_payload: dict[str,str], OrganizationModel: type[Organization]):
+async def _apply_person_org_relations(
+    person_obj: Person,
+    orgs_payload: dict[str, str],
+    OrganizationModel: type[Organization],
+):
     if not person_obj or not orgs_payload:
         return
     for org in orgs_payload:
@@ -1513,7 +1561,9 @@ async def _apply_person_org_relations(person_obj:Person, orgs_payload: dict[str,
             except Exception:
                 # probably multiple with the same 'abbreviation'
                 # instead filter on abbreviation and hierarchy_level
-                org_obj_filtered = OrganizationModel.filter(full_abbreviation=full_abbr, name=name)
+                org_obj_filtered = OrganizationModel.filter(
+                    full_abbreviation=full_abbr, name=name
+                )
                 num_found = await org_obj_filtered.count()
                 # if exactly one match, use it
                 if not num_found:
@@ -1521,7 +1571,9 @@ async def _apply_person_org_relations(person_obj:Person, orgs_payload: dict[str,
                 elif num_found == 1:
                     org_obj = await org_obj_filtered.first()
                 else:
-                    logger.error(f"Found multiple organizations matching abbreviation='{base_abbr}', hierarchy_level={hierarchy_level}, name='{name}'; cannot disambiguate, skipping")
+                    logger.error(
+                        f"Found multiple organizations matching abbreviation='{base_abbr}', hierarchy_level={hierarchy_level}, name='{name}'; cannot disambiguate, skipping"
+                    )
                     org_obj = None
         if not org_obj:
             try:
@@ -1534,7 +1586,9 @@ async def _apply_person_org_relations(person_obj:Person, orgs_payload: dict[str,
                 )
             except Exception as exc:  # pragma: no cover
                 # Retry fetch in case of race creating same full_abbreviation
-                existing_retry = await OrganizationModel.get_or_none(full_abbreviation=full_abbr)
+                existing_retry = await OrganizationModel.get_or_none(
+                    full_abbreviation=full_abbr
+                )
                 if existing_retry:
                     org_obj = existing_retry
                 else:
@@ -1545,4 +1599,6 @@ async def _apply_person_org_relations(person_obj:Person, orgs_payload: dict[str,
         try:
             await person_obj.orgs.add(org_obj)
         except Exception as exc:  # pragma: no cover
-            logger.debug(f"Could not add org '{full_abbr}' to person {person_obj.input_name}: {exc}")
+            logger.debug(
+                f"Could not add org '{full_abbr}' to person {person_obj.input_name}: {exc}"
+            )

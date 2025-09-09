@@ -322,7 +322,7 @@ class UniversitySettings:
         env_files = [".env", ".secret"]
 
         folders_to_search = [os.getcwd()]
-        for i in range(2):  #
+        for _i in range(2):  #
             folders_to_search.append(os.path.dirname(folders_to_search[-1]))
 
         for folder in folders_to_search:

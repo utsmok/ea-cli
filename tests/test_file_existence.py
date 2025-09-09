@@ -14,21 +14,20 @@ Tests cover:
 - Error handling and edge cases
 """
 
-import pytest
-import httpx
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from tests.helpers import QuerySetMock
-from datetime import datetime, timedelta
-import asyncio
+
+import httpx
+import pytest
 
 from easy_access.maintenance.file_existence import (
-    select_items_needing_file_check,
     check_single_file_existence,
-    update_file_existence_batch,
     refresh_file_existence_async,
+    select_items_needing_file_check,
+    update_file_existence_batch,
 )
-from easy_access.db.models import CopyrightItem
 from easy_access.settings import Settings
+from tests.helpers import QuerySetMock
 
 
 class TestSelectItemsNeedingFileCheck:
@@ -47,11 +46,16 @@ class TestSelectItemsNeedingFileCheck:
         mock_item2.material_id = "456"
         mock_item2.url = "https://example.com/files/456/download"
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.raw', new_callable=AsyncMock) as mock_raw:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.raw",
+            new_callable=AsyncMock,
+        ) as mock_raw:
             # Mock the raw query to return the items
             mock_raw.return_value = [mock_item1, mock_item2]
 
-            result = await select_items_needing_file_check(settings, ttl_days=None, force=True)
+            result = await select_items_needing_file_check(
+                settings, ttl_days=None, force=True
+            )
 
             assert len(result) == 2
             assert result[0]["material_id"] == "123"
@@ -74,10 +78,15 @@ class TestSelectItemsNeedingFileCheck:
         mock_item.material_id = "123"
         mock_item.url = "https://example.com/files/123/download"
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.raw', new_callable=AsyncMock) as mock_raw:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.raw",
+            new_callable=AsyncMock,
+        ) as mock_raw:
             mock_raw.return_value = [mock_item]
 
-            result = await select_items_needing_file_check(settings, ttl_days=30, force=False)
+            result = await select_items_needing_file_check(
+                settings, ttl_days=30, force=False
+            )
 
             assert len(result) == 1
             assert result[0]["material_id"] == "123"
@@ -87,10 +96,15 @@ class TestSelectItemsNeedingFileCheck:
         """Test selecting items with force flag."""
         settings = Settings()
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.raw', new_callable=AsyncMock) as mock_raw:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.raw",
+            new_callable=AsyncMock,
+        ) as mock_raw:
             mock_raw.return_value = []
 
-            result = await select_items_needing_file_check(settings, ttl_days=30, force=True)
+            result = await select_items_needing_file_check(
+                settings, ttl_days=30, force=True
+            )
 
             assert result == []
 
@@ -106,11 +120,16 @@ class TestSelectItemsNeedingFileCheck:
             mock_item.url = f"https://example.com/files/{i}/download"
             mock_items.append(mock_item)
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.raw', new_callable=AsyncMock) as mock_raw:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.raw",
+            new_callable=AsyncMock,
+        ) as mock_raw:
             # Mock should return only up to batch_size items
             mock_raw.return_value = mock_items[:1000]
 
-            result = await select_items_needing_file_check(settings, limit=1000, force=True)
+            result = await select_items_needing_file_check(
+                settings, limit=1000, force=True
+            )
 
             assert len(result) == 1000
 
@@ -127,7 +146,10 @@ class TestSelectItemsNeedingFileCheck:
         mock_item2.material_id = "456"
         mock_item2.url = None
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.raw', new_callable=AsyncMock) as mock_raw:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.raw",
+            new_callable=AsyncMock,
+        ) as mock_raw:
             mock_raw.return_value = [mock_item1, mock_item2]
 
             result = await select_items_needing_file_check(settings, force=True)
@@ -143,7 +165,7 @@ class TestCheckSingleFileExistence:
         """Test successful file existence check."""
         item_data = {
             "material_id": "123",
-            "url": "https://utwente.instructure.com/courses/123/files/456/download"
+            "url": "https://utwente.instructure.com/courses/123/files/456/download",
         }
 
         mock_response = MagicMock()
@@ -163,7 +185,7 @@ class TestCheckSingleFileExistence:
         """Test file existence check when file doesn't exist."""
         item_data = {
             "material_id": "123",
-            "url": "https://utwente.instructure.com/courses/123/files/456/download"
+            "url": "https://utwente.instructure.com/courses/123/files/456/download",
         }
 
         mock_response = MagicMock()
@@ -181,10 +203,7 @@ class TestCheckSingleFileExistence:
     @pytest.mark.asyncio
     async def test_check_file_invalid_url_format(self):
         """Test handling of invalid URL format."""
-        item_data = {
-            "material_id": "123",
-            "url": "https://invalid-url.com"
-        }
+        item_data = {"material_id": "123", "url": "https://invalid-url.com"}
 
         mock_session = AsyncMock()
 
@@ -199,7 +218,7 @@ class TestCheckSingleFileExistence:
         """Test handling of HTTP errors during file check."""
         item_data = {
             "material_id": "123",
-            "url": "https://utwente.instructure.com/courses/123/files/456/download"
+            "url": "https://utwente.instructure.com/courses/123/files/456/download",
         }
 
         mock_session = AsyncMock()
@@ -216,7 +235,7 @@ class TestCheckSingleFileExistence:
         """Test file existence check with URL containing query parameters."""
         item_data = {
             "material_id": "123",
-            "url": "https://utwente.instructure.com/courses/123/files/456/download?download_frd=1"
+            "url": "https://utwente.instructure.com/courses/123/files/456/download?download_frd=1",
         }
 
         mock_response = MagicMock()
@@ -248,13 +267,17 @@ class TestUpdateFileExistenceBatch:
     @pytest.mark.asyncio
     async def test_update_batch_single_item(self):
         """Test batch update with single item."""
-        results = [{
-            "material_id": "123",
-            "file_exists": True,
-            "last_canvas_check": datetime.now()
-        }]
+        results = [
+            {
+                "material_id": "123",
+                "file_exists": True,
+                "last_canvas_check": datetime.now(),
+            }
+        ]
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.filter') as mock_filter:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.filter"
+        ) as mock_filter:
             mock_update = AsyncMock()
             mock_filter.return_value.update = mock_update
 
@@ -270,16 +293,18 @@ class TestUpdateFileExistenceBatch:
             {
                 "material_id": "123",
                 "file_exists": True,
-                "last_canvas_check": datetime.now()
+                "last_canvas_check": datetime.now(),
             },
             {
                 "material_id": "456",
                 "file_exists": False,
-                "last_canvas_check": datetime.now()
-            }
+                "last_canvas_check": datetime.now(),
+            },
         ]
 
-        with patch('easy_access.maintenance.file_existence.CopyrightItem.filter') as mock_filter:
+        with patch(
+            "easy_access.maintenance.file_existence.CopyrightItem.filter"
+        ) as mock_filter:
             mock_update = AsyncMock()
             mock_filter.return_value.update = mock_update
 
@@ -297,10 +322,11 @@ class TestRefreshFileExistenceAsync:
         """Test refresh when no API token is available."""
         settings = Settings()
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             # Mock getattr to return None for canvas_api_token
             mock_getattr.return_value = None
 
@@ -314,11 +340,14 @@ class TestRefreshFileExistenceAsync:
         """Test refresh when no items need checking."""
         settings = Settings()
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.select_items_needing_file_check') as mock_select, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.select_items_needing_file_check"
+            ) as mock_select,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             mock_getattr.return_value = "test_token"
             mock_select.return_value = []
 
@@ -334,16 +363,21 @@ class TestRefreshFileExistenceAsync:
 
         items_to_check = [
             {"material_id": "123", "url": "https://example.com/files/123/download"},
-            {"material_id": "456", "url": "https://example.com/files/456/download"}
+            {"material_id": "456", "url": "https://example.com/files/456/download"},
         ]
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.select_items_needing_file_check') as mock_select, \
-             patch('easy_access.maintenance.file_existence.update_file_existence_batch') as mock_update, \
-             patch('httpx.AsyncClient') as mock_client_class, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.select_items_needing_file_check"
+            ) as mock_select,
+            patch(
+                "easy_access.maintenance.file_existence.update_file_existence_batch"
+            ) as mock_update,
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             mock_getattr.return_value = "test_token"
             mock_select.return_value = items_to_check
 
@@ -379,13 +413,18 @@ class TestRefreshFileExistenceAsync:
             for i in range(10)
         ]
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.select_items_needing_file_check') as mock_select, \
-             patch('easy_access.maintenance.file_existence.update_file_existence_batch') as mock_update, \
-             patch('httpx.AsyncClient') as mock_client_class, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.select_items_needing_file_check"
+            ) as mock_select,
+            patch(
+                "easy_access.maintenance.file_existence.update_file_existence_batch"
+            ),
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             mock_getattr.return_value = "test_token"
             mock_select.return_value = items_to_check
 
@@ -410,15 +449,18 @@ class TestRefreshFileExistenceAsync:
         """Test refresh with force flag enabled."""
         settings = Settings()
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.select_items_needing_file_check') as mock_select, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.select_items_needing_file_check"
+            ) as mock_select,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             mock_getattr.return_value = "test_token"
             mock_select.return_value = []
 
-            result = await refresh_file_existence_async(settings, force=True)
+            await refresh_file_existence_async(settings, force=True)
 
             # Verify force flag was passed to select function
             mock_select.assert_called_once()
@@ -430,15 +472,18 @@ class TestRefreshFileExistenceAsync:
         """Test refresh with custom batch size."""
         settings = Settings()
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.select_items_needing_file_check') as mock_select, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.select_items_needing_file_check"
+            ) as mock_select,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             mock_getattr.return_value = "test_token"
             mock_select.return_value = []
 
-            result = await refresh_file_existence_async(settings, batch_size=500)
+            await refresh_file_existence_async(settings, batch_size=500)
 
             # Verify batch size was passed to select function
             mock_select.assert_called_once()
@@ -459,16 +504,26 @@ class TestFileExistenceIntegration:
         mock_item.material_id = "123"
         mock_item.url = "https://utwente.instructure.com/courses/123/files/456/download"
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.CopyrightItem.raw', new_callable=AsyncMock) as mock_raw, \
-             patch('easy_access.maintenance.file_existence.CopyrightItem.filter') as mock_filter, \
-             patch('httpx.AsyncClient') as mock_client_class, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
-            mock_getattr.side_effect = lambda obj, attr, default=None: \
-                "test_token" if attr == 'canvas_api_token' else \
-                getattr(obj, attr, default) if hasattr(obj, attr) else default
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.CopyrightItem.raw",
+                new_callable=AsyncMock,
+            ) as mock_raw,
+            patch(
+                "easy_access.maintenance.file_existence.CopyrightItem.filter"
+            ) as mock_filter,
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
+            mock_getattr.side_effect = (
+                lambda obj, attr, default=None: "test_token"
+                if attr == "canvas_api_token"
+                else getattr(obj, attr, default)
+                if hasattr(obj, attr)
+                else default
+            )
 
             mock_raw.return_value = [mock_item]
 
@@ -495,7 +550,7 @@ class TestFileExistenceIntegration:
 
             # Verify database was updated (update is on the filter() return value)
             filter_ret = mock_filter.return_value
-            assert hasattr(filter_ret, 'update')
+            assert hasattr(filter_ret, "update")
             filter_ret.update.assert_awaited()
 
     @pytest.mark.asyncio
@@ -505,16 +560,21 @@ class TestFileExistenceIntegration:
 
         items_to_check = [
             {"material_id": "123", "url": "https://example.com/files/123/download"},
-            {"material_id": "456", "url": "https://example.com/files/456/download"}
+            {"material_id": "456", "url": "https://example.com/files/456/download"},
         ]
 
-        with patch('easy_access.maintenance.file_existence.ensure_db_inited'), \
-             patch('easy_access.maintenance.file_existence.close_connections'), \
-             patch('easy_access.maintenance.file_existence.select_items_needing_file_check') as mock_select, \
-             patch('easy_access.maintenance.file_existence.update_file_existence_batch') as mock_update, \
-             patch('httpx.AsyncClient') as mock_client_class, \
-             patch('easy_access.maintenance.file_existence.getattr') as mock_getattr:
-
+        with (
+            patch("easy_access.maintenance.file_existence.ensure_db_inited"),
+            patch("easy_access.maintenance.file_existence.close_connections"),
+            patch(
+                "easy_access.maintenance.file_existence.select_items_needing_file_check"
+            ) as mock_select,
+            patch(
+                "easy_access.maintenance.file_existence.update_file_existence_batch"
+            ),
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch("easy_access.maintenance.file_existence.getattr") as mock_getattr,
+        ):
             mock_getattr.return_value = "test_token"
             mock_select.return_value = items_to_check
 

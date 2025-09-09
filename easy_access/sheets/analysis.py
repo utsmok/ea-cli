@@ -190,7 +190,6 @@ async def update_db(settings: Settings, datalist: list[pl.DataFrame]):  # Added 
     await update_copyright_items(settings, df)
 
 
-
 def create_faculty_overviews_sync(
     settings: Settings,
     faculty_data: dict[str, pl.DataFrame],

@@ -36,12 +36,15 @@ class Classification(Enum):
     VERWIJDERVERZOEK_VERSTUURD = "verwijderverzoek verstuurd"
     LICENTIE_BESCHIKBAAR = "licentie beschikbaar"
 
+
 # V2 classification system + mapping + notes
+
 
 class ClassificationV2(Enum):
     """
     The new classification system for V2 of the copyright tool.
     """
+
     # Yes classifications
     JA_OPEN_LICENTIE = "Ja (open licentie)"
     JA_BIBLIOTHEEK_LICENTIE = "Ja (bibilotheek licentie)"
@@ -71,11 +74,13 @@ class OvernameStatus(Enum):
     GEEN_OVERNAME = "Geen overname"
     ONBEKEND = "Onbekend"
 
+
 class Lengte(Enum):
     KORT = "Kort"
     MIDDELLANG = "Middellang"
     LANG = "Lang"
     ONBEKEND = "Onbekend"
+
 
 """
 Mapping notes:
@@ -85,11 +90,14 @@ Mapping notes:
 - studentwerk is in v1 niet apart, in v2 wel -- vaak als eigen werk gemarkeerd
 
 """
+
+
 @dataclass
 class ClassificationMapping:
     classification: ClassificationV2
     overname_status: OvernameStatus
     length: Lengte
+
 
 CLASSIFICATION_MAPPING_V1_TO_V2: dict[Classification, ClassificationMapping] = {
     Classification.OPEN_ACCESS: ClassificationMapping(
@@ -159,6 +167,7 @@ CLASSIFICATION_MAPPING_V1_TO_V2: dict[Classification, ClassificationMapping] = {
     ),
 }
 
+
 class Filetype(Enum):
     PDF = "pdf"
     PPT = "ppt"
@@ -212,7 +221,6 @@ Department = Enum(
         for department in SETTINGS.university_settings.department_mapping
     },
 )
-
 
 
 class CopyrightItem(Model, TimestampMixin):
@@ -324,13 +332,16 @@ class CopyrightItem(Model, TimestampMixin):
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"
 
+
 class V2Classifications(Model, TimestampMixin):
     """
     Stores the new classification system for V2 of the copyright tool.
     """
 
     id = fields.IntField(primary_key=True)
-    material_id = fields.ForeignKeyField("models.CopyrightItem", related_name="v2_classifications")
+    material_id = fields.ForeignKeyField(
+        "models.CopyrightItem", related_name="v2_classifications"
+    )
     classification = fields.CharEnumField(enum_type=ClassificationV2, max_length=255)
     overname_status = fields.CharEnumField(enum_type=OvernameStatus, max_length=255)
     length = fields.CharEnumField(enum_type=Lengte, max_length=255)
@@ -338,6 +349,7 @@ class V2Classifications(Model, TimestampMixin):
 
     class Meta:
         table = "v2_classifications"
+
 
 class ItemUpdate(Model, TimestampMixin):
     """
@@ -433,9 +445,7 @@ class Person(Model, TimestampMixin):
     input_name = fields.CharField(max_length=2048, db_index=True, unique=True)
     main_name = fields.CharField(max_length=2048, null=True)
     match_confidence = fields.FloatField(null=True)
-    first_name = fields.CharField(
-        max_length=2048, null=True
-    )
+    first_name = fields.CharField(max_length=2048, null=True)
     email = fields.CharField(max_length=2048, null=True)
     faculty = fields.ForeignKeyField(
         "models.Faculty",

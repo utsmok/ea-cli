@@ -8,6 +8,8 @@ This module handles updating relationships between copyright items and other ent
 Optimized to reduce N+1 query patterns using batch operations.
 """
 
+import inspect
+
 from loguru import logger
 from tortoise.transactions import in_transaction
 
@@ -15,7 +17,6 @@ from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.models import PDF, CopyrightItem, Course
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
-import inspect
 
 
 async def _resolve_queryset_candidate(candidate, *prefetch_args):
@@ -31,7 +32,9 @@ async def _resolve_queryset_candidate(candidate, *prefetch_args):
     QuerySet mocks (like QuerySetMock) are supported because they are awaitable.
     """
     # If object has prefetch_related, call it first (may return awaitable)
-    if hasattr(candidate, "prefetch_related") and callable(getattr(candidate, "prefetch_related")):
+    if hasattr(candidate, "prefetch_related") and callable(
+        candidate.prefetch_related
+    ):
         try:
             result = candidate.prefetch_related(*prefetch_args)
             # If result is awaitable, await it and return its value
@@ -39,7 +42,7 @@ async def _resolve_queryset_candidate(candidate, *prefetch_args):
                 return await awaitable(result)
 
             # If result is already an iterable (e.g., list), return it
-            if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
+            if hasattr(result, "__iter__") and not isinstance(result, str | bytes):
                 return result
 
             # If prefetch_related returned a non-iterable, try awaiting candidate
@@ -97,11 +100,15 @@ async def update_duplicates(settings: Settings) -> None:
     # Fetch all PDFs that have replacements in one query. Tests often patch
     # PDF.filter to return either a Mock, a QuerySetMock (awaitable), or a plain list.
     pdfs_candidate = PDF.filter(replace_with_id__not_isnull=True)
-    pdfs_with_replacements = await _resolve_queryset_candidate(pdfs_candidate, "replace_with")
+    pdfs_with_replacements = await _resolve_queryset_candidate(
+        pdfs_candidate, "replace_with"
+    )
     # Ensure we have an iterable list
     if pdfs_with_replacements is None:
         pdfs_with_replacements = []
-    elif not hasattr(pdfs_with_replacements, '__iter__') or isinstance(pdfs_with_replacements, (str, bytes)):
+    elif not hasattr(pdfs_with_replacements, "__iter__") or isinstance(
+        pdfs_with_replacements, str | bytes
+    ):
         pdfs_with_replacements = [pdfs_with_replacements]
 
     if not pdfs_with_replacements:
@@ -129,7 +136,9 @@ async def update_duplicates(settings: Settings) -> None:
     items_to_update = await _resolve_queryset_candidate(items_candidate)
     if items_to_update is None:
         items_to_update = []
-    elif not hasattr(items_to_update, '__iter__') or isinstance(items_to_update, (str, bytes)):
+    elif not hasattr(items_to_update, "__iter__") or isinstance(
+        items_to_update, str | bytes
+    ):
         items_to_update = [items_to_update]
 
     # Update items in memory
@@ -151,7 +160,9 @@ async def update_duplicates(settings: Settings) -> None:
         bulk_attr = getattr(CopyrightItem, "bulk_update", None)
         if callable(bulk_attr):
             try:
-                result = bulk_attr(updated_items, fields=["is_duplicate", "replacement_id"])
+                result = bulk_attr(
+                    updated_items, fields=["is_duplicate", "replacement_id"]
+                )
                 if inspect.isawaitable(result):
                     await result
                 logger.success(f"Bulk-updated {len(updated_items)} duplicate statuses")
@@ -160,18 +171,28 @@ async def update_duplicates(settings: Settings) -> None:
                 try:
                     async with in_transaction():
                         for item in updated_items:
-                            await item.save(update_fields=["is_duplicate", "replacement_id"])
-                    logger.success(f"Updated {len(updated_items)} duplicate statuses (fallback)")
+                            await item.save(
+                                update_fields=["is_duplicate", "replacement_id"]
+                            )
+                    logger.success(
+                        f"Updated {len(updated_items)} duplicate statuses (fallback)"
+                    )
                 except Exception:
-                    logger.error("Could not perform fallback per-item updates; skipping in test environment")
+                    logger.error(
+                        "Could not perform fallback per-item updates; skipping in test environment"
+                    )
         else:
             try:
                 async with in_transaction():
                     for item in updated_items:
-                        await item.save(update_fields=["is_duplicate", "replacement_id"])
+                        await item.save(
+                            update_fields=["is_duplicate", "replacement_id"]
+                        )
                 logger.success(f"Updated {len(updated_items)} duplicate statuses")
             except Exception:
-                logger.error("DB not initialized; skipping per-item updates in test environment")
+                logger.error(
+                    "DB not initialized; skipping per-item updates in test environment"
+                )
     else:
         logger.info("No items needed duplicate status updates")
 
@@ -199,7 +220,7 @@ async def link_courses(settings: Settings) -> None:
     if all_items is None:
         all_items = []
     # Coerce to list if it is an awaitable-like single item
-    if not hasattr(all_items, '__iter__') or isinstance(all_items, (str, bytes)):
+    if not hasattr(all_items, "__iter__") or isinstance(all_items, str | bytes):
         all_items = [all_items]
 
     # For testing simplicity and to avoid treating MagicMock attributes as truthy,
@@ -210,7 +231,9 @@ async def link_courses(settings: Settings) -> None:
         logger.info("No items to process for course linking")
         return
 
-    logger.info(f"Found {len(items_without_courses)} items to consider for course links")
+    logger.info(
+        f"Found {len(items_without_courses)} items to consider for course links"
+    )
 
     # Extract all potential course codes
     all_course_codes: set[str] = set()
@@ -247,12 +270,16 @@ async def link_courses(settings: Settings) -> None:
     courses = await _resolve_queryset_candidate(courses_candidate)
     if courses is None:
         courses = []
-    if not hasattr(courses, '__iter__') or isinstance(courses, (str, bytes)):
+    if not hasattr(courses, "__iter__") or isinstance(courses, str | bytes):
         courses = [courses]
     # Build course_map using best-effort attribute names (only valid ints)
     course_map: dict[int, Course] = {}
     for course in courses:
-        key = getattr(course, 'cursuscode', None) or getattr(course, 'code', None) or getattr(course, 'id', None)
+        key = (
+            getattr(course, "cursuscode", None)
+            or getattr(course, "code", None)
+            or getattr(course, "id", None)
+        )
         int_key = safe_int(key)
         if int_key is not None:
             course_map[int_key] = course
@@ -264,13 +291,17 @@ async def link_courses(settings: Settings) -> None:
     # If tests patched CopyrightItem.bulk_update (Mock), call it once and
     # await its result if it returns an awaitable. This avoids multiple calls
     # and makes test assertions deterministic.
-    bulk_attr = getattr(CopyrightItem, 'bulk_update', None)
+    bulk_attr = getattr(CopyrightItem, "bulk_update", None)
     if callable(bulk_attr) and items_without_courses and courses:
         try:
             first_course = courses[0]
-            course_id_candidate = getattr(first_course, 'id', None) or getattr(first_course, 'cursuscode', None) or getattr(first_course, 'code', None)
+            course_id_candidate = (
+                getattr(first_course, "id", None)
+                or getattr(first_course, "cursuscode", None)
+                or getattr(first_course, "code", None)
+            )
             course_id_value = safe_int(course_id_candidate)
-            result = bulk_attr(items_without_courses, {'course_id': course_id_value})
+            result = bulk_attr(items_without_courses, {"course_id": course_id_value})
             # If bulk_update returned an awaitable, await it exactly once
             if inspect.isawaitable(result):
                 await result
@@ -319,7 +350,9 @@ async def link_courses(settings: Settings) -> None:
             if int_code and int_code in course_map:
                 course = course_map[int_code]
                 # Check if link already exists using our pre-fetched data
-                course_key = getattr(course, 'cursuscode', getattr(course, 'code', None))
+                course_key = getattr(
+                    course, "cursuscode", getattr(course, "code", None)
+                )
                 if (item_id, course_key) not in existing_links:
                     links_to_create.append((item_id, course_key, item, course))
                     links_added += 1

@@ -1,16 +1,17 @@
 import asyncio
+import contextlib
 from pathlib import Path
+
 import pytest
 from tortoise import Tortoise
 
 from easy_access.db import base as db_base
-from easy_access.db.base import ensure_db_inited
-from easy_access.db.update import process_staged_raw_data
 from easy_access.db.models import (
-    StagedCopyrightItem,
-    Faculty,
     CopyrightItem,
+    Faculty,
+    StagedCopyrightItem,
 )
+from easy_access.db.update import process_staged_raw_data
 from easy_access.settings import Settings
 
 
@@ -19,7 +20,7 @@ async def test_process_staged_raw_data_respects_partial_failures():
     # Use a temporary sqlite file for stable multi-connection behavior
     import tempfile
 
-    tf = tempfile.NamedTemporaryFile(delete=False)
+    tf = tempfile.NamedTemporaryFile(delete=False) # noqa: SIM115
     tf.close()
     db_path = Path(tf.name)
 
@@ -29,15 +30,15 @@ async def test_process_staged_raw_data_respects_partial_failures():
     # Initialize Tortoise directly for the test to avoid interaction with module memoization
     print("[test] initializing Tortoise directly")
     await asyncio.wait_for(
-        Tortoise.init(db_url=f"sqlite:///{db_path}", modules={"models": ["easy_access.db.models"]}),
+        Tortoise.init(
+            db_url=f"sqlite:///{db_path}", modules={"models": ["easy_access.db.models"]}
+        ),
         timeout=10,
     )
     await asyncio.wait_for(Tortoise.generate_schemas(safe=True), timeout=10)
     # mark module-level init flag true so ensure_db_inited won't try to re-init
-    try:
+    with contextlib.suppress(Exception):
         db_base._DB_INITIALIZED = True
-    except Exception:
-        pass
     print("[test] db initialized via Tortoise")
 
     try:
@@ -66,16 +67,25 @@ async def test_process_staged_raw_data_respects_partial_failures():
         print("[test] running first processing (should not clear rows)")
         await asyncio.wait_for(process_staged_raw_data(settings), timeout=10)
 
-        remaining = await StagedCopyrightItem.all().values_list("material_id", flat=True)
+        remaining = await StagedCopyrightItem.all().values_list(
+            "material_id", flat=True
+        )
         assert set(remaining) == {101, 102}
 
         print("[test] creating fallback Faculty UNM")
-        await Faculty.create(name="Unmapped", abbreviation="UNM", full_abbreviation="UNM", hierarchy_level=0)
+        await Faculty.create(
+            name="Unmapped",
+            abbreviation="UNM",
+            full_abbreviation="UNM",
+            hierarchy_level=0,
+        )
 
         print("[test] running second processing (should clear rows)")
         await asyncio.wait_for(process_staged_raw_data(settings), timeout=10)
 
-        remaining_after = await StagedCopyrightItem.all().values_list("material_id", flat=True)
+        remaining_after = await StagedCopyrightItem.all().values_list(
+            "material_id", flat=True
+        )
         assert list(remaining_after) == []
 
         # also ensure copyright items were created
@@ -84,11 +94,7 @@ async def test_process_staged_raw_data_respects_partial_failures():
         assert ci101 is not None or ci102 is not None
     finally:
         # cleanup connections and remove temp file; always run
-        try:
+        with contextlib.suppress(Exception):
             await Tortoise.close_connections()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             db_path.unlink()
-        except Exception:
-            pass

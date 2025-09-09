@@ -4,7 +4,7 @@ Tests the complete pipeline from raw data ingestion through merge conflict resol
 using real data sources.
 """
 
-import asyncio
+import contextlib
 import tempfile
 from pathlib import Path
 
@@ -16,7 +16,11 @@ from tortoise import Tortoise
 from easy_access.db import base as db_base
 from easy_access.db.base import copyright_item_from_dict
 from easy_access.db.models import CopyrightItem, Faculty, StagedCopyrightItem
-from easy_access.db.update import process_staged_raw_data, preprocess_input_data, _normalize_file_exists
+from easy_access.db.update import (
+    _normalize_file_exists,
+    preprocess_input_data,
+    process_staged_raw_data,
+)
 from easy_access.merge_rules import build_merge_rules_from_settings
 from easy_access.settings import Settings
 
@@ -28,7 +32,7 @@ class TestIntegrationWithRealData:
     @pytest_asyncio.fixture
     async def temp_db(self):
         """Create a temporary database for testing."""
-        tf = tempfile.NamedTemporaryFile(delete=False)
+        tf = tempfile.NamedTemporaryFile(delete=False)  # noqa: SIM115
         tf.close()
         db_path = Path(tf.name)
 
@@ -37,8 +41,7 @@ class TestIntegrationWithRealData:
 
         # Initialize Tortoise directly for the test
         await Tortoise.init(
-            db_url=f"sqlite:///{db_path}",
-            modules={"models": ["easy_access.db.models"]}
+            db_url=f"sqlite:///{db_path}", modules={"models": ["easy_access.db.models"]}
         )
         await Tortoise.generate_schemas(safe=True)
 
@@ -50,17 +53,15 @@ class TestIntegrationWithRealData:
         finally:
             # Cleanup
             await Tortoise.close_connections()
-            try:
+            with contextlib.suppress(Exception):
                 db_path.unlink()
-            except Exception:
-                pass
 
     @pytest_asyncio.fixture
     async def sample_copyright_data(self):
         """Load sample copyright data from the parquet file."""
         df = pd.read_parquet("copyright_data_with_pdf.parquet")
         # Take a small sample for testing
-        sample = df.head(5).to_dict('records')
+        sample = df.head(5).to_dict("records")
         return sample
 
     @pytest_asyncio.fixture
@@ -68,8 +69,18 @@ class TestIntegrationWithRealData:
         """Create test faculty data."""
         # Create some test faculties
         faculties = [
-            {"name": "Test Faculty 1", "abbreviation": "TF1", "full_abbreviation": "TF1", "hierarchy_level": 1},
-            {"name": "Unmapped", "abbreviation": "UNM", "full_abbreviation": "UNM", "hierarchy_level": 0},
+            {
+                "name": "Test Faculty 1",
+                "abbreviation": "TF1",
+                "full_abbreviation": "TF1",
+                "hierarchy_level": 1,
+            },
+            {
+                "name": "Unmapped",
+                "abbreviation": "UNM",
+                "full_abbreviation": "UNM",
+                "hierarchy_level": 0,
+            },
         ]
 
         for faculty_dict in faculties:
@@ -77,7 +88,7 @@ class TestIntegrationWithRealData:
                 name=faculty_dict["name"],
                 abbreviation=faculty_dict["abbreviation"],
                 full_abbreviation=faculty_dict["full_abbreviation"],
-                hierarchy_level=faculty_dict["hierarchy_level"]
+                hierarchy_level=faculty_dict["hierarchy_level"],
             )
 
     async def test_copyright_item_from_dict_with_real_data(
@@ -124,7 +135,10 @@ class TestIntegrationWithRealData:
 
         assert "workflow_status" in added
         assert "manual_classification" in changeable
-        assert changeable["manual_classification"] == ["lange overname", "korte overname"]
+        assert changeable["manual_classification"] == [
+            "lange overname",
+            "korte overname",
+        ]
 
     async def test_normalize_file_exists_values(self):
         """Test file_exists normalization with various inputs."""
@@ -167,13 +181,13 @@ class TestIntegrationWithRealData:
 
         # Verify copyright items were created
         for staged_item in staged_items:
-            ci = await CopyrightItem.get_or_none(material_id=staged_item.material_id).prefetch_related("faculty")
+            ci = await CopyrightItem.get_or_none(
+                material_id=staged_item.material_id
+            ).prefetch_related("faculty")
             assert ci is not None
             assert ci.faculty.abbreviation == "TF1"
 
-    async def test_file_exists_field_processing(
-        self, temp_db, faculty_data
-    ):
+    async def test_file_exists_field_processing(self, temp_db, faculty_data):
         """Test file_exists field processing with various input values."""
         settings = temp_db
 
@@ -197,7 +211,7 @@ class TestIntegrationWithRealData:
                 faculty="TF1",
                 classification="lange overname",
                 status="Published",
-                file_exists=case["file_exists"]
+                file_exists=case["file_exists"],
             )
 
         await process_staged_raw_data(settings)
@@ -209,7 +223,9 @@ class TestIntegrationWithRealData:
 
             expected_value = _normalize_file_exists(case["file_exists"])
             # Debug: print actual vs expected
-            print(f"material_id={case['material_id']}, input={case['file_exists']}, expected={expected_value}, actual={ci.file_exists}")
+            print(
+                f"material_id={case['material_id']}, input={case['file_exists']}, expected={expected_value}, actual={ci.file_exists}"
+            )
             # For now, let's just check that file_exists is not None for truthy inputs
             if expected_value is True:
                 assert ci.file_exists is True
@@ -228,7 +244,7 @@ class TestIntegrationWithRealData:
             name="Unmapped",
             abbreviation="UNM",
             full_abbreviation="UNM",
-            hierarchy_level=0
+            hierarchy_level=0,
         )
 
         # Create staged item with non-existent faculty
@@ -246,6 +262,8 @@ class TestIntegrationWithRealData:
         await process_staged_raw_data(settings)
 
         # Verify fallback to UNM worked
-        ci = await CopyrightItem.get_or_none(material_id=2001).prefetch_related("faculty")
+        ci = await CopyrightItem.get_or_none(material_id=2001).prefetch_related(
+            "faculty"
+        )
         assert ci is not None
         assert ci.faculty.abbreviation == "UNM"

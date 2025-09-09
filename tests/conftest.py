@@ -1,11 +1,12 @@
-import sys
-import os
 import asyncio
-import pytest
-import pytest_asyncio
-from tortoise import Tortoise
+import contextlib
 import logging
+import os
+import sys
+
+import pytest_asyncio
 from loguru import logger as _lu_logger
+from tortoise import Tortoise
 
 # Ensure repository root is on PYTHONPATH for tests
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -18,10 +19,7 @@ async def setup_test_db():
     """Setup and teardown test database for each test function."""
     # Initialize Tortoise for tests with in-memory SQLite
     await Tortoise.init(
-        db_url="sqlite://:memory:",
-        modules={
-            "models": ["easy_access.db.models"]
-        }
+        db_url="sqlite://:memory:", modules={"models": ["easy_access.db.models"]}
     )
 
     # Generate the schema
@@ -37,29 +35,27 @@ async def setup_test_db():
         # Cancel any still-running tasks (except the current one)
         try:
             loop = asyncio.get_running_loop()
-            pending = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
+            pending = [
+                t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()
+            ]
             if pending:
                 for t in pending:
                     t.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
 
             # Shutdown async generators (Python 3.7+)
-            if hasattr(loop, 'shutdown_asyncgens'):
+            if hasattr(loop, "shutdown_asyncgens"):
                 await loop.shutdown_asyncgens()
         except RuntimeError:
             # Event loop already closed or not running; ignore
             pass
         # Remove loguru handlers (they may spawn background threads when enqueue=True)
-        try:
+        with contextlib.suppress(Exception):
             _lu_logger.remove()
-        except Exception:
-            pass
 
         # Ensure standard logging systems are shutdown to release threads
-        try:
+        with contextlib.suppress(Exception):
             logging.shutdown()
-        except Exception:
-            pass
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -69,12 +65,15 @@ def pytest_sessionfinish(session, exitstatus):
     available even when the test terminal appears hung.
     """
     import os
+
     diag_path = os.path.join(ROOT, "hang_diagnostics.txt")
     try:
         with open(diag_path, "a", encoding="utf-8") as diag:
-            from datetime import datetime, UTC
+            from datetime import UTC, datetime
 
-            diag.write(f"\n=== pytest_sessionfinish at {datetime.now(UTC).isoformat()}Z ===\n")
+            diag.write(
+                f"\n=== pytest_sessionfinish at {datetime.now(UTC).isoformat()}Z ===\n"
+            )
 
             # Threads
             try:
@@ -93,7 +92,9 @@ def pytest_sessionfinish(session, exitstatus):
                     diag.write("\nThread stacks:\n")
                     for t in active:
                         ident = t.ident
-                        diag.write(f"--- Stack for thread {t.name} (ident={ident}) ---\n")
+                        diag.write(
+                            f"--- Stack for thread {t.name} (ident={ident}) ---\n"
+                        )
                         if ident is not None:
                             frame = frames.get(ident)
                             if frame is not None:
@@ -109,6 +110,7 @@ def pytest_sessionfinish(session, exitstatus):
 
             # Collect pending asyncio tasks via a temporary loop
             try:
+
                 async def _collect_tasks():
                     return [repr(t) for t in asyncio.all_tasks() if not t.done()]
 
@@ -122,10 +124,8 @@ def pytest_sessionfinish(session, exitstatus):
                     else:
                         diag.write("No pending asyncio tasks.\n")
                 finally:
-                    try:
+                    with contextlib.suppress(Exception):
                         loop.close()
-                    except Exception:
-                        pass
             except Exception as e:
                 diag.write(f"Could not collect asyncio tasks: {e}\n")
 
@@ -139,7 +139,9 @@ def pytest_sessionfinish(session, exitstatus):
                     connections = getattr(_T, "_connections", None)
                     diag.write(f"Tortoise._inited={inited}\n")
                     try:
-                        diag.write(f"Tortoise.apps={list(apps.keys()) if apps else apps}\n")
+                        diag.write(
+                            f"Tortoise.apps={list(apps.keys()) if apps else apps}\n"
+                        )
                     except Exception:
                         diag.write(f"Tortoise.apps={apps}\n")
                     diag.write(f"Tortoise._connections={connections}\n")
@@ -149,37 +151,39 @@ def pytest_sessionfinish(session, exitstatus):
                         loop2 = asyncio.new_event_loop()
                         try:
                             loop2.run_until_complete(_T.close_connections())
-                            diag.write("Tortoise.close_connections() completed in final attempt.\n")
+                            diag.write(
+                                "Tortoise.close_connections() completed in final attempt.\n"
+                            )
                         except Exception as e:
-                            diag.write(f"Final Tortoise.close_connections() failed: {e}\n")
+                            diag.write(
+                                f"Final Tortoise.close_connections() failed: {e}\n"
+                            )
                         finally:
-                            try:
+                            with contextlib.suppress(Exception):
                                 loop2.close()
-                            except Exception:
-                                pass
                     except Exception as e:
-                        diag.write(f"Could not create loop for final Tortoise close: {e}\n")
+                        diag.write(
+                            f"Could not create loop for final Tortoise close: {e}\n"
+                        )
                 except Exception as e:
                     diag.write(f"Error inspecting/closing Tortoise: {e}\n")
             except Exception as e:
                 diag.write(f"Tortoise import failed or not available: {e}\n")
 
             # Remove loguru handlers and shutdown logging
-            try:
+            with contextlib.suppress(Exception):
                 _lu_logger.remove()
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 logging.shutdown()
-            except Exception:
-                pass
 
             diag.write("=== end diagnostics ===\n")
             diag.flush()
     except Exception:
         # If writing diagnostics fails, fall back to printing to stdout
         try:
-            print("Failed to write hang diagnostics to file; attempting minimal stdout dump")
+            print(
+                "Failed to write hang diagnostics to file; attempting minimal stdout dump"
+            )
             import threading
 
             for t in threading.enumerate():
@@ -191,24 +195,36 @@ def pytest_sessionfinish(session, exitstatus):
     # fall back to os._exit when third-party threads (e.g. aiosqlite worker)
     # block process termination.
     try:
-        import threading, os
+        import os
+        import threading
 
-        non_daemon = [t for t in threading.enumerate() if not t.daemon and t is not threading.main_thread()]
+        non_daemon = [
+            t
+            for t in threading.enumerate()
+            if not t.daemon and t is not threading.main_thread()
+        ]
         if non_daemon:
             # Give a short grace period for well-behaved background threads (aiosqlite/loguru)
             # to finish their work and exit on their own. This reduces noisy forced exits.
             try:
                 import time
+
                 time.sleep(0.15)
             except Exception:
                 pass
 
             # Re-evaluate threads after the grace period
-            non_daemon_after = [t for t in threading.enumerate() if not t.daemon and t is not threading.main_thread()]
+            non_daemon_after = [
+                t
+                for t in threading.enumerate()
+                if not t.daemon and t is not threading.main_thread()
+            ]
             if not non_daemon_after:
                 try:
                     with open(diag_path, "a", encoding="utf-8") as diag:
-                        diag.write("\nPreviously-detected non-daemon threads exited within grace period; continuing without forcing exit.\n")
+                        diag.write(
+                            "\nPreviously-detected non-daemon threads exited within grace period; continuing without forcing exit.\n"
+                        )
                         diag.flush()
                 except Exception:
                     pass
@@ -218,14 +234,14 @@ def pytest_sessionfinish(session, exitstatus):
                         diag.write("\nNon-daemon threads remain at session end:\n")
                         for t in non_daemon_after:
                             diag.write(f"- {t.name} (ident={t.ident})\n")
-                        diag.write(f"Forcing process exit with os._exit({exitstatus or 0}) to avoid hang.\n")
+                        diag.write(
+                            f"Forcing process exit with os._exit({exitstatus or 0}) to avoid hang.\n"
+                        )
                         diag.flush()
                 except Exception:
                     pass
                 # Force immediate process termination
-                try:
+                with contextlib.suppress(Exception):
                     os._exit(exitstatus or 0)
-                except Exception:
-                    pass
     except Exception:
         pass

@@ -8,18 +8,17 @@ Tests cover:
 - Error handling and edge cases
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from tests.helpers import QuerySetMock
-from datetime import datetime
+
+import pytest
 
 from easy_access.db.relations import (
-    update_duplicates,
     link_courses,
+    update_duplicates,
     update_relations_async,
 )
-from easy_access.db.models import CopyrightItem, Course, PDF
 from easy_access.settings import Settings
+from tests.helpers import QuerySetMock
 
 
 class TestUpdateDuplicates:
@@ -30,7 +29,7 @@ class TestUpdateDuplicates:
         """Test when no PDFs have replacements."""
         settings = Settings()
 
-        with patch('easy_access.db.relations.PDF.filter') as mock_filter:
+        with patch("easy_access.db.relations.PDF.filter") as mock_filter:
             # Mock empty query result - need to return a queryset that supports prefetch_related
             mock_queryset = AsyncMock()
             mock_queryset.prefetch_related.return_value = []
@@ -54,10 +53,13 @@ class TestUpdateDuplicates:
         mock_item = MagicMock()
         mock_item.material_id = 1001
 
-        with patch('easy_access.db.relations.PDF.filter') as mock_filter, \
-             patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter, \
-             patch('easy_access.db.relations.CopyrightItem.bulk_update') as mock_bulk_update:
-
+        with (
+            patch("easy_access.db.relations.PDF.filter") as mock_filter,
+            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
+            patch(
+                "easy_access.db.relations.CopyrightItem.bulk_update"
+            ) as mock_bulk_update,
+        ):
             # Mock queryset for PDFs with prefetch_related capability
             mock_queryset = QuerySetMock([mock_pdf])
             mock_filter.return_value = mock_queryset
@@ -79,9 +81,10 @@ class TestUpdateDuplicates:
         mock_pdf.material_id = 1001
         mock_pdf.replace_with.material_id = 2001
 
-        with patch('easy_access.db.relations.PDF.filter') as mock_filter, \
-             patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter:
-
+        with (
+            patch("easy_access.db.relations.PDF.filter") as mock_filter,
+            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
+        ):
             # Mock queryset for PDFs
             mock_queryset = QuerySetMock([mock_pdf])
             mock_filter.return_value = mock_queryset
@@ -109,7 +112,7 @@ class TestLinkCourses:
         """Test course linking when no items exist."""
         settings = Settings()
 
-        with patch('easy_access.db.relations.CopyrightItem.filter') as mock_filter:
+        with patch("easy_access.db.relations.CopyrightItem.filter") as mock_filter:
             mock_filter.return_value = []
 
             await link_courses(settings)
@@ -131,11 +134,14 @@ class TestLinkCourses:
         mock_course.id = 1
         mock_course.code = 12345
 
-        with patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter, \
-             patch('easy_access.db.relations.determine_course_code') as mock_determine, \
-             patch('easy_access.db.relations.Course.filter') as mock_course_filter, \
-             patch('easy_access.db.relations.CopyrightItem.bulk_update') as mock_bulk_update:
-
+        with (
+            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
+            patch("easy_access.db.relations.determine_course_code") as mock_determine,
+            patch("easy_access.db.relations.Course.filter") as mock_course_filter,
+            patch(
+                "easy_access.db.relations.CopyrightItem.bulk_update"
+            ) as mock_bulk_update,
+        ):
             mock_item_filter.return_value = [mock_item]
             mock_determine.return_value = ["12345"]
             mock_course_filter.return_value = [mock_course]
@@ -146,7 +152,7 @@ class TestLinkCourses:
             mock_bulk_update.assert_called_once()
             call_args = mock_bulk_update.call_args
             assert call_args[0][0] == [mock_item]
-            assert call_args[0][1] == {'course_id': 1}
+            assert call_args[0][1] == {"course_id": 1}
 
     @pytest.mark.asyncio
     async def test_link_courses_no_matching_courses(self):
@@ -158,10 +164,11 @@ class TestLinkCourses:
         mock_item.material_id = 1001
         mock_item.course_code = "12345"
 
-        with patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter, \
-             patch('easy_access.db.relations.determine_course_code') as mock_determine, \
-             patch('easy_access.db.relations.Course.filter') as mock_course_filter:
-
+        with (
+            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
+            patch("easy_access.db.relations.determine_course_code") as mock_determine,
+            patch("easy_access.db.relations.Course.filter") as mock_course_filter,
+        ):
             mock_item_filter.return_value = [mock_item]
             mock_determine.return_value = ["12345"]
             mock_course_filter.return_value = []  # No matching courses
@@ -191,11 +198,14 @@ class TestLinkCourses:
         mock_course2.id = 2
         mock_course2.code = 67890
 
-        with patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter, \
-             patch('easy_access.db.relations.determine_course_code') as mock_determine, \
-             patch('easy_access.db.relations.Course.filter') as mock_course_filter, \
-             patch('easy_access.db.relations.CopyrightItem.bulk_update') as mock_bulk_update:
-
+        with (
+            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
+            patch("easy_access.db.relations.determine_course_code") as mock_determine,
+            patch("easy_access.db.relations.Course.filter") as mock_course_filter,
+            patch(
+                "easy_access.db.relations.CopyrightItem.bulk_update"
+            ) as mock_bulk_update,
+        ):
             mock_item_filter.return_value = [mock_item]
             mock_determine.return_value = ["12345", "67890"]
             mock_course_filter.return_value = [mock_course1, mock_course2]
@@ -206,7 +216,7 @@ class TestLinkCourses:
             mock_bulk_update.assert_called_once()
             call_args = mock_bulk_update.call_args
             assert call_args[0][0] == [mock_item]
-            assert call_args[0][1] == {'course_id': 1}
+            assert call_args[0][1] == {"course_id": 1}
 
 
 class TestUpdateRelationsAsync:
@@ -217,9 +227,10 @@ class TestUpdateRelationsAsync:
         """Test that update_relations_async calls both update_duplicates and link_courses."""
         settings = Settings()
 
-        with patch('easy_access.db.relations.update_duplicates') as mock_update_dup, \
-             patch('easy_access.db.relations.link_courses') as mock_link_courses:
-
+        with (
+            patch("easy_access.db.relations.update_duplicates") as mock_update_dup,
+            patch("easy_access.db.relations.link_courses") as mock_link_courses,
+        ):
             await update_relations_async(settings)
 
             mock_update_dup.assert_called_once_with(settings)
@@ -230,9 +241,10 @@ class TestUpdateRelationsAsync:
         """Test error handling in update_relations_async."""
         settings = Settings()
 
-        with patch('easy_access.db.relations.update_duplicates') as mock_update_dup, \
-             patch('easy_access.db.relations.link_courses') as mock_link_courses:
-
+        with (
+            patch("easy_access.db.relations.update_duplicates") as mock_update_dup,
+            patch("easy_access.db.relations.link_courses") as mock_link_courses,
+        ):
             mock_update_dup.side_effect = Exception("Test error")
 
             # Should not raise exception, should log error
@@ -255,10 +267,11 @@ class TestRelationsBatchOperations:
         mock_item.material_id = 1001
         mock_item.course_code = "12345"
 
-        with patch('easy_access.db.relations.CopyrightItem.filter') as mock_item_filter, \
-             patch('easy_access.db.relations.determine_course_code') as mock_determine, \
-             patch('easy_access.db.relations.Course.filter') as mock_course_filter:
-
+        with (
+            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
+            patch("easy_access.db.relations.determine_course_code") as mock_determine,
+            patch("easy_access.db.relations.Course.filter") as mock_course_filter,
+        ):
             mock_item_filter.return_value = [mock_item]
             mock_determine.return_value = ["12345"]
             mock_course_filter.return_value = []
@@ -268,14 +281,14 @@ class TestRelationsBatchOperations:
             # Verify Course.filter was called with IN clause (batch operation)
             mock_course_filter.assert_called_once()
             call_args = mock_course_filter.call_args
-            assert 'code__in' in str(call_args)
+            assert "code__in" in str(call_args)
 
     @pytest.mark.asyncio
     async def test_prefetch_related_usage(self):
         """Test that prefetch_related is used to avoid N+1 queries."""
         settings = Settings()
 
-        with patch('easy_access.db.relations.PDF.filter') as mock_filter:
+        with patch("easy_access.db.relations.PDF.filter") as mock_filter:
             mock_filter.return_value = []
 
             await update_duplicates(settings)
@@ -283,4 +296,6 @@ class TestRelationsBatchOperations:
             # Verify prefetch_related was used
             mock_filter.assert_called_once()
             call_args = mock_filter.call_args
-            assert 'prefetch_related' in str(call_args) or 'replace_with' in str(call_args)
+            assert "prefetch_related" in str(call_args) or "replace_with" in str(
+                call_args
+            )

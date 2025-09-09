@@ -109,9 +109,7 @@ def build_merge_rules_from_settings(settings: Settings) -> tuple[dict, dict]:
                             WorkflowStatus.InProgress.value,
                             WorkflowStatus.ToDo.value,
                         ]
-                        priority_index = {
-                            v: i for i, v in enumerate(canonical_order)
-                        }
+                        priority_index = {v: i for i, v in enumerate(canonical_order)}
                         # Keep only known values, preserve canonical priority
                         sorted_opts = sorted(
                             (opt for opt in workflow_options if opt in priority_index),
@@ -119,9 +117,7 @@ def build_merge_rules_from_settings(settings: Settings) -> tuple[dict, dict]:
                         )
                         # Append any unexpected / custom statuses at the end so they never outrank core ones
                         extras = [
-                            opt
-                            for opt in workflow_options
-                            if opt not in priority_index
+                            opt for opt in workflow_options if opt not in priority_index
                         ]
                         dynamic_added_fields["workflow_status"] = [
                             *sorted_opts,

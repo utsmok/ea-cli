@@ -2,43 +2,41 @@
 Unit tests for refactored update_copyright_items components.
 """
 
-import pytest
-from datetime import date, datetime, UTC
-from unittest.mock import Mock, AsyncMock, patch
-from enum import Enum
+from datetime import UTC, date, datetime
+from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
+from easy_access.db.base import copyright_item_from_dict
+from easy_access.db.models import Classification, Status
 from easy_access.db.update import (
-    FieldComparisonStrategy,
-    RankedFieldStrategy,
-    StringFieldStrategy,
-    NumericFieldStrategy,
-    FileExistsStrategy,
+    DatabaseOperationError,
     DateFieldStrategy,
     EnumFieldStrategy,
-    get_comparison_strategy,
-    record_field_change,
-    compare_and_update_fields,
-    _cast_values_for_comparison,
-    _cast_datetime_value,
-    _cast_numeric_value,
-    _normalize_file_exists,
-    _cast_enum_value,
-    preprocess_input_data,
-    MergeError,
-    TypeCastError,
-    DatabaseOperationError,
-    ValidationError,
+    FileExistsStrategy,
     MergeConflictError,
+    MergeError,
+    NumericFieldStrategy,
+    RankedFieldStrategy,
+    StringFieldStrategy,
+    TypeCastError,
+    ValidationError,
+    _cast_datetime_value,
+    _cast_enum_value,
+    _cast_numeric_value,
+    _cast_values_for_comparison,
+    _normalize_file_exists,
+    compare_and_update_fields,
+    get_comparison_strategy,
+    preprocess_input_data,
+    record_field_change,
 )
-from easy_access.db.models import CopyrightItem, Status, WorkflowStatus, Classification
-from easy_access.db.base import copyright_item_from_dict
 from easy_access.merge_rules import (
-    build_merge_rules_from_settings,
-    get_mergeable_fields,
     added_fields,
+    build_merge_rules_from_settings,
     changeable_fields,
+    get_mergeable_fields,
 )
-from easy_access.settings import Settings
 
 
 class TestCopyrightItemFromDict:
@@ -48,9 +46,10 @@ class TestCopyrightItemFromDict:
     async def test_copyright_item_from_dict_valid_data(self):
         """Test creating CopyrightItem from valid dict data."""
         # Mock the Faculty.get call and CopyrightItem constructor
-        with patch('easy_access.db.base.Faculty') as mock_faculty_class, \
-             patch('easy_access.db.base.CopyrightItem') as mock_copyright_item_class:
-
+        with (
+            patch("easy_access.db.base.Faculty") as mock_faculty_class,
+            patch("easy_access.db.base.CopyrightItem") as mock_copyright_item_class,
+        ):
             # Create a mock faculty with the required attributes
             mock_faculty = Mock()
             mock_faculty.abbreviation = "TEST"
@@ -86,16 +85,17 @@ class TestCopyrightItemFromDict:
             # Verify that CopyrightItem was called with the correct data
             mock_copyright_item_class.assert_called_once()
             call_args = mock_copyright_item_class.call_args[1]  # Get kwargs
-            assert call_args['material_id'] == 12345
-            assert call_args['title'] == "Test Title"
-            assert call_args['faculty'] == mock_faculty
+            assert call_args["material_id"] == 12345
+            assert call_args["title"] == "Test Title"
+            assert call_args["faculty"] == mock_faculty
 
     @pytest.mark.asyncio
     async def test_copyright_item_from_dict_missing_required_fields(self):
         """Test handling of missing required fields."""
-        with patch('easy_access.db.base.Faculty') as mock_faculty_class, \
-             patch('easy_access.db.base.CopyrightItem') as mock_copyright_item_class:
-
+        with (
+            patch("easy_access.db.base.Faculty") as mock_faculty_class,
+            patch("easy_access.db.base.CopyrightItem") as mock_copyright_item_class,
+        ):
             mock_faculty = Mock()
             mock_faculty.abbreviation = "UNM"
             mock_faculty_class.get = AsyncMock(return_value=mock_faculty)
@@ -117,7 +117,7 @@ class TestCopyrightItemFromDict:
     @pytest.mark.asyncio
     async def test_copyright_item_from_dict_invalid_data_types(self):
         """Test handling of invalid data types."""
-        with patch('easy_access.db.base.Faculty') as mock_faculty_class:
+        with patch("easy_access.db.base.Faculty") as mock_faculty_class:
             mock_faculty = Mock()
             mock_faculty_class.get = AsyncMock(return_value=mock_faculty)
 
@@ -139,16 +139,16 @@ class TestCopyrightItemFromDict:
     @pytest.mark.asyncio
     async def test_copyright_item_from_dict_faculty_fallback(self):
         """Test faculty fallback to UNM when faculty lookup fails."""
-        with patch('easy_access.db.base.Faculty') as mock_faculty_class, \
-             patch('easy_access.db.base.CopyrightItem') as mock_copyright_item_class:
-
+        with (
+            patch("easy_access.db.base.Faculty") as mock_faculty_class,
+            patch("easy_access.db.base.CopyrightItem") as mock_copyright_item_class,
+        ):
             # First call fails, second succeeds with UNM
             mock_faculty_unm = Mock()
             mock_faculty_unm.abbreviation = "UNM"
-            mock_faculty_class.get = AsyncMock(side_effect=[
-                Exception("Faculty not found"),
-                mock_faculty_unm
-            ])
+            mock_faculty_class.get = AsyncMock(
+                side_effect=[Exception("Faculty not found"), mock_faculty_unm]
+            )
 
             mock_copyright_item = Mock()
             mock_copyright_item_class.return_value = mock_copyright_item
@@ -171,14 +171,15 @@ class TestCopyrightItemFromDict:
             # Verify CopyrightItem was called with UNM faculty
             mock_copyright_item_class.assert_called_once()
             call_args = mock_copyright_item_class.call_args[1]
-            assert call_args['faculty'] == mock_faculty_unm
+            assert call_args["faculty"] == mock_faculty_unm
 
     @pytest.mark.asyncio
     async def test_copyright_item_from_dict_default_values(self):
         """Test that default values are applied for missing optional fields."""
-        with patch('easy_access.db.base.Faculty') as mock_faculty_class, \
-             patch('easy_access.db.base.CopyrightItem') as mock_copyright_item_class:
-
+        with (
+            patch("easy_access.db.base.Faculty") as mock_faculty_class,
+            patch("easy_access.db.base.CopyrightItem") as mock_copyright_item_class,
+        ):
             mock_faculty = Mock()
             mock_faculty.abbreviation = "TEST"
             mock_faculty_class.get = AsyncMock(return_value=mock_faculty)
@@ -202,9 +203,9 @@ class TestCopyrightItemFromDict:
             # Verify CopyrightItem was called with defaults
             mock_copyright_item_class.assert_called_once()
             call_args = mock_copyright_item_class.call_args[1]
-            assert call_args['classification'] == Classification.LANGE_OVERNAME.value
-            assert call_args['status'] == Status.PUBLISHED.value
-            assert call_args['filetype'] == "unknown"  # Default for missing filetype
+            assert call_args["classification"] == Classification.LANGE_OVERNAME.value
+            assert call_args["status"] == Status.PUBLISHED.value
+            assert call_args["filetype"] == "unknown"  # Default for missing filetype
 
 
 class TestMergeRules:
@@ -233,13 +234,21 @@ class TestMergeRules:
     def test_build_merge_rules_from_settings_with_classification_options(self):
         """Test build_merge_rules_from_settings with classification options."""
         settings = Mock()
-        settings.classification_options = ["open access", "korte overname", "lange overname"]
+        settings.classification_options = [
+            "open access",
+            "korte overname",
+            "lange overname",
+        ]
         settings.data_settings = None
 
         added, changeable = build_merge_rules_from_settings(settings)
 
         # Should update changeable_fields with new classification priorities
-        assert changeable["manual_classification"] == ["open access", "korte overname", "lange overname"]
+        assert changeable["manual_classification"] == [
+            "open access",
+            "korte overname",
+            "lange overname",
+        ]
 
     def test_build_merge_rules_from_settings_with_workflow_options(self):
         """Test build_merge_rules_from_settings with workflow status options."""
@@ -358,7 +367,9 @@ class TestFieldComparisonStrategies:
         """Test behavior with non-date values."""
         strategy = DateFieldStrategy()
 
-        should_update, reason = strategy.should_update("2023-01-01", date(2023, 1, 1), None)
+        should_update, reason = strategy.should_update(
+            "2023-01-01", date(2023, 1, 1), None
+        )
         assert should_update is False
         assert reason == ""
 
@@ -508,7 +519,9 @@ class TestRecordFieldChange:
         changes = {"material_id": 123}
         db_item = Mock()
 
-        result = record_field_change(changes, "title", "New Title", "Old Title", "test reason", db_item)
+        result = record_field_change(
+            changes, "title", "New Title", "Old Title", "test reason", db_item
+        )
 
         assert result["title"] == {"old": "Old Title", "new": "New Title"}
         # Verify the db_item was updated
@@ -519,18 +532,22 @@ class TestRecordFieldChange:
         changes = {"material_id": 123}
         db_item = Mock()
 
-        result = record_field_change(changes, "file_exists", True, False, "file_exists value received", db_item)
+        result = record_field_change(
+            changes, "file_exists", True, False, "file_exists value received", db_item
+        )
 
         assert result["file_exists"] == {"old": "False", "new": "True"}
         # Verify the db_item was updated
-        assert db_item.file_exists == True
-        assert hasattr(db_item, 'last_canvas_check')
+        assert db_item.file_exists
+        assert hasattr(db_item, "last_canvas_check")
 
     def test_record_field_change_without_db_item(self):
         """Test field change recording without db_item."""
         changes = {"material_id": 123}
 
-        result = record_field_change(changes, "title", "New Title", "Old Title", "test reason")
+        result = record_field_change(
+            changes, "title", "New Title", "Old Title", "test reason"
+        )
 
         assert result["title"] == {"old": "Old Title", "new": "New Title"}
 
@@ -546,11 +563,16 @@ class TestCompareAndUpdateFields:
         db_item.material_id = 123
         changes = {}
 
-        result_changes, result_db_item = compare_and_update_fields(new_item, db_item, {"title": []}, changes)
+        result_changes, result_db_item = compare_and_update_fields(
+            new_item, db_item, {"title": []}, changes
+        )
 
         # The title should be updated because the new title is longer
         assert "title" in result_changes
-        assert result_changes["title"] == {"old": "Old Title", "new": "A much longer new title"}
+        assert result_changes["title"] == {
+            "old": "Old Title",
+            "new": "A much longer new title",
+        }
 
     def test_compare_and_update_fields_no_change(self):
         """Test when no changes are needed."""
@@ -559,7 +581,9 @@ class TestCompareAndUpdateFields:
         db_item.title = "Same Title"
         changes = {}
 
-        result_changes, result_db_item = compare_and_update_fields(new_item, db_item, {"title": []}, changes)
+        result_changes, result_db_item = compare_and_update_fields(
+            new_item, db_item, {"title": []}, changes
+        )
 
         assert "title" not in result_changes
 
@@ -570,7 +594,9 @@ class TestCompareAndUpdateFields:
         db_item.title = "Old Title"
         changes = {}
 
-        result_changes, result_db_item = compare_and_update_fields(new_item, db_item, {"title": []}, changes)
+        result_changes, result_db_item = compare_and_update_fields(
+            new_item, db_item, {"title": []}, changes
+        )
 
         assert "title" not in result_changes
 
@@ -583,7 +609,9 @@ class TestCastValuesForComparison:
         db_item = Mock()
         db_item.last_change = datetime(2023, 1, 1, tzinfo=UTC)
 
-        success, new_val, old_val = _cast_values_for_comparison("last_change", "2023-06-01", datetime(2023, 1, 1, tzinfo=UTC), db_item)
+        success, new_val, old_val = _cast_values_for_comparison(
+            "last_change", "2023-06-01", datetime(2023, 1, 1, tzinfo=UTC), db_item
+        )
 
         assert success is True
 
@@ -592,7 +620,9 @@ class TestCastValuesForComparison:
         db_item = Mock()
         db_item.status = Status.PUBLISHED
 
-        success, new_val, old_val = _cast_values_for_comparison("status", "Unpublished", Status.PUBLISHED, db_item)
+        success, new_val, old_val = _cast_values_for_comparison(
+            "status", "Unpublished", Status.PUBLISHED, db_item
+        )
 
         assert success is True
 
@@ -601,7 +631,9 @@ class TestCastValuesForComparison:
         db_item = Mock()
         db_item.pagecount = 100
 
-        success, new_val, old_val = _cast_values_for_comparison("pagecount", "150", 100, db_item)
+        success, new_val, old_val = _cast_values_for_comparison(
+            "pagecount", "150", 100, db_item
+        )
 
         assert success is True
 
@@ -611,7 +643,9 @@ class TestCastValuesForComparison:
         db_item.pagecount = 100
 
         # This should work fine - int to int casting
-        success, new_val, old_val = _cast_values_for_comparison("pagecount", "150", 100, db_item)
+        success, new_val, old_val = _cast_values_for_comparison(
+            "pagecount", "150", 100, db_item
+        )
         assert success is True
 
 
@@ -624,18 +658,21 @@ class TestPreprocessInputData:
         import polars as pl
 
         # Create mock data
-        data = pl.DataFrame({
-            "material_id": [123, 456],
-            "title": ["Title 1", "Title 2"],
-            "period": ["2023-1A", "2023-2A"],
-            "department": ["Dept1", "Dept2"],
-            "course_code": ["CODE1", "CODE2"],
-            "course_name": ["Course 1", "Course 2"]
-        })
+        data = pl.DataFrame(
+            {
+                "material_id": [123, 456],
+                "title": ["Title 1", "Title 2"],
+                "period": ["2023-1A", "2023-2A"],
+                "department": ["Dept1", "Dept2"],
+                "course_code": ["CODE1", "CODE2"],
+                "course_name": ["Course 1", "Course 2"],
+            }
+        )
 
         # Mock existing material_ids
         mock_existing = [{"material_id": 123}]
         from unittest.mock import patch
+
         with patch("easy_access.db.update.CopyrightItem.all") as mock_all:
             mock_query = AsyncMock()
             mock_query.values = AsyncMock(return_value=mock_existing)

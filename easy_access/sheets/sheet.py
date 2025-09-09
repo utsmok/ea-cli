@@ -80,9 +80,7 @@ def read_copyright_export(
             "retrieved_from_copyright_on": [latest_file_date] * len(copyright_data),
         }
 
-        if "workflow_status" not in copyright_data.columns:
-            columns_to_add["workflow_status"] = ["ToDo"] * len(copyright_data)
-        elif copyright_data["workflow_status"].is_null().all() or (
+        if "workflow_status" not in copyright_data.columns or copyright_data["workflow_status"].is_null().all() or (
             copyright_data["workflow_status"].str.strip_chars().eq("").all()
         ):
             columns_to_add["workflow_status"] = ["ToDo"] * len(copyright_data)
@@ -302,7 +300,9 @@ def store_complete_data(
     def validate_export_dataframe(df: pl.DataFrame, required_cols: set[str]) -> None:
         missing = required_cols - set(df.columns)
         if missing:
-            raise ValueError(f"Export dataframe missing required columns: {sorted(missing)}")
+            raise ValueError(
+                f"Export dataframe missing required columns: {sorted(missing)}"
+            )
 
     selectcols = [
         col
@@ -324,10 +324,8 @@ def store_complete_data(
         os.replace(tmp_path, target_path)
     finally:
         if tmp_path.exists():
-            try:
+            with contextlib.suppress(Exception):
                 tmp_path.unlink()
-            except Exception:
-                pass
 
     logger.info(f"Stored {data.shape[0]} rows to {file}")
 

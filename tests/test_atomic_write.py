@@ -1,6 +1,7 @@
+from pathlib import Path
+
 import openpyxl
 import polars as pl
-from pathlib import Path
 
 from easy_access.sheets.sheet import store_complete_data
 
@@ -23,7 +24,7 @@ def test_store_complete_data_writes_atomically(tmp_path: Path):
     if target.exists():
         target.unlink()
 
-    store_complete_data(settings, target, df)
+    store_complete_data(settings, target, df)  # type: ignore
 
     assert target.exists(), "Target file must exist after store_complete_data"
 

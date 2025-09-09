@@ -18,13 +18,13 @@ Recent milestones (trimmed):
 - Phase B (enrichment): OSIRIS-person enrichment implemented; unit tests for parsing/stale-selection remain.
 - Phase C (file-existence): TTL-based file existence checks implemented.
 - Ongoing: Phase D – performance tuning, comprehensive tests, and documentation.
- - 2025-09-05: Added enrichment staleness + fetch-error tests (`tests/test_enrichment_staleness.py`) validating TTL selection for courses/persons and basic network error handling for fetchers. Also added a test for `fetch_and_parse_courses` to ensure MissingCourse is recorded for missing data.
- - Pending enrichment TTL tests (additional HTML parsing + orchestrator idempotency), raw SQL relations path test, atomic Excel write (unit tests in place), bulk_create optimization.
- - Current Focus: Completed initial enrichment staleness and error tests; next actions when resuming:
-	 - Add HTML parsing unit tests for `fetch_person_data` and `_fetch_course_details` covering selector fallback and cookie-wall cases.
-	 - Add orchestrator idempotency test for `enrich_async` (run twice -> no duplicate DB writes, MissingCourse backoff respected).
-	 - Extend fetch-error tests to include HTTP 500, malformed JSON, and timeouts.
- - How to resume: checkout branch `new-dataflow`, run `uv run pytest tests/test_enrichment_staleness.py` to validate the small suite, then add tests in `tests/test_enrichment_parsing.py` focusing on HTML fixtures in `tests/fixtures/`.
+- 2025-09-05: Added unit tests for atomic Excel write and loop-aware pipeline sync wrapper. Pipeline sync wrapper (`_run_sync`) implemented to avoid nested event loop errors.
+- 2025-09-03 Fixes: Person enrichment robustness (URL encoding, cookie wall detection, selector fallback) and workflow_status canonical priority & downgrade guard (prevent repeated Done->ToDo updates). Regression tests added.
+
+Testing / safety notes:
+- Staged processing hardened: explicit field mapping, batched transactions, per-row failure persistence (`StagedProcessingFailure`).
+- `safe_*` parsing helpers added in `easy_access/utils.py` with unit tests `tests/test_safe_parsers.py`.
+- Pytest teardown improvements added to reduce hangs; diagnostics written to `hang_diagnostics.txt` when needed.
 
 Operational notes:
 - Prefer `new-dataflow` branch when acting on the repo.

@@ -9,23 +9,22 @@ This module provides DB-centric enrichment functionality that:
 """
 
 import asyncio
-from sympy import div
-from tqdm.asyncio import tqdm_asyncio
+import contextlib
 
 import bs4
 import httpx
 import Levenshtein
 from bs4 import Tag
 from loguru import logger
+from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.models import (
     CopyrightItem,
     Course,
-    Person,
     MissingCourse,
+    Person,
 )
-from easy_access.db.models import MissingCourse
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
@@ -63,7 +62,7 @@ async def gather_target_course_codes(settings: Settings) -> set[int]:
 
 
 async def select_missing_or_stale_courses(
-    settings: Settings, course_codes: set[int], ttl_days: int | None = None
+    settings: Settings | None, course_codes: set[int], ttl_days: int | None = None
 ) -> set[int]:
     """
     Select course codes that are missing or stale based on TTL policy.
@@ -163,7 +162,7 @@ async def gather_target_person_names(settings: Settings) -> set[str]:
 
 
 async def select_missing_or_stale_persons(
-    settings: Settings, person_names: set[str], ttl_days: int | None = None
+    settings: Settings | None, person_names: set[str], ttl_days: int | None = None
 ) -> set[str]:
     """
     Select person names that are missing or stale based on TTL policy.
@@ -191,6 +190,7 @@ async def select_missing_or_stale_persons(
 
     # Stale logic: include (a) unresolved placeholder persons (main_name is null), and (b) aged entries
     from datetime import datetime
+
     stale_names: set[str] = set()
     unresolved_names: set[str] = set()
     for person in existing_persons:
@@ -221,7 +221,7 @@ async def select_missing_or_stale_persons(
 
 
 async def fetch_and_parse_courses(
-    settings: Settings, course_codes: set[int], max_concurrent: int = 10
+    settings: Settings | None, course_codes: set[int], max_concurrent: int = 10
 ) -> dict[int, dict]:
     """
     Fetch and parse course data concurrently for multiple course codes.
@@ -250,21 +250,25 @@ async def fetch_and_parse_courses(
                     if course_data:
                         results[course_code] = course_data
                         # If it was tracked as missing, remove the entry
-                        try:
+                        with contextlib.suppress(Exception):
                             await MissingCourse.filter(cursuscode=course_code).delete()
-                        except Exception:
-                            pass
                     else:
                         logger.warning(f"No data found for course {course_code}")
                         # Upsert MissingCourse record (touch modified_at)
                         try:
-                            existing = await MissingCourse.get_or_none(cursuscode=course_code)
+                            existing = await MissingCourse.get_or_none(
+                                cursuscode=course_code
+                            )
                             if existing:
-                                await MissingCourse.filter(cursuscode=course_code).update(cursuscode=course_code)
+                                await MissingCourse.filter(
+                                    cursuscode=course_code
+                                ).update(cursuscode=course_code)
                             else:
                                 await MissingCourse.create(cursuscode=course_code)
                         except Exception:
-                            logger.debug(f"Could not record missing course {course_code}")
+                            logger.debug(
+                                f"Could not record missing course {course_code}"
+                            )
             except Exception as e:
                 logger.error(f"Error fetching course {course_code}: {e}")
 
@@ -336,10 +340,13 @@ async def persist_courses(courses_data: dict[int, dict]) -> None:
         for d in courses_data.values()
     )
     if minimal:
-        logger.info(f"[MinimalDataMode] Persisting {len(courses_data)} courses (legacy simple path)")
+        logger.info(
+            f"[MinimalDataMode] Persisting {len(courses_data)} courses (legacy simple path)"
+        )
         existing = await Course.filter(cursuscode__in=list(courses_data.keys()))
         existing_codes = {c.cursuscode for c in existing}
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
         for code, data in courses_data.items():
             if code in existing_codes:
                 try:
@@ -352,31 +359,36 @@ async def persist_courses(courses_data: dict[int, dict]) -> None:
                 except Exception:
                     logger.debug(f"Legacy create failed for course {code}")
             # Bump modified_at regardless (ensures staleness reset even for no-op)
-            try:
-                await Course.filter(cursuscode=code).update(modified_at=datetime.now(UTC))
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                await Course.filter(cursuscode=code).update(
+                    modified_at=datetime.now(UTC)
+                )
         return
     from easy_access.db.update import persist_courses as _persist_courses_db
+
     await _persist_courses_db(courses_data)
     # Bump modified_at for all processed courses (covers identical data)
     try:
         from datetime import datetime
-        await Course.filter(cursuscode__in=list(courses_data.keys())).update(modified_at=datetime.utcnow())
+
+        await Course.filter(cursuscode__in=list(courses_data.keys())).update(
+            modified_at=datetime.utcnow()
+        )
     except Exception:
         pass
 
 
 async def persist_persons(persons_data: dict[str, dict]) -> None:
     """Persist persons with test-aware delegation (see persist_courses)."""
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
 
     minimal = any(
-        not isinstance(d, dict) or 'main_name' not in d
-        for d in persons_data.values()
+        not isinstance(d, dict) or "main_name" not in d for d in persons_data.values()
     )
     if minimal:
-        logger.info(f"[MinimalDataMode] Persisting {len(persons_data)} persons (legacy simple path)")
+        logger.info(
+            f"[MinimalDataMode] Persisting {len(persons_data)} persons (legacy simple path)"
+        )
         existing = await Person.filter(input_name__in=list(persons_data.keys()))
         existing_names = {p.input_name for p in existing}
         for name, data in persons_data.items():
@@ -391,17 +403,21 @@ async def persist_persons(persons_data: dict[str, dict]) -> None:
                 except Exception:
                     logger.debug(f"Legacy create failed for person {name}")
             # Always bump modified_at
-            try:
-                await Person.filter(input_name=name).update(modified_at=datetime.now(UTC))
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                await Person.filter(input_name=name).update(
+                    modified_at=datetime.now(UTC)
+                )
         return
     from easy_access.db.update import persist_persons as _persist_persons_db
+
     await _persist_persons_db(persons_data)
     # Bump modified_at post-persist
     try:
         from datetime import datetime
-        await Person.filter(input_name__in=list(persons_data.keys())).update(modified_at=datetime.now(UTC))
+
+        await Person.filter(input_name__in=list(persons_data.keys())).update(
+            modified_at=datetime.now(UTC)
+        )
     except Exception:
         pass
 
@@ -741,7 +757,7 @@ async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -
         # Fetch detailed course information including contacts
         await _fetch_course_details(course_data, httpx_client)
 
-        #logger.info(f"Successfully fetched course data for {course_code}")
+        # logger.info(f"Successfully fetched course data for {course_code}")
         return course_data
 
     except Exception as e:
@@ -772,9 +788,11 @@ def _remove_dot_and_lower(name: str) -> str:
     """Normalize name for comparison by removing dots and converting to lowercase"""
     return str(name).strip().replace(".", "").lower()
 
+
 def __clean_peoplepagename(name: str) -> str:
     """remove everything between parentheses, move the initials to the front, then use _remove_dot_and_lower"""
     import re
+
     name = re.sub(r"\(.*?\)", "", name)
 
     # move everything after the last comma to the front without the comma (but a space)
@@ -783,6 +801,7 @@ def __clean_peoplepagename(name: str) -> str:
         parts = name.split(",")
         name = parts[-1].strip() + " " + " ".join(part.strip() for part in parts[:-1])
     return _remove_dot_and_lower(name)
+
 
 async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -> dict:
     """Fetch and parse person data from people.utwente.nl.
@@ -817,15 +836,21 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         raw_query = person_name.strip().replace("  ", " ")
         encoded_query = _u.quote(raw_query, safe="")
         search_url = f"https://people.utwente.nl/overview?query={encoded_query}"
-        search_resp = await httpx_client.get(search_url, headers=headers, follow_redirects=True)
+        search_resp = await httpx_client.get(
+            search_url, headers=headers, follow_redirects=True
+        )
 
         if search_resp.status_code != 200:
-            logger.warning(f"Failed to search for person {person_name}: HTTP {search_resp.status_code}")
+            logger.warning(
+                f"Failed to search for person {person_name}: HTTP {search_resp.status_code}"
+            )
             return {}
 
         soup = bs4.BeautifulSoup(search_resp.text, "lxml")
         if soup.find(string=lambda s: isinstance(s, str) and "We use cookies" in s):
-            logger.warning(f"Cookie wall encountered for person {person_name}; search HTML not parsed.")
+            logger.warning(
+                f"Cookie wall encountered for person {person_name}; search HTML not parsed."
+            )
             return {}
 
         name_parsed_str = _strip_name(person_name)
@@ -840,7 +865,9 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                     continue
                 name_tag_el = tile.find("h3", class_="ut-person-tile__title")
                 profile_div_el = tile.find("div", class_="ut-person-tile__profilelink")
-                if not (isinstance(name_tag_el, Tag) and isinstance(profile_div_el, Tag)):
+                if not (
+                    isinstance(name_tag_el, Tag) and isinstance(profile_div_el, Tag)
+                ):
                     continue
                 a_tag_el = profile_div_el.find("a")
                 if not isinstance(a_tag_el, Tag):
@@ -850,12 +877,18 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                     continue
                 main_name_raw = name_tag_el.get_text(strip=True)
                 cleaned_tile_name = __clean_peoplepagename(main_name_raw)
-                ratio = Levenshtein.ratio(cleaned_tile_name, compare_name) if compare_name else 0.0
-                matches.append({
-                    "name": main_name_raw,
-                    "url": str(href_val),
-                    "ratio": ratio,
-                })
+                ratio = (
+                    Levenshtein.ratio(cleaned_tile_name, compare_name)
+                    if compare_name
+                    else 0.0
+                )
+                matches.append(
+                    {
+                        "name": main_name_raw,
+                        "url": str(href_val),
+                        "ratio": ratio,
+                    }
+                )
         else:
             # Fallback: any anchor with data-link (test HTML provides this minimal structure)
             for a in soup.find_all("a"):
@@ -866,14 +899,20 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                     continue
                 main_name_raw = a.get_text(strip=True)
                 cleaned_tile_name = __clean_peoplepagename(main_name_raw)
-                ratio = Levenshtein.ratio(cleaned_tile_name, compare_name) if compare_name else 0.0
+                ratio = (
+                    Levenshtein.ratio(cleaned_tile_name, compare_name)
+                    if compare_name
+                    else 0.0
+                )
                 # Construct URL (data-link appears to be the slug)
                 url = f"https://people.utwente.nl/{data_link}"
-                matches.append({
-                    "name": main_name_raw,
-                    "url": url,
-                    "ratio": ratio,
-                })
+                matches.append(
+                    {
+                        "name": main_name_raw,
+                        "url": url,
+                        "ratio": ratio,
+                    }
+                )
 
         if not matches:
             logger.warning(f"No matches found in search results for {person_name}")
@@ -883,21 +922,27 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         best = matches[0]
         if best["ratio"] < 0.25:  # configurable threshold if needed later
             logger.warning(
-                "No reliable match for '%s': best ratio %.2f with '%s'" % (
-                    compare_name, best["ratio"], __clean_peoplepagename(best["name"])
-                )
+                "No reliable match for '{}': best ratio {:.2f} with '{}'".format(compare_name, best["ratio"], __clean_peoplepagename(best["name"]))
             )
             return {}
 
         detail_url = best["url"]
-        detail_resp = await httpx_client.get(detail_url, headers=headers, follow_redirects=True)
+        detail_resp = await httpx_client.get(
+            detail_url, headers=headers, follow_redirects=True
+        )
         if detail_resp.status_code != 200:
-            logger.warning(f"Failed to fetch person page for {best['name']}: HTTP {detail_resp.status_code}")
+            logger.warning(
+                f"Failed to fetch person page for {best['name']}: HTTP {detail_resp.status_code}"
+            )
             return {}
 
         detail_soup = bs4.BeautifulSoup(detail_resp.text, "lxml")
-        if detail_soup.find(string=lambda s: isinstance(s, str) and "We use cookies" in s):
-            logger.warning(f"Cookie wall on detail page for {best['name']}; cannot extract person data")
+        if detail_soup.find(
+            string=lambda s: isinstance(s, str) and "We use cookies" in s
+        ):
+            logger.warning(
+                f"Cookie wall on detail page for {best['name']}; cannot extract person data"
+            )
             return {}
 
         # Email extraction
@@ -919,6 +964,7 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
 
         # Derive other names (inside parentheses)
         import re as _re
+
         other_names: list[str] = []
         paren_content = _re.findall(r"\((.*?)\)", main_name)
         if paren_content:
@@ -965,12 +1011,22 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                     continue
                 href = a.get("href")
                 link_text = a.string
-                if not (href and isinstance(href, str) and link_text and isinstance(link_text, str)):
+                if not (
+                    href
+                    and isinstance(href, str)
+                    and link_text
+                    and isinstance(link_text, str)
+                ):
                     continue
                 txt = link_text.strip()
                 if "https://utwente.osiris-student.nl" in href and " - " in txt:
                     code, course_name = txt.split(" - ", 1)
-                    courses.append({"course_code": code.strip(), "course_name": course_name.strip()})
+                    courses.append(
+                        {
+                            "course_code": code.strip(),
+                            "course_name": course_name.strip(),
+                        }
+                    )
                 elif "https://www.utwente.nl/" in href:
                     programmes.append({"name": txt, "url": href})
 
