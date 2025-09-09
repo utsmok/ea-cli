@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import logging
 import os
 import warnings
@@ -13,6 +14,8 @@ import polars as pl
 import typer
 from loguru import logger
 from openpyxl.styles import Alignment, NamedStyle
+from openpyxl.utils import get_column_letter, quote_sheetname
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.table import Table as ExcelTable
 from openpyxl.worksheet.table import TableStyleInfo
 
@@ -129,6 +132,44 @@ def read_copyright_export(
         raise typer.Exit(code=1)
 
 
+def add_v2_classification(data: pl.DataFrame) -> pl.DataFrame:
+    """
+    Given a dataframe with a 'manual_classification' column, adds a v2 classification cols
+    using the mapping in db.models.CLASSIFICATION_MAPPING_V1_TO_V2.
+    Adds these cols:
+    - manual_classification_v2
+    - lengte
+    - overname_status
+
+    all are defined as enumstrs in db.models.ClassificationV2, LengthCategory, OvernameStatus
+    """
+
+    from easy_access.db.enums import CLASSIFICATION_MAPPING_V1_TO_V2, Classification
+
+    input_data = data.select(["manual_classification", "material_id"]).to_dicts()
+    update_data = []
+    for entry in input_data:
+        current_classification = entry.get("manual_classification", "onbekend")
+        if not current_classification or current_classification == "-":
+            current_classification = "onbekend"
+        mapped_data = CLASSIFICATION_MAPPING_V1_TO_V2.get(
+            Classification(current_classification)
+        )
+
+        if not mapped_data:
+            mapped_data = CLASSIFICATION_MAPPING_V1_TO_V2.get(Classification.ONBEKEND)
+
+        new_data = {
+            "manual_classification_v2": mapped_data.classification.value,
+            "length": mapped_data.length.value,
+            "overname_status": mapped_data.overname_status.value,
+        }
+        entry.update(new_data)
+        update_data.append(entry)
+    data = data.join(pl.DataFrame(update_data), on="material_id", how="left")
+    return data
+
+
 @dataclass
 class DataEntrySheet:
     """
@@ -155,7 +196,8 @@ class DataEntrySheet:
     def add_data(self, data: pl.DataFrame) -> None:
         self.max_row = data.shape[0]
         colnum = 0
-
+        if "manual_classification" in data.columns:
+            data = add_v2_classification(data)
         for col in self.cols:
             colnum += 1
             col_name = col.new_name if col.new_name else col.name
@@ -206,40 +248,167 @@ class DataEntrySheet:
                     if len(str(cell_data)) > 40:
                         col.count_max_width_over_40 += 1
 
-        for colnum, col in enumerate(self.cols):
-            col_letter = chr(ord("A") + colnum)
-            colnum += 1
+        # Build a deterministic mapping from column index -> Excel column letter
+        header_col_letters: list[str] = [
+            get_column_letter(i + 1) for i in range(len(self.cols))
+        ]
+
+        for idx, col in enumerate(self.cols):
+            # use column position (order in self.cols) to determine target column
+            col_index_1based = idx + 1
+            target_col_letter = header_col_letters[idx]
+
             if col.has_dropdown:
+                wb = self.workbook
+                list_sheet_name = "_ea_lists"
+
+                # Normalize dropdown source: support list/tuple or comma-separated string, strip outer quotes
+                raw_opts = col.dropdown_options
+                items: list[str] | None = None
+                formula1: str | None = None
+
+                if isinstance(raw_opts, list | tuple):
+                    items = [
+                        str(x).strip().strip('"').strip("'")
+                        for x in raw_opts
+                        if x is not None
+                    ]
+                else:
+                    opts = (str(raw_opts) if raw_opts is not None else "").strip()
+                    # If this looks like a formula/range or already quoted literal, use directly
+                    if (
+                        (opts.startswith('"') and opts.endswith('"'))
+                        or opts.startswith("=")
+                        or "!" in opts
+                        or opts.startswith("{")
+                    ):
+                        formula1 = opts
+                        # If it's a quoted literal like "A,B,C", derive items for cleaning later
+                        if opts.startswith('"') and opts.endswith('"'):
+                            inner = opts[1:-1]
+                            items = [
+                                s.strip().strip('"').strip("'")
+                                for s in inner.split(",")
+                                if s.strip()
+                            ]
+                    else:
+                        # plain comma-separated string
+                        inner = opts
+                        items = [
+                            s.strip().strip('"').strip("'")
+                            for s in inner.split(",")
+                            if s.strip()
+                        ]
+
+                # If we have a list of items, create (or reuse) a named range on a hidden sheet
+                if items is not None and len(items) > 0:
+                    if list_sheet_name in wb.sheetnames:
+                        list_ws = wb[list_sheet_name]
+                    else:
+                        list_ws = wb.create_sheet(list_sheet_name)
+                        list_ws.sheet_state = "hidden"
+
+                    # deterministic name for identical lists
+                    name_hash = hashlib.md5(
+                        ",".join(items).encode("utf-8")
+                    ).hexdigest()[:8]
+                    list_name = f"_ea_list_{name_hash}"
+
+                    # Check existing defined names by name (wb.defined_names yields names)
+                    existing_names = list(wb.defined_names)
+                    if list_name not in existing_names:
+                        # find first empty column in the lists sheet
+                        col_idx = 1
+                        while list_ws.cell(row=1, column=col_idx).value is not None:
+                            col_idx += 1
+
+                        for ridx, val in enumerate(items, start=1):
+                            list_ws.cell(row=ridx, column=col_idx).value = val
+
+                        list_col_letter = get_column_letter(col_idx)
+                        # Use quote_sheetname to handle special chars and spaces
+                        ref = f"{quote_sheetname(list_sheet_name)}!${list_col_letter}$1:${list_col_letter}${len(items)}"
+                        dn = DefinedName(list_name, attr_text=ref)
+                        # add the defined name to the workbook
+                        wb.defined_names.add(dn)
+
+                    # Use the named range as the validation source
+                    formula1 = f"={list_name}"
+
+                # If formula1 is still None for some reason, fall back to empty literal (will produce an invalid DV)
+                if not formula1:
+                    formula1 = '""'
+
+                # create DataValidation and enforce strict selection
                 dv = openpyxl.worksheet.datavalidation.DataValidation(
-                    type="list", formula1=col.dropdown_options, allowBlank=True
+                    type="list",
+                    formula1=formula1,
+                    allow_blank=False,
+                    showDropDown=False,
                 )
                 dv.error = "Please select a valid option from the list"
                 dv.errorTitle = "Invalid option"
                 dv.prompt = "Please select from the list"
                 dv.promptTitle = "List selection"
+                # prefer a strict stop style so Excel validates properly
+                dv.errorStyle = "stop"
+                dv.showErrorMessage = True
+                dv.showInputMessage = True
+
                 self.sheet.add_data_validation(dv)
+                start_cell = f"{target_col_letter}2"
+                end_cell = f"{target_col_letter}{self.max_row + 1}"
                 if self.max_row == 1:
-                    dv.add(f"{col_letter}2")
+                    dv.add(start_cell)
                 else:
-                    dv.add(f"{col_letter}2:{col_letter}{self.max_row + 1}")
+                    dv.add(f"{start_cell}:{end_cell}")
+
+            # Apply column width / wrap behavior for the target column
             if col.max_width > 40 and (
                 (col.count_max_width_over_40 > 5)
                 or (col.count_max_width_over_40 > self.max_row - 2)
             ):
                 # Too much long items: cap width to 40 & enable word wrap for this col
                 for row in range(2, self.max_row + 1):
-                    self.sheet.cell(row, colnum).style = self.word_wrap_style
-                self.sheet.column_dimensions[col_letter].bestFit = False
-                self.sheet.column_dimensions[col_letter].width = 40
+                    self.sheet.cell(row, col_index_1based).style = self.word_wrap_style
+                self.sheet.column_dimensions[target_col_letter].bestFit = False
+                self.sheet.column_dimensions[target_col_letter].width = 40
             else:
                 # Acceptable width, don't enable word wrap but fit width to contents
-                self.sheet.column_dimensions[col_letter].width = col.max_width
+                self.sheet.column_dimensions[target_col_letter].width = col.max_width
+
+            # Enforce per-cell locking: for columns with a dropdown we must allow selection
+            # (Excel requires the cell to be unlocked when the sheet is protected for users to change it)
+            try:
+                if col.has_dropdown:
+                    # make DV target cells editable (unlocked) so dropdown arrow is visible and selectable
+                    for row in range(2, self.max_row + 1):
+                        cell = self.sheet.cell(row=row, column=col_index_1based)
+                        cell.protection.locked = False
+                else:
+                    # default locked is True in Excel; make editable cols unlocked
+                    for row in range(2, self.max_row + 1):
+                        cell = self.sheet.cell(row=row, column=col_index_1based)
+                        cell.protection.locked = not bool(col.is_editable)
+                # also lock header row
+                self.sheet.cell(row=1, column=col_index_1based).protection.locked = True
+            except Exception:
+                # best-effort: if protection not supported, continue
+                pass
+
+        # Finally, enable sheet protection so locked cells become non-editable in Excel
+        with contextlib.suppress(Exception):
+            self.sheet.protection.sheet = True
+
+        # Add conditional formatting to highlight "onbekend" values
+        self._add_conditional_formatting()
 
         self.create_table()
         self.save()
 
     def create_table(self) -> None:
-        max_col_letter = chr(ord("A") + len(self.cols) - 1)
+        # use get_column_letter to support multi-letter column names beyond 'Z'
+        max_col_letter = get_column_letter(len(self.cols))
         table = ExcelTable(
             displayName=self.sheet_name.replace(" ", ""),
             ref=f"A1:{max_col_letter}{self.max_row + 1}",
@@ -249,6 +418,31 @@ class DataEntrySheet:
 
     def save(self) -> None:
         self.workbook.save(filename=self.file_path)
+
+    def _add_conditional_formatting(self) -> None:
+        """Add conditional formatting to highlight cells containing 'onbekend'."""
+        try:
+            from openpyxl.formatting.rule import CellIsRule
+            from openpyxl.styles import PatternFill
+
+            # Create a red fill for "onbekend" cells
+            red_fill = PatternFill(
+                start_color="FFFF0000", end_color="FFFF0000", fill_type="solid"
+            )
+
+            # Create the conditional formatting rule
+            rule = CellIsRule(operator="equal", formula=['"onbekend"'], fill=red_fill)
+
+            # Apply to all data columns (from column A to the last column with data)
+            max_col_letter = get_column_letter(len(self.cols))
+            data_range = f"A2:{max_col_letter}{self.max_row + 1}"
+
+            # Add the conditional formatting rule to the worksheet
+            self.sheet.conditional_formatting.add(data_range, rule)
+
+        except Exception as e:
+            logger.warning(f"Could not add conditional formatting: {e}")
+            # Continue without conditional formatting if it fails
 
 
 def finalize_sheet(
@@ -290,7 +484,6 @@ def store_complete_data(
     Stores the given data in an excel file with 1 sheet named SETTINGS.data_settings.complete_data_name
     using the col order in SETTINGS.data_settings.final_data_col_order
     """
-
     if isinstance(file, File):
         file = file.path
 
@@ -311,11 +504,29 @@ def store_complete_data(
         for col in settings.data_settings.final_data_col_order
         if col in data.columns
     ]
+    # Ensure several related course/contact columns are preserved in the Complete Data
+    extra_export_cols = [
+        "course_contacts_faculties",
+        "course_contacts_names",
+        "course_contacts_emails",
+        "course_contacts_organizations",
+        "course_names",
+        "cursuscodes",
+        "programmes",
+    ]
+    for c in extra_export_cols:
+        if c in data.columns and c not in selectcols:
+            selectcols.append(c)
     data = data.select(selectcols)
     data = data.unique("material_id")
 
     # Validate minimal required columns before writing
     validate_export_dataframe(data, required_cols={"material_id"})
+
+    # Remove internal-only columns from the exported Complete Data
+    for drop_col in ("is_duplicate", "replacement_id"):
+        if drop_col in data.columns:
+            data = data.drop(drop_col)
 
     # Use atomic write: write to temp file then rename into place
     target_path = Path(file)

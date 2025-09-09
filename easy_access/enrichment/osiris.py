@@ -25,6 +25,7 @@ from easy_access.db.models import (
     MissingCourse,
     Person,
 )
+from easy_access.db.relations import link_persons_to_courses
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
@@ -92,10 +93,7 @@ async def select_missing_or_stale_courses(
     new_missing_codes = missing_codes_all - tracked_missing_codes
 
     logger.info(
-        "Missing courses summary: total_missing=%d new_missing=%d tracked_missing=%d",
-        len(missing_codes_all),
-        len(new_missing_codes),
-        len(tracked_missing_codes),
+        f"Missing courses summary: total_missing={len(missing_codes_all)} new_missing={len(new_missing_codes)} tracked_missing={len(tracked_missing_codes)}",
     )
 
     if ttl_days is None:
@@ -104,7 +102,8 @@ async def select_missing_or_stale_courses(
 
     # Evaluate stale existing courses
     stale_existing: set[int] = set()
-    now = datetime.now(datetime.now().tzinfo)
+    now = datetime.now().astimezone()
+
     for c in existing_courses:
         if c.modified_at is None:
             stale_existing.add(c.cursuscode)
@@ -119,17 +118,13 @@ async def select_missing_or_stale_courses(
         if m.modified_at is None:
             retry_missing.add(m.cursuscode)
             continue
-        age_days = (now - m.modified_at.astimezone(now.tzinfo)).days
+        age_days = (now - m.modified_at.astimezone(datetime.now().tzinfo)).days
         if age_days > ttl_days:
             retry_missing.add(m.cursuscode)
 
     to_fetch = new_missing_codes | retry_missing | stale_existing
     logger.info(
-        "Course staleness: stale_existing=%d retry_missing=%d new_missing=%d -> will_fetch=%d",
-        len(stale_existing),
-        len(retry_missing),
-        len(new_missing_codes),
-        len(to_fetch),
+        f"Course staleness: stale_existing={len(stale_existing)} retry_missing={len(retry_missing)} new_missing={len(new_missing_codes)} -> will_fetch={len(to_fetch)}"
     )
     return to_fetch
 
@@ -210,13 +205,9 @@ async def select_missing_or_stale_persons(
     retry_unresolved = {name for name in unresolved_names if name in stale_names}
     to_fetch = missing_names | stale_names | retry_unresolved
     logger.info(
-        "Staleness summary (persons): missing=%d stale=%d unresolved=%d retry_unresolved=%d -> will_fetch=%d",
-        len(missing_names),
-        len(stale_names),
-        len(unresolved_names),
-        len(retry_unresolved),
-        len(to_fetch),
+        f"Staleness summary (persons): missing={len(missing_names)} stale={len(stale_names)} unresolved={len(unresolved_names)} retry_unresolved={len(retry_unresolved)} -> will_fetch={len(to_fetch)}"
     )
+
     return to_fetch
 
 
@@ -311,7 +302,7 @@ async def fetch_and_parse_persons(
                     if person_data:
                         results[person_name] = person_data
                     else:
-                        logger.warning(f"No data found for person {person_name}")
+                        logger.warning(f"No data found for person {person_name} ")
             except Exception as e:
                 logger.error(f"Error fetching person {person_name}: {e}")
 
@@ -470,18 +461,29 @@ async def enrich_async(settings: Settings) -> None:
             return
 
         # Extract person names from course data
+
+        # Persist course data
+        await persist_courses(courses_data)
+
         person_names = set()
+        course_to_persons: dict[
+            int, dict[str, set[str]]
+        ] = {}  # course_code -> role -> set of names
         for course_data in courses_data.values():
             # Add teachers, contacts, etc. from course data
+            course_to_persons_entry = {}
             for field in ["teachers", "contacts", "docenten", "examinators", "tutors"]:
                 if field in course_data and course_data[field]:
                     if isinstance(course_data[field], list) or isinstance(
                         course_data[field], set
                     ):
-                        person_names.update(course_data[field])
+                        clean_names = {
+                            name for name in course_data[field] if name and name.strip()
+                        }
+                        person_names.update(clean_names)
+                        course_to_persons_entry[field] = clean_names
 
-        # Filter out empty names
-        person_names = {name for name in person_names if name and name.strip()}
+            course_to_persons[course_data["cursuscode"]] = course_to_persons_entry
 
         if not person_names:
             logger.info("No person names found in course data")
@@ -499,11 +501,35 @@ async def enrich_async(settings: Settings) -> None:
 
                 # Persist person data
                 await persist_persons(persons_data)
+
+                # map the results in persons_data back to the course_to_persons structure
+                # we'll grab the people_page_url as that should be unique
+                # then we'll use this to link persons to courses
+
+                # result: dict with course_code -> list of dicts with name, people_page_url, role
+                final_course_to_persons: dict[int, list[dict[str, str]]] = {}
+                for course_code, roles in course_to_persons.items():
+                    cur_data = []
+                    for role, names in roles.items():
+                        for name in names:
+                            if name in persons_data:
+                                cur_data.append(
+                                    {
+                                        "name": name,
+                                        "people_page_url": str(
+                                            persons_data[name].get(
+                                                "people_page_url", ""
+                                            )
+                                        ),
+                                        "role": role,
+                                    }
+                                )
+                    final_course_to_persons[course_code] = cur_data
+
+                # Link persons to courses
+                await link_persons_to_courses(settings, final_course_to_persons)
             else:
                 logger.info("All persons are fresh, skipping person fetching")
-
-        # Persist course data
-        await persist_courses(courses_data)
 
         logger.info("Enrichment completed successfully")
 
@@ -713,7 +739,10 @@ async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -
         results = response.json().get("hits", {}).get("hits", [])
 
         if not results:
-            logger.warning(f"No OSIRIS data found for course code {course_code}")
+            logger.warning(
+                f"No OSIRIS data found for course code {course_code} after initial search"
+            )
+            logger.debug(f"OSIRIS response: {response.text}")
             return {}
 
         # Process the first result (most relevant)
@@ -761,7 +790,9 @@ async def fetch_course_data(course_code: int, httpx_client: httpx.AsyncClient) -
         return course_data
 
     except Exception as e:
-        logger.error(f"Error fetching course data for {course_code}: {e}")
+        logger.error(
+            f"Error fetching course data for {course_code} while parsing results: {e}"
+        )
         return {}
 
 
@@ -862,21 +893,28 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
         if tiles:
             for tile in tiles[:10]:  # safety cap
                 if not isinstance(tile, Tag):  # type: ignore[unreachable]
+                    logger.debug(
+                        f'Skipping non-Tag element for "{person_name}": {tile}'
+                    )
                     continue
                 name_tag_el = tile.find("h3", class_="ut-person-tile__title")
-                profile_div_el = tile.find("div", class_="ut-person-tile__profilelink")
-                if not (
-                    isinstance(name_tag_el, Tag) and isinstance(profile_div_el, Tag)
-                ):
+                if not (isinstance(name_tag_el, Tag)):
+                    logger.debug(f'Skipping malformed tile for "{person_name}": {tile}')
                     continue
-                a_tag_el = profile_div_el.find("a")
-                if not isinstance(a_tag_el, Tag):
+
+                # grab 'data-link' attribute from the tile
+                data_link = tile.get("data-link")
+                if not data_link:
+                    logger.debug(f'No data-link in tile for "{person_name}": {tile}')
                     continue
-                href_val = a_tag_el.get("href") if isinstance(a_tag_el, Tag) else None
-                if not href_val:
-                    continue
+                href_val = f"https://people.utwente.nl/{data_link}"
                 main_name_raw = name_tag_el.get_text(strip=True)
                 cleaned_tile_name = __clean_peoplepagename(main_name_raw)
+                if not name_tag_el or not main_name_raw or not cleaned_tile_name:
+                    logger.debug(
+                        f'Cannot parse name in tile for "{person_name}": {tile}'
+                    )
+                    continue
                 ratio = (
                     Levenshtein.ratio(cleaned_tile_name, compare_name)
                     if compare_name
@@ -889,33 +927,13 @@ async def fetch_person_data(person_name: str, httpx_client: httpx.AsyncClient) -
                         "ratio": ratio,
                     }
                 )
-        else:
-            # Fallback: any anchor with data-link (test HTML provides this minimal structure)
-            for a in soup.find_all("a"):
-                if not isinstance(a, Tag):
-                    continue
-                data_link = a.get("data-link")
-                if not data_link:
-                    continue
-                main_name_raw = a.get_text(strip=True)
-                cleaned_tile_name = __clean_peoplepagename(main_name_raw)
-                ratio = (
-                    Levenshtein.ratio(cleaned_tile_name, compare_name)
-                    if compare_name
-                    else 0.0
-                )
-                # Construct URL (data-link appears to be the slug)
-                url = f"https://people.utwente.nl/{data_link}"
-                matches.append(
-                    {
-                        "name": main_name_raw,
-                        "url": url,
-                        "ratio": ratio,
-                    }
-                )
 
         if not matches:
-            logger.warning(f"No matches found in search results for {person_name}")
+            logger.warning(
+                f"No matches found in search results for {person_name}! Initial query:\n '{raw_query}'. Writing html to debug/{compare_name}.html"
+            )
+            with open(f"debug/{compare_name}.html", "w", encoding="utf-8") as f:
+                f.write(search_resp.text)
             return {}
 
         matches.sort(key=lambda x: x["ratio"], reverse=True)
