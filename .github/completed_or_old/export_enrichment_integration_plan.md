@@ -1,3 +1,5 @@
+
+
 # Export, Enrichment & File Existence Integration Plan 10. Documentation: architecture diagram (PNG/SVG), README section on stage idempotency & CLI flags, minimal troubleshooting table.
  11. Decouple production code from test mocks in `db/relations.py` (remove Mock-aware branching) + adjust tests.
  12. Refactor pipeline synchronous wrappers to avoid nested asyncio.run misuse; provide loop-safe dispatcher.
@@ -196,4 +198,3 @@ See updated `.github/todo.md` for revised, DB‑centric tasks and sheet refactor
 - Relations stage logs added/linked counts deterministically; rerun yields zero-delta metrics.
 - Enrichment stage stores JSON caches, skips already fresh entries, and exposes enrichment counts.
 - File existence stage processes only selected items & persists results correctly.
-
