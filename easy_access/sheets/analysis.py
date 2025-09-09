@@ -23,6 +23,8 @@ def create_programme_overviews(
     """
     create an overview sheet for each programme of the given faculty, using the data in df.
     """
+    logger.warning("Programme sheet export disabled.")
+    return style_iter
     course_to_group: dict[str, str] = settings.university_settings.course_mapping[
         faculty
     ]
@@ -154,6 +156,24 @@ async def create_faculty_overviews(
                 / faculty
                 / f"{faculty}_total_overview_updated_{today}.xlsx"
             )
+            # Ensure there is never more than one total_overview sheet per directory.
+            # Move any existing overview files for this faculty into the overviews_backup directory.
+            overview_dir = Directory(
+                settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty
+            )
+            overview_dir.full.mkdir(parents=True, exist_ok=True)
+            faculty_dir = Directory(
+                settings.dirs[DirSetting.FACULTIES_DIR].full / faculty
+            )
+            for file in faculty_dir.files:
+                if file.extension in [".xls", ".xlsx"] and "overview" in file.name:
+                    try:
+                        file.move(overview_dir.full / file.name)
+                    except Exception:
+                        logger.exception(
+                            f"Failed to move existing overview {file.path} to backup"
+                        )
+
             logger.info(
                 f"saving file with {all_faculty_data.shape[0]} rows to {fac_file.path}"
             )

@@ -10,7 +10,12 @@ from loguru import logger
 from sqlalchemy import Engine, create_engine
 from tortoise import Model, Tortoise
 
-from easy_access.db.models import Classification, CopyrightItem, Faculty, Status
+from easy_access.db.enums import Classification, Status
+from easy_access.db.models import (
+    CopyrightItem,
+    Faculty,
+    Organization,
+)
 from easy_access.settings import Settings
 
 # Module-level flag to memoize initialization
@@ -65,7 +70,43 @@ async def init(settings: Settings) -> bool | None:
     await Tortoise.generate_schemas(safe=True)
     if create_tables:
         await Tortoise.generate_schemas(safe=True)
+        # Also create the default faculties
+        await init_faculties(settings)
         return True
+
+
+async def init_faculties(settings: Settings) -> None:
+    # create university entry in 'Organization' table
+    main_uni, success = await Organization.get_or_create(
+        name=settings.university_settings.name,
+        abbreviation=settings.university_settings.abbreviation,
+        full_abbreviation=settings.university_settings.abbreviation,
+        hierarchy_level=0,
+    )
+    # retrieve faculties from settings
+    faculties = settings.university_settings.faculties
+
+    for faculty in faculties:
+        faculty, success = await Faculty.get_or_create(
+            name=faculty.name,
+            abbreviation=faculty.abbreviation,
+            full_abbreviation=faculty.abbreviation,
+            hierarchy_level=1,
+        )
+        if not faculty.parent_organization:
+            faculty.parent_organization = main_uni
+            await faculty.save()
+
+    # also create an "Unmapped" faculty to use as a fallback
+    unmapped, success = await Faculty.get_or_create(
+        name="Unmapped",
+        abbreviation="UNM",
+        full_abbreviation="UNM",
+        hierarchy_level=1,
+    )
+    if not unmapped.parent_organization:
+        unmapped.parent_organization = main_uni
+        await unmapped.save()
 
 
 async def create() -> None:

@@ -84,6 +84,25 @@ class ColInfo:
     max_width: int = 8
     count_max_width_over_40: int = 0
 
+    def __post_init__(self) -> None:
+        if "ENUM" in self.dropdown_options:
+            enum_name = self.dropdown_options.split("ENUM:")[-1].strip()
+            # try to import that enum from db.models
+            try:
+                from easy_access.db import enums
+
+                enum_class = getattr(enums, enum_name, None)
+                if enum_class and issubclass(enum_class, Enum):
+                    self.dropdown_options = ",".join([e.value for e in enum_class])
+                else:
+                    logger.warning(
+                        f"Could not find enum class '{enum_name}' in db.models. Leaving dropdown_options as is."
+                    )
+            except ImportError as e:
+                logger.warning(
+                    f"Error importing db.models to load enum '{enum_name}': {e}. Leaving dropdown_options as is."
+                )
+
     @property
     def has_dropdown(self) -> bool:
         """True if dropdown_options are specified, False otherwise."""

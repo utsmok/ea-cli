@@ -39,6 +39,14 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
         logger.warning("No data found for export.")
         return {}
 
+    if "file_exists" in all_data.columns:
+        all_data = all_data.with_columns(pl.col("file_exists").cast(pl.Utf8))
+        all_data = all_data.with_columns(
+            pl.when(pl.col("file_exists").is_in(["1", "True"]))
+            .then(pl.lit("Yes"))
+            .otherwise(pl.lit("No"))
+            .alias("file_exists")
+        )
     # Group by faculty
     faculty_data = {}
     faculties = all_data.select("faculty").unique().to_series().to_list()
@@ -85,18 +93,49 @@ async def export_faculty_sheets(
         filename_base = f"{faculty}_{today}"
         output_file_path = _get_unique_filepath(faculty_dir.full, filename_base)
 
+        # Determine which items are new (not yet present in any existing regular file for this faculty)
+        existing_ids: set[int] = set()
+        for file in faculty_dir.files:
+            # ignore overview files and non-excel
+            if file.extension not in [".xls", ".xlsx"]:
+                continue
+            if "overview" in file.name or "llm" in file.name:
+                continue
+            try:
+                # read the Complete Data sheet from existing file
+                existing_df = pl.read_excel(
+                    file.path, sheet_name=settings.data_settings.complete_data_name
+                )
+                if "material_id" in existing_df.columns:
+                    existing_ids.update(
+                        existing_df.select("material_id").to_series().to_list()
+                    )
+            except Exception:
+                logger.debug(
+                    f"Could not read existing faculty file {file.path}; skipping"
+                )
+
+        if existing_ids:
+            new_data = data.filter(~pl.col("material_id").is_in(list(existing_ids)))
+        else:
+            new_data = data
+
+        if new_data.is_empty():
+            logger.info(f"No new items for faculty {faculty}; skipping regular export")
+            continue
+
         logger.info(
-            f"Creating faculty sheet: {output_file_path.name} ({data.shape[0]} items)"
+            f"Creating faculty sheet: {output_file_path.name} ({new_data.shape[0]} new items)"
         )
 
-        # Store complete data
-        store_complete_data(settings=settings, file=output_file_path, data=data)
+        # Store complete data (only new items)
+        store_complete_data(settings=settings, file=output_file_path, data=new_data)
 
         # Add data entry sheet and styling
         style_iter = finalize_sheet(
             settings=settings,
             file=File(str(output_file_path)),
-            data=data,
+            data=new_data,
             style_iter=style_iter,
         )
 
@@ -117,6 +156,9 @@ async def export_programme_sheets(
     Returns:
         Updated style iterator
     """
+    logger.warning("Programme sheet export disabled.")
+    return style_iter
+    # Uncomment below to enable programme sheet export
     logger.info("Exporting programme sheets...")
 
     for faculty, data in faculty_data.items():
@@ -184,6 +226,9 @@ async def export_all_items_sheet(settings: Settings, style_iter: int = 9) -> int
     Returns:
         Updated style iterator
     """
+    logger.warning("All items sheet export disabled.")
+    return style_iter
+    # Uncomment below to enable all items sheet export
     logger.info("Exporting all items sheet...")
 
     # Get all data

@@ -1339,23 +1339,12 @@ async def persist_courses(
                     f"Faculty '{faculty_abbr}' not found for course {code}; leaving FK null"
                 )
 
-        # Remove non-column / relation fields before create/update (relations handled later)
-        relation_keys = {
-            "teachers",
-            "contacts",
-            "docenten",
-            "examinators",
-            "unknown_role",
-            "tutors",
-        }
-        relation_payload = {k: cd.pop(k) for k in list(cd.keys()) if k in relation_keys}
         # Drop unsupported keys (e.g. faculty_long, language, etc.)
         cd = {
             k: v
             for k, v in cd.items()
             if k in allowed_course_fields or k.startswith("_")
         }
-        cd["_relation_payload"] = relation_payload  # stash for later
 
         if "ec" in cd:
             if "," in str(cd["ec"]):
@@ -1381,25 +1370,17 @@ async def persist_courses(
 
     # Create
     for cd in to_create:
-        rel_payload = cd.pop("_relation_payload", {})
         try:
-            course_obj = await CourseModel.create(**cd)
+            await CourseModel.create(**cd)
         except Exception as exc:  # pragma: no cover (defensive)
             logger.error(f"Error creating course {cd.get('cursuscode')}: {exc}")
             continue
-        await _apply_course_teacher_relations(course_obj, rel_payload, PersonModel)
 
     # Update existing (exclude PK)
     for ud in to_update:
-        rel_payload = ud.pop("_relation_payload", {})
         code = ud.pop("cursuscode")
         try:
             await CourseModel.filter(cursuscode=code).update(**ud)
-            course_obj = await CourseModel.get_or_none(cursuscode=code)
-            if course_obj:
-                await _apply_course_teacher_relations(
-                    course_obj, rel_payload, PersonModel
-                )
         except Exception as exc:  # pragma: no cover
             logger.error(f"Error updating course {code}: {exc}")
 

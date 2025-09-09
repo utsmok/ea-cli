@@ -2,9 +2,6 @@
 functions to ingest new data into the database
 """
 
-import json
-from collections import Counter
-
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
@@ -17,85 +14,18 @@ from easy_access.db.models import (
     PDF,
     CopyrightItem,
     Course,
-    CourseEmployee,
     Faculty,
-    MissingCourse,
     Organization,
-    Person,
     Programme,
     StagedCopyrightItem,
     StagedFacultyUpdate,
 )
 from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFaculty for type hints
     DirSetting,
-    FileSetting,
     Settings,  # Add Settings for type hint
     SettingsFaculty,
 )
-from easy_access.utils import File, safe_float, safe_int, standardize_dataframe
-
-
-async def load_osiris_data(settings: Settings) -> None:
-    """
-    Creates Courses from the osiris_data.json file.
-    Staff data is added later once people data has been loaded.
-    """
-    await ensure_db_inited(settings)
-    if not settings.files[FileSetting.OSIRIS_DATA].exists:
-        logger.warning("No osiris_data.json file found; data not loaded to DB.")
-        return
-
-    try:
-        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f:
-            osiris_data: dict[str, dict[str, str | list[str]]] = json.load(f)
-    except Exception as e:
-        logger.warning(f"Error reading osiris_data.json: {e}")
-        return
-
-    course_dicts = []
-    existing_course_codes = await Course().all().values("cursuscode")
-    existing_course_codes = {int(c["cursuscode"]) for c in existing_course_codes}
-    for course_data in osiris_data.values():
-        course_code_raw = course_data.get("cursuscode", 0)
-        if not isinstance(course_code_raw, int) and not isinstance(
-            course_code_raw, str
-        ):
-            logger.warning(f"Invalid course code: {course_code_raw}. Skipping course.")
-            continue
-        else:
-            course_code = int(course_code_raw)
-        if course_code in existing_course_codes or not course_data.get("cursuscode"):
-            continue
-        ec_val = course_data.get("ec", "0")
-        if isinstance(ec_val, str):
-            ec_parsed = safe_float(ec_val.replace(",", "."))
-        else:
-            ec_parsed = safe_float(str(ec_val).replace(",", "."))
-        course_dict: dict[str, str | list[str] | None] = {
-            "cursuscode": course_code,
-            "internal_id": safe_int(course_data.get("internal_id")) or 0,
-            "name": course_data.get("name", None),
-            "short_name": course_data.get("short_name", None),
-            "ec": int(round(ec_parsed or 0, 0)),
-            "programme": course_data.get("programme", None),
-            "notes": course_data.get("notes", None),
-            "category": course_data.get("category", None),
-        }
-
-        existing_course_codes.add(int(course_data.get("cursuscode")))
-
-        year: str = course_data.get("year")
-        if "-" in year:
-            year = int(year.split("-")[0])
-            course_dict["year"] = year
-
-        faculty = await Faculty.get_or_none(abbreviation=course_data.get("faculty"))
-        if faculty:
-            course_dict["faculty"] = faculty
-
-        course_dicts.append(course_dict)
-
-    await Course.bulk_create(objects=[Course(**c) for c in course_dicts])
+from easy_access.utils import File, standardize_dataframe
 
 
 async def load_org_data_from_settings(settings: Settings) -> None:
@@ -172,173 +102,6 @@ async def load_org_data_from_settings(settings: Settings) -> None:
         await Programme.bulk_create(objects=[Programme(**p) for p in progamme_list])
 
 
-async def load_person_data(settings: Settings) -> None:
-    """
-    Load data from the person_data.json file into the db.
-    Adds Persons and Orgs, creates MissingCourses where necessary.
-    """
-
-    await ensure_db_inited(settings)
-    if not settings.files[FileSetting.PERSON_DATA].exists:
-        logger.warning("No person_data.json file found; data not loaded to DB.")
-        return
-    try:
-        with open(settings.files[FileSetting.PERSON_DATA].path, encoding="utf-8") as f:
-            person_data: list[dict[str, str | float | list[str]]] = json.load(f)
-    except Exception as e:
-        logger.warning(f"Error reading person_data.json: {e}")
-        return
-
-    existing_person_names = await Person().all().values("input_name")
-    existing_person_names = {p["input_name"] for p in existing_person_names}
-    for person in person_data:
-        if person.get("input_name") in existing_person_names:
-            continue
-        person_dict = {
-            "input_name": person.get("input_name").strip(),
-            "main_name": person.get("main_name", None),
-            "match_confidence": person.get("match_confidence", None),
-            "first_name": person.get("other_names", [None])[0],
-            "email": person.get("email", None),
-            "faculty": await Faculty.get_or_none(
-                abbreviation=person.get("faculty", None)
-            ),
-            "people_page_url": person.get("people_page_url", None),
-        }
-        for k, v in person_dict.items():
-            if isinstance(v, str):
-                person_dict[k] = v.strip()
-        orgs: list[dict[str, str]] = person.get("orgs", [])
-        orgs.sort(key=lambda x: x.get("abbr").count("-"))
-        orglist = []
-        for org in orgs:
-            try:
-                hierarchy_level = org.get("abbr").count("-") + 1
-                orgname = org.get("name").strip()
-                org_sole_abbr = org.get("abbr").split("-")[-1].strip()
-                org_full_abbr = org.get("abbr").strip()
-                org_dict = {
-                    "name": orgname,
-                    "abbreviation": org_sole_abbr,
-                    "full_abbreviation": org_full_abbr,
-                    "hierarchy_level": hierarchy_level,
-                }
-                org_obj, _ = await Organization.get_or_create(
-                    defaults=org_dict, full_abbreviation=org_full_abbr
-                )
-                if hierarchy_level == 1:
-                    org_obj.parent_organization, _ = await Organization.get_or_create(
-                        defaults={
-                            "name": "University of Twente",
-                            "abbreviation": "UT",
-                            "full_abbreviation": "UT",
-                            "parent_organization": None,
-                            "hierarchy_level": 0,
-                        },
-                        abbreviation="UT",
-                    )
-                elif hierarchy_level >= 2:
-                    parent_org_abbr = org_full_abbr.split("-")[-2].strip()
-                    parent_org_full_abbreviation = org_full_abbr.rsplit("-", 1)[
-                        0
-                    ].strip()
-                    org_obj.parent_organization = await Organization.get(
-                        abbreviation=parent_org_abbr,
-                        full_abbreviation=parent_org_full_abbreviation,
-                        hierarchy_level=hierarchy_level - 1,
-                    )
-                await org_obj.save()
-                orglist.append(org_obj)
-            except Exception as e:
-                logger.warning(f"Error adding org with data {org_dict} to person: {e}")
-                continue
-
-        person = await Person.create(**person_dict)
-        if orglist:
-            await person.orgs.add(*orglist)
-
-
-async def load_linked_persons_for_courses(settings: Settings) -> Counter:
-    """
-    Link the Persons to the Courses they are involved in.
-    """
-    await ensure_db_inited(settings)
-    # load osiris data
-    if not settings.files[FileSetting.OSIRIS_DATA].exists:
-        logger.warning("No osiris_data.json file found; data not loaded to DB.")
-        return
-
-    try:
-        with open(settings.files[FileSetting.OSIRIS_DATA].path, encoding="utf-8") as f:
-            osiris_data: dict[str, dict[str, str | list[str]]] = json.load(f)
-    except Exception as e:
-        logger.warning(f"Error reading osiris_data.json: {e}")
-        return
-
-    counter = Counter()
-
-    for course_data in osiris_data.values():
-        course_obj = await Course.get_or_none(cursuscode=course_data.get("cursuscode"))
-        if not course_obj:
-            continue
-
-        teachers = course_data.get("teachers", [])
-        for teacher_name in teachers:
-            teacher_obj = await Person.get_or_none(input_name=teacher_name)
-            if teacher_obj:
-                await CourseEmployee.get_or_create(
-                    course=course_obj, person=teacher_obj, role="teacher"
-                )
-                counter["teachers"] += 1
-
-        contacts = course_data.get("contacts", [])
-        for contact_name in contacts:
-            contact_obj = await Person.get_or_none(input_name=contact_name)
-            if contact_obj:
-                await CourseEmployee.get_or_create(
-                    course=course_obj, person=contact_obj, role="contact"
-                )
-                counter["contacts"] += 1
-
-        tutors = course_data.get("tutors", [])
-        for tutor_name in tutors:
-            tutor_obj = await Person.get_or_none(input_name=tutor_name)
-            if tutor_obj:
-                await CourseEmployee.get_or_create(
-                    course=course_obj, person=tutor_obj, role="tutor"
-                )
-                counter["tutors"] += 1
-
-        docenten = course_data.get("contacts", [])
-        for docent_name in docenten:
-            docent_obj = await Person.get_or_none(input_name=docent_name)
-            if docent_obj:
-                await CourseEmployee.get_or_create(
-                    course=course_obj, person=docent_obj, role="docent"
-                )
-                counter["docenten"] += 1
-
-        examinators = course_data.get("examinators", [])
-        for examinators_name in examinators:
-            examinator_obj = await Person.get_or_none(input_name=examinators_name)
-            if examinator_obj:
-                await CourseEmployee.get_or_create(
-                    course=course_obj, person=examinator_obj, role="examinator"
-                )
-                counter["examinators"] += 1
-
-        unknown_roles = course_data.get("unknown_role", [])
-        for unknown_role_name in unknown_roles:
-            unknown_role_obj = await Person.get_or_none(input_name=unknown_role_name)
-            if unknown_role_obj:
-                await CourseEmployee.get_or_create(
-                    course=course_obj, person=unknown_role_obj, role="unknown_role"
-                )
-                counter["unknown_roles"] += 1
-
-    return counter
-
-
 async def load_base_data(settings: Settings) -> None:
     """
     Load the base data into the db: orgs, courses, persons.
@@ -371,43 +134,6 @@ async def load_base_data(settings: Settings) -> None:
             f"# of Courses present in DB before load_osiris_data: {course_count}"
         )
 
-        await load_osiris_data(settings=settings)
-
-        course_count = await Course.all().count()
-        logger.success(
-            f"# of Courses present in DB after load_osiris_data: {course_count}"
-        )
-
-        person_count = await Person.all().count()
-        org_count = await Organization.all().count()
-        missing_orgs = await MissingCourse.all().count()
-        logger.info(
-            f"# of Persons present in DB before load_person_data: {person_count}"
-        )
-        logger.info(
-            f"# of Organizations present in DB before load_person_data: {org_count}"
-        )
-        logger.info(
-            f"# of MissingCourses present in DB before load_person_data: {missing_orgs}"
-        )
-
-        await load_person_data(settings=settings)
-
-        org_count = await Organization.all().count()
-        person_count = await Person.all().count()
-        missing_orgs = await MissingCourse.all().count()
-        logger.success(
-            f"# of Persons present in DB after load_person_data: {person_count}"
-        )
-        logger.success(
-            f"# of Organizations present in DB after load_person_data: {org_count}"
-        )
-        logger.success(
-            f"# of MissingCourses present in DB after load_person_data: {missing_orgs}"
-        )
-
-        results = await load_linked_persons_for_courses(settings=settings)
-        logger.success(f"Overview of new relations added to Courses: {results}")
     except Exception as e:
         logger.warning(f"Error loading base data: {e}")
 

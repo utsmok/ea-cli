@@ -189,14 +189,15 @@ def retrieve_full_data(
             faculty_where_clause = f"AND cd.faculty_id IN ('{faculties_string}')"
 
         # Optimized query with pre-aggregated data and reduced subqueries
+        # TODO: for all the group_concats, make sure to make them DISTINCT so we don't get duplicates in the returned strings
         query: str = f"""
             -- Pre-aggregate course data to avoid repeated computations
             WITH CourseAggregations AS (
                 SELECT
                     cdcd.copyright_data_id,
-                    GROUP_CONCAT(cd.cursuscode, ' | ') as cursuscodes,
-                    GROUP_CONCAT(cd.programme, ' | ') as programmes,
-                    GROUP_CONCAT(cd.name, ' | ') as course_names
+                    REPLACE(GROUP_CONCAT(DISTINCT cd.cursuscode), ',', ' | ') as cursuscodes,
+                    REPLACE(GROUP_CONCAT(DISTINCT cd.programme), ',', ' | ') as programmes,
+                    REPLACE(GROUP_CONCAT(DISTINCT cd.name), ',', ' | ') as course_names
                 FROM copyright_data_course_data cdcd
                 JOIN course_data cd ON cdcd.course_id = cd.cursuscode
                 GROUP BY cdcd.copyright_data_id
@@ -205,17 +206,17 @@ def retrieve_full_data(
             ContactAggregations AS (
                 SELECT
                     cdcd.copyright_data_id,
-                    GROUP_CONCAT(pd.main_name, ' | ') as course_contacts_names,
-                    GROUP_CONCAT(pd.email, ' | ') as course_contacts_emails,
-                    GROUP_CONCAT(f.abbreviation, ' | ') as course_contacts_faculties,
-                    GROUP_CONCAT(org.full_abbreviation, ' | ') as course_contacts_organizations
+                    REPLACE(GROUP_CONCAT(DISTINCT pd.main_name), ',', ' | ') as course_contacts_names,
+                    REPLACE(GROUP_CONCAT(DISTINCT pd.email), ',', ' | ') as course_contacts_emails,
+                    REPLACE(GROUP_CONCAT(DISTINCT f.abbreviation), ',', ' | ') as course_contacts_faculties,
+                    REPLACE(GROUP_CONCAT(DISTINCT org.full_abbreviation), ',', ' | ') as course_contacts_organizations
                 FROM copyright_data_course_data cdcd
                 JOIN course_employee ce ON cdcd.course_id = ce.course_id
                 JOIN person_data pd ON ce.person_id = pd.id
                 LEFT JOIN faculty f ON pd.faculty_id = f.abbreviation
                 LEFT JOIN person_data_organization_data pdod ON pd.id = pdod.person_data_id
                 LEFT JOIN organization_data org ON pdod.organization_id = org.id
-                WHERE ce.role = 'contact'
+                WHERE ce.role = 'contacts'
                 GROUP BY cdcd.copyright_data_id
             )
             -- Main query with optimized JOINs
@@ -680,16 +681,23 @@ async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightI
         engine = init_engine(settings=settings)  # Pass settings
 
     # Retrieve material_ids as a flat list of ints so it can be used in __in filters
-    deleted_pdfs = await PDF.filter(download_succeeded=False).values()
-    logger.debug(deleted_pdfs[0:5])
-    logger.info(
-        f'Retrieved {len(deleted_pdfs)} PDFs with "download_succeeded" set to False'
+    deleted_pdfs_ids = await PDF.filter(download_succeeded=False).values_list(
+        "material_id", flat=True
     )
-    logger.debug(deleted_pdfs)
+    logger.debug(deleted_pdfs_ids[0:5])
+    logger.info(
+        f'Retrieved {len(deleted_pdfs_ids)} PDFs with "download_succeeded" set to False'
+    )
+    logger.debug(deleted_pdfs_ids)
+    # Return CopyrightItem model instances (not dicts)
     copyright_items = await CopyrightItem.filter(
-        Q(material_id__in=deleted_pdfs)
-    ).values()
-    logger.debug([item.get("status") for item in copyright_items])
+        Q(material_id__in=deleted_pdfs_ids)
+    ).all()
+    # Log statuses if we can access them on model instances
+    try:
+        logger.debug([getattr(item, "status", None) for item in copyright_items])
+    except Exception:
+        logger.debug("Could not read status attributes from CopyrightItem instances")
     logger.info(
         f"Retrieved {len(copyright_items)} copyright items associated with non-downloadable PDFs"
     )

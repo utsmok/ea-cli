@@ -2,7 +2,6 @@
 ORM models for the database.
 """
 
-from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -10,6 +9,14 @@ from pathlib import Path
 from tortoise import fields
 from tortoise.models import Model
 
+from easy_access.db.enums import (
+    Classification,
+    Filetype,
+    Infringement,
+    Period,
+    Status,
+    WorkflowStatus,
+)
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import File
 
@@ -19,201 +26,6 @@ class TimestampMixin:
     modified_at = fields.DatetimeField(null=True, auto_now=True)
 
 
-class Classification(Enum):
-    OPEN_ACCESS = "open access"
-    KORTE_OVERNAME = "korte overname"
-    MIDDELLANGE_OVERNAME = "middellange overname"
-    LANGE_OVERNAME = "lange overname"
-
-    EIGEN_MATERIAAL_POWERPOINT = "eigen materiaal - powerpoint"
-    EIGEN_MATERIAAL_TITELINDICATIE = "eigen materiaal - titelindicatie"
-    EIGEN_MATERIAAL_OVERIG = "eigen materiaal - overig"
-    EIGEN_MATERIAAL = "eigen materiaal"
-
-    ONBEKEND = "onbekend"
-    NIET_GEANALYSEERD = "niet geanalyseerd"
-    IN_ONDERZOEK = "in onderzoek"
-    VERWIJDERVERZOEK_VERSTUURD = "verwijderverzoek verstuurd"
-    LICENTIE_BESCHIKBAAR = "licentie beschikbaar"
-
-
-# V2 classification system + mapping + notes
-
-
-class ClassificationV2(Enum):
-    """
-    The new classification system for V2 of the copyright tool.
-    """
-
-    # Yes classifications
-    JA_OPEN_LICENTIE = "Ja (open licentie)"
-    JA_BIBLIOTHEEK_LICENTIE = "Ja (bibilotheek licentie)"
-    JA_DIRECTE_TOESTEMMING = "Ja (directe toestemming)"
-    JA_PUBLIEK_DOMEIN = "Ja (Publiek domein)"
-    JA_EIGEN_WERK = "Ja (eigen werk)"
-    JA_STUDENTWERK = "Ja (studentwerk)"
-    JA_EASY_ACCESS = "Ja (easy access)"
-    JA_ANDERS = "Ja (anders)"
-
-    JA_DIRECTE_TOESTEMMING_TIJDELIJK = "Ja (directe toestemming) - tijdelijk"
-    JA_BIBLIOTHEEK_LICENTIE_TIJDELIJK = "Ja (bibilotheek licentie)- tijdelijk"
-    JA_ANDERS_TIJDELIJK = "Ja (anders) - tijdelijk"
-
-    # No classifications
-    NEE_LINK_BESCHIKBAAR = "Nee (Link beschikbaar)"
-    NEE_STUDENTWERK = "Nee (studentwerk)"
-    NEE = "Nee"
-
-    # Other classifications
-    ONBEKEND = "Onbekend"
-
-
-class OvernameStatus(Enum):
-    OVERNAME_INBREUKMAKENDE = "Overname (inbreukmakende)"
-    OVERNAME_ANDERE = "Overname (andere)"
-    GEEN_OVERNAME = "Geen overname"
-    ONBEKEND = "Onbekend"
-
-
-class Lengte(Enum):
-    KORT = "Kort"
-    MIDDELLANG = "Middellang"
-    LANG = "Lang"
-    ONBEKEND = "Onbekend"
-
-
-"""
-Mapping notes:
-
-- Lange overname zou moeten mappen naar --> Ja, anders volgens SURF, denk niet dat dat klopt!
-- V1 open access kan ook publiek domein zijn in v2
-- studentwerk is in v1 niet apart, in v2 wel -- vaak als eigen werk gemarkeerd
-
-"""
-
-
-@dataclass
-class ClassificationMapping:
-    classification: ClassificationV2
-    overname_status: OvernameStatus
-    length: Lengte
-
-
-CLASSIFICATION_MAPPING_V1_TO_V2: dict[Classification, ClassificationMapping] = {
-    Classification.OPEN_ACCESS: ClassificationMapping(
-        classification=ClassificationV2.JA_OPEN_LICENTIE,
-        overname_status=OvernameStatus.GEEN_OVERNAME,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.EIGEN_MATERIAAL: ClassificationMapping(
-        classification=ClassificationV2.JA_EIGEN_WERK,
-        overname_status=OvernameStatus.GEEN_OVERNAME,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.EIGEN_MATERIAAL_OVERIG: ClassificationMapping(
-        classification=ClassificationV2.JA_EIGEN_WERK,
-        overname_status=OvernameStatus.GEEN_OVERNAME,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.EIGEN_MATERIAAL_POWERPOINT: ClassificationMapping(
-        classification=ClassificationV2.JA_EIGEN_WERK,
-        overname_status=OvernameStatus.GEEN_OVERNAME,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.EIGEN_MATERIAAL_TITELINDICATIE: ClassificationMapping(
-        classification=ClassificationV2.JA_EIGEN_WERK,
-        overname_status=OvernameStatus.GEEN_OVERNAME,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.KORTE_OVERNAME: ClassificationMapping(
-        classification=ClassificationV2.JA_EASY_ACCESS,
-        overname_status=OvernameStatus.OVERNAME_ANDERE,
-        length=Lengte.KORT,
-    ),
-    Classification.MIDDELLANGE_OVERNAME: ClassificationMapping(
-        classification=ClassificationV2.JA_EASY_ACCESS,
-        overname_status=OvernameStatus.OVERNAME_ANDERE,
-        length=Lengte.MIDDELLANG,
-    ),
-    Classification.LANGE_OVERNAME: ClassificationMapping(
-        classification=ClassificationV2.NEE,
-        overname_status=OvernameStatus.OVERNAME_INBREUKMAKENDE,
-        length=Lengte.LANG,
-    ),
-    Classification.ONBEKEND: ClassificationMapping(
-        classification=ClassificationV2.ONBEKEND,
-        overname_status=OvernameStatus.ONBEKEND,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.NIET_GEANALYSEERD: ClassificationMapping(
-        classification=ClassificationV2.ONBEKEND,
-        overname_status=OvernameStatus.ONBEKEND,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.IN_ONDERZOEK: ClassificationMapping(
-        classification=ClassificationV2.ONBEKEND,
-        overname_status=OvernameStatus.ONBEKEND,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.VERWIJDERVERZOEK_VERSTUURD: ClassificationMapping(
-        classification=ClassificationV2.ONBEKEND,
-        overname_status=OvernameStatus.OVERNAME_INBREUKMAKENDE,
-        length=Lengte.ONBEKEND,
-    ),
-    Classification.LICENTIE_BESCHIKBAAR: ClassificationMapping(
-        classification=ClassificationV2.NEE_LINK_BESCHIKBAAR,
-        overname_status=OvernameStatus.OVERNAME_INBREUKMAKENDE,
-        length=Lengte.ONBEKEND,
-    ),
-}
-
-
-class Filetype(Enum):
-    PDF = "pdf"
-    PPT = "ppt"
-    DOC = "doc"
-    XLSX = "xlsx"
-    MP4 = "mp4"
-    JPG = "jpg"
-    PNG = "png"
-    UNKNOWN = "unknown"
-    FILE = "file"
-
-
-class Status(Enum):
-    PUBLISHED = "Published"
-    UNPUBLISHED = "Unpublished"
-    DELETED = "Deleted"
-
-
-class WorkflowStatus(Enum):
-    ToDo = "ToDo"
-    Done = "Done"
-    InProgress = "InProgress"
-
-
-class Infringement(Enum):
-    YES = "yes"
-    NO = "no"
-    MAYBE = "maybe"
-    UNDETERMINED = "undetermined"
-
-
-"""
-Programatically generate enums for years between 2020 and 2030 for valid periods using one of these formats:
-YYYY-[12]{1}[AB]{1} (eg. 2022-1A or 2022-2B)
-YYYY-3 (eg. 2022-3)
-YYYY-SEM[12]{1} (eg. 2022-SEM1 or 2022-SEM2)
-YYYY-JAAR (eg. 2022-JAAR)
-"""
-Period = Enum(
-    "Period",
-    {
-        f"{year}_{period}": f"{year}-{period}"
-        for year in range(2020, 2031)
-        for period in ["1A", "1B", "2A", "2B", "3", "SEM1", "SEM2", "JAAR"]
-    },
-)
 Department = Enum(
     "Department",
     {
@@ -269,6 +81,9 @@ class CopyrightItem(Model, TimestampMixin):
     reliability = fields.IntField()
     pages_x_students = fields.IntField()
     count_students_registered = fields.IntField()
+    filehash = fields.CharField(max_length=255, null=True)
+    last_scan_date_university = fields.DateField(null=True)
+    last_scan_date_course = fields.DateField(null=True)
 
     # Workflow data, added by the tool -- not present in the raw data!
     retrieved_from_copyright_on = fields.DatetimeField(null=True, db_index=True)
@@ -300,9 +115,6 @@ class CopyrightItem(Model, TimestampMixin):
     is_duplicate = fields.BooleanField(
         db_index=True, null=True
     )  # if this item is a duplicate of another item -- determined by comparing PDFs
-    replacement_id = fields.IntField(
-        null=True, db_index=True
-    )  # if this item is a duplicate, this field has the material_id of the original item
 
     class Meta:
         table = "copyright_data"
@@ -331,24 +143,6 @@ class CopyrightItem(Model, TimestampMixin):
 
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"
-
-
-class V2Classifications(Model, TimestampMixin):
-    """
-    Stores the new classification system for V2 of the copyright tool.
-    """
-
-    id = fields.IntField(primary_key=True)
-    material_id = fields.ForeignKeyField(
-        "models.CopyrightItem", related_name="v2_classifications"
-    )
-    classification = fields.CharEnumField(enum_type=ClassificationV2, max_length=255)
-    overname_status = fields.CharEnumField(enum_type=OvernameStatus, max_length=255)
-    length = fields.CharEnumField(enum_type=Lengte, max_length=255)
-    remarks = fields.CharField(max_length=10000, null=True)
-
-    class Meta:
-        table = "v2_classifications"
 
 
 class ItemUpdate(Model, TimestampMixin):
@@ -406,7 +200,7 @@ class Course(Model, TimestampMixin):
     )  # made null=True for optional category
     teachers = fields.ManyToManyField(
         "models.Person",
-        through="models.CourseEmployee",
+        through="course_employee",
         forward_key="person_id",
         backward_key="course_cursuscode",
         related_name="courses",
