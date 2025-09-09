@@ -29,6 +29,7 @@ class EasyAccessTool:
 
     settings: Settings
     ea_settings: EasyAccessSettings
+    pipeline: DataPipeline
 
     def __init__(self, settings_obj: Settings, ea_settings: EasyAccessSettings) -> None:
         """
@@ -40,15 +41,14 @@ class EasyAccessTool:
         """
         self.settings = settings_obj
         self.ea_settings = ea_settings
+        self.pipeline = DataPipeline(settings=settings_obj, ea_settings=ea_settings)
 
     def run(self) -> None:
         """
         Executes the configured sequence of processing functions.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-
         # Run standard pipeline
-        pipeline.run()
+        self.pipeline.run()
 
         # Conditionally run enrichment if enabled
         if (
@@ -56,7 +56,7 @@ class EasyAccessTool:
             and self.ea_settings.enrich_with_osiris_data
         ):
             logger.info("OSIRIS enrichment enabled, running enrichment stage...")
-            pipeline.enrich_data()
+            self.pipeline.enrich_data()
         else:
             logger.info("OSIRIS enrichment disabled, skipping enrichment stage")
 
@@ -64,41 +64,35 @@ class EasyAccessTool:
         """
         Executes only the data ingestion stages.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-        pipeline.ingest_raw_data()
-        pipeline.ingest_faculty_updates()
+        self.pipeline.ingest_raw_data()
+        self.pipeline.ingest_faculty_updates()
 
     def run_process(self) -> None:
         """
         Executes only the data processing stage.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-        pipeline.process_data()
+        self.pipeline.process_data()
 
     def run_export(self) -> None:
         """
         Executes only the export stage.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-        pipeline.export_reports()
+        self.pipeline.export_reports()
 
     def run_relations(self) -> None:
         """
         Executes only the relations update stage.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-        pipeline.update_relations()
+        self.pipeline.update_relations()
 
     def run_enrich(self) -> None:
         """
         Executes only the enrichment stage.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-        pipeline.enrich_data()
+        self.pipeline.enrich_data()
 
     def run_verify_file_existence(self) -> None:
         """
         Executes only the file existence verification stage.
         """
-        pipeline = DataPipeline(settings=self.settings, ea_settings=self.ea_settings)
-        pipeline.verify_file_existence()
+        self.pipeline.verify_file_existence()
