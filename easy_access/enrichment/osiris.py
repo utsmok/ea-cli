@@ -102,7 +102,7 @@ async def select_missing_or_stale_courses(
 
     # Evaluate stale existing courses
     stale_existing: set[int] = set()
-    now = datetime.now(datetime.now().tzinfo).astimezone(datetime.now().tzinfo)
+    now = datetime.now().astimezone()
 
     for c in existing_courses:
         if c.modified_at is None:
