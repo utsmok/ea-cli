@@ -1,35 +1,37 @@
+import openpyxl
 import polars as pl
 
-from easy_access.settings import SETTINGS, DirSetting, ColInfo
+from easy_access.settings import SETTINGS, ColInfo, DirSetting
 from easy_access.sheets.export import export_faculty_workflow_files
 from easy_access.utils import Directory
-import openpyxl
 
 
 def make_df():
-    return pl.DataFrame([
-        {
-            "material_id": 1,
-            "faculty": "TEST",
-            "workflow_status": "ToDo",
-            "title": "Item One",
-            "period": "2024-01",
-        },
-        {
-            "material_id": 2,
-            "faculty": "TEST",
-            "workflow_status": "InProgress",
-            "title": "Item Two",
-            "period": "2024-02",
-        },
-        {
-            "material_id": 3,
-            "faculty": "TEST",
-            "workflow_status": "Done",
-            "title": "Item Three",
-            "period": "2024-03",
-        },
-    ])
+    return pl.DataFrame(
+        [
+            {
+                "material_id": 1,
+                "faculty": "TEST",
+                "workflow_status": "ToDo",
+                "title": "Item One",
+                "period": "2024-01",
+            },
+            {
+                "material_id": 2,
+                "faculty": "TEST",
+                "workflow_status": "InProgress",
+                "title": "Item Two",
+                "period": "2024-02",
+            },
+            {
+                "material_id": 3,
+                "faculty": "TEST",
+                "workflow_status": "Done",
+                "title": "Item Three",
+                "period": "2024-03",
+            },
+        ]
+    )
 
 
 def test_export_faculty_workflow_files_creates_files_and_backups(tmp_path):
@@ -89,7 +91,9 @@ def test_export_faculty_workflow_files_creates_files_and_backups(tmp_path):
         assert backups_dir.exists(), "backups dir missing"
         backups = list(backups_dir.iterdir())
         # Should contain at least one file (the moved inbox.xlsx)
-        assert any(p.name.startswith("inbox_") for p in backups), f"No inbox backup found in {backups_dir}"
+        assert any(p.name.startswith("inbox_") for p in backups), (
+            f"No inbox backup found in {backups_dir}"
+        )
 
     finally:
         # restore original
@@ -99,6 +103,7 @@ def test_export_faculty_workflow_files_creates_files_and_backups(tmp_path):
             del SETTINGS.dirs[DirSetting.FACULTIES_DIR]
         # restore final cols if present
         import contextlib
+
         with contextlib.suppress(Exception):
             SETTINGS.data_settings.final_data_col_order = orig_final_cols
         with contextlib.suppress(Exception):
@@ -113,9 +118,17 @@ def test_unknown_workflow_status_defaults_to_inbox(tmp_path):
     SETTINGS.dirs[DirSetting.FACULTIES_DIR] = Directory(faculties_dir)
 
     try:
-        df = pl.DataFrame([
-            {"material_id": 10, "faculty": "TEST2", "workflow_status": "StrangeState", "title": "Weird", "period": "2024-04"}
-        ])
+        df = pl.DataFrame(
+            [
+                {
+                    "material_id": 10,
+                    "faculty": "TEST2",
+                    "workflow_status": "StrangeState",
+                    "title": "Weird",
+                    "period": "2024-04",
+                }
+            ]
+        )
         faculty_data = {"TEST2": df}
 
         import asyncio
@@ -145,9 +158,11 @@ def test_unknown_workflow_status_defaults_to_inbox(tmp_path):
         wb = openpyxl.load_workbook(filename=str(inbox))
         sheet = wb[SETTINGS.data_settings.complete_data_name]
         # material_id should be present in column A (header at row1, data from row2)
-        values = [c.value for c in sheet['A']]
+        values = [c.value for c in sheet["A"]]
         # cell values may be int or str depending on write path
-        assert any((v == 10) or (str(v) == "10") for v in values), "material_id 10 not found in inbox.xlsx"
+        assert any((v == 10) or (str(v) == "10") for v in values), (
+            "material_id 10 not found in inbox.xlsx"
+        )
 
     finally:
         if orig_dir:
@@ -155,6 +170,7 @@ def test_unknown_workflow_status_defaults_to_inbox(tmp_path):
         else:
             del SETTINGS.dirs[DirSetting.FACULTIES_DIR]
         import contextlib
+
         with contextlib.suppress(Exception):
             SETTINGS.data_settings.final_data_col_order = orig_final_cols
         with contextlib.suppress(Exception):
@@ -169,9 +185,17 @@ def test_done_file_is_protected_and_active_sheet_set(tmp_path):
     SETTINGS.dirs[DirSetting.FACULTIES_DIR] = Directory(faculties_dir)
 
     try:
-        df = pl.DataFrame([
-            {"material_id": 20, "faculty": "TEST3", "workflow_status": "Done", "title": "Final", "period": "2024-05"}
-        ])
+        df = pl.DataFrame(
+            [
+                {
+                    "material_id": 20,
+                    "faculty": "TEST3",
+                    "workflow_status": "Done",
+                    "title": "Final",
+                    "period": "2024-05",
+                }
+            ]
+        )
         faculty_data = {"TEST3": df}
 
         import asyncio
@@ -201,11 +225,15 @@ def test_done_file_is_protected_and_active_sheet_set(tmp_path):
         wb = openpyxl.load_workbook(filename=str(done))
         # The Complete Data sheet must exist and be protected; Data Entry sheet is optional
         assert SETTINGS.data_settings.complete_data_name in wb.sheetnames
-        complete_protected = wb[SETTINGS.data_settings.complete_data_name].protection.sheet
+        complete_protected = wb[
+            SETTINGS.data_settings.complete_data_name
+        ].protection.sheet
         # If Data Entry exists, it may also be protected; but require at least Complete Data protection
         dataentry_protected = False
         if SETTINGS.data_settings.data_entry_name in wb.sheetnames:
-            dataentry_protected = wb[SETTINGS.data_settings.data_entry_name].protection.sheet
+            dataentry_protected = wb[
+                SETTINGS.data_settings.data_entry_name
+            ].protection.sheet
         assert complete_protected or dataentry_protected
 
     finally:
@@ -214,6 +242,7 @@ def test_done_file_is_protected_and_active_sheet_set(tmp_path):
         else:
             del SETTINGS.dirs[DirSetting.FACULTIES_DIR]
         import contextlib
+
         with contextlib.suppress(Exception):
             SETTINGS.data_settings.final_data_col_order = orig_final_cols
         with contextlib.suppress(Exception):
@@ -233,9 +262,17 @@ def test_backup_manifest_written(tmp_path):
         existing_inbox = faculty_folder / "inbox.xlsx"
         existing_inbox.write_text("old content")
 
-        df = pl.DataFrame([
-            {"material_id": 30, "faculty": "TEST4", "workflow_status": "ToDo", "title": "Item", "period": "2024-06"}
-        ])
+        df = pl.DataFrame(
+            [
+                {
+                    "material_id": 30,
+                    "faculty": "TEST4",
+                    "workflow_status": "ToDo",
+                    "title": "Item",
+                    "period": "2024-06",
+                }
+            ]
+        )
         faculty_data = {"TEST4": df}
 
         import asyncio
@@ -263,5 +300,6 @@ def test_backup_manifest_written(tmp_path):
         else:
             del SETTINGS.dirs[DirSetting.FACULTIES_DIR]
         import contextlib
+
         with contextlib.suppress(Exception):
             SETTINGS.data_settings.final_data_col_order = orig_final_cols

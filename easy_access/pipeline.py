@@ -163,19 +163,17 @@ class DataPipeline:
         # depending on the runtime flag in ea_settings. Previously we always ran
         # the legacy exporter and then optionally the workflow exporter which
         # resulted in duplicate/undesired outputs. Choose one path here.
+        print(self.ea_settings)
         if self.ea_settings and getattr(self.ea_settings, "export_workflow", False):
-            try:
-                # gather faculty data and call the workflow writer
-                from easy_access.sheets.export import gather_faculty_data
+            # gather faculty data and call the workflow writer
+            from easy_access.sheets.export import gather_faculty_data
 
-                faculty_data = await gather_faculty_data(self.settings)
-                if faculty_data:
-                    style_iter = 9
-                    await export_faculty_workflow_files(
-                        self.settings, faculty_data, style_iter
-                    )
-            except Exception as e:
-                logger.warning(f"Workflow exporter failed: {e}")
+            faculty_data = await gather_faculty_data(self.settings)
+            if faculty_data:
+                style_iter = 9
+                await export_faculty_workflow_files(
+                    self.settings, faculty_data, style_iter
+                )
         else:
             # Default: run the legacy top-level exporter which handles full orchestration
             await export_reports_async(self.settings)

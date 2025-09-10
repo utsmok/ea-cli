@@ -189,21 +189,27 @@ async def export_faculty_workflow_files(
             "InProgress": pl.DataFrame(),
             "Done": pl.DataFrame(),
         }
-
+        # instead of iterating over rows instead groupby in df!!
         for row in df.to_dicts():
-            ws_raw = (row.get("workflow_status") or "").strip()
-            key = canonical_map.get(ws_raw.replace(" ", "").lower(), None)
-            if not key:
-                # unknown values -> ToDo by default
-                key = "ToDo"
-                logger.warning(
-                    f"Unknown workflow_status '{ws_raw}' for material_id={row.get('material_id')} - defaulting to ToDo"
-                )
-            if buckets[key].is_empty():
-                buckets[key] = pl.DataFrame([row])
-            else:
-                buckets[key] = pl.concat([buckets[key], pl.DataFrame([row])])
-
+            try:
+                mat_id = row.get("material_id")
+                if not isinstance(mat_id, int):
+                    continue
+                ws_raw = (row.get("workflow_status") or "").strip()
+                key = canonical_map.get(ws_raw.replace(" ", "").lower(), None)
+                if not key:
+                    # unknown values -> ToDo by default
+                    key = "ToDo"
+                    logger.warning(
+                        f"Unknown workflow_status '{ws_raw}' for material_id={row.get('material_id')} - defaulting to ToDo"
+                    )
+                if buckets[key].is_empty():
+                    buckets[key] = pl.DataFrame([row])
+                else:
+                    buckets[key] = pl.concat([buckets[key], pl.DataFrame([row])])
+            except Exception as e:
+                logger.error(f"Error processing row {row}: {e}")
+                continue
         for bucket_name, bucket_df in buckets.items():
             if bucket_df.is_empty():
                 logger.info(
