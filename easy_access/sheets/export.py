@@ -39,9 +39,6 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
 
     # Get all data from DB
     all_data = retrieve_full_data(settings=settings)
-    # debug: print head for course_contacts_emails
-    print("in all_data")
-    print(all_data.select(pl.col("course_contacts_emails")).head(5))
 
     if all_data.is_empty():
         logger.warning("No data found for export.")
@@ -67,8 +64,6 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
         if not faculty_df.is_empty():
             faculty_data[faculty] = faculty_df
             logger.info(f"Faculty {faculty}: {faculty_df.shape[0]} items")
-            print(f"in faculty {faculty} df")
-            print(faculty_df.select(pl.col("course_contacts_emails")).head(5))
     logger.info(f"Gathered data for {len(faculty_data)} faculties")
     return faculty_data
 
@@ -180,45 +175,42 @@ async def export_faculty_workflow_files(
         if not backups_dir_base.exists():
             backups_dir_base.mkdir(parents=True, exist_ok=True)
 
-        backups_dir = backups_dir_base / "backups"
+        backups_dir = backups_dir_base / faculty
         if not backups_dir.exists():
             backups_dir.mkdir(parents=True, exist_ok=True)
 
-            # debug: print head for columns with 'contacts' in name
-        print(data.select(pl.col("course_contacts_emails")).head(5))
         # normalize workflow_status and bucket
         df = data.with_columns(
             pl.col("workflow_status").fill_null("ToDo").cast(pl.Utf8)
         )
 
         buckets: dict[str, pl.DataFrame] = {
-            "ToDo": df.filter(pl.col("workflow_status").is_in(["ToDo", "todo"])),
-            "InProgress": df.filter(
+            "inbox": df.filter(pl.col("workflow_status").is_in(["ToDo", "todo"])),
+            "in_progress": df.filter(
                 pl.col("workflow_status").is_in(
                     ["InProgress", "inprogress", "in_progress"]
                 )
             ),
-            "Done": df.filter(pl.col("workflow_status").is_in(["Done", "done"])),
+            "done": df.filter(pl.col("workflow_status").is_in(["Done", "done"])),
+            "overview": df,  # all items for overview file
         }
-
+        update_stats = {
+            "inbox": {"old": 0, "new": buckets["inbox"].shape[0]},
+            "in_progress": {"old": 0, "new": buckets["in_progress"].shape[0]},
+            "done": {"old": 0, "new": buckets["done"].shape[0]},
+            "overview": {"old": 0, "new": buckets["overview"].shape[0]},
+        }
         for bucket_name, bucket_df in buckets.items():
-            if bucket_df.is_empty():
-                logger.info(
-                    f"No items for {faculty} -> {bucket_name}; skipping file creation"
-                )
-                continue
-
-            filename = {
-                "ToDo": "inbox.xlsx",
-                "InProgress": "in_progress.xlsx",
-                "Done": "done.xlsx",
-            }[bucket_name]
+            filename = bucket_name + ".xlsx"
 
             target_path = faculty_dir.full / filename
 
             # backup existing
             if target_path.exists():
                 try:
+                    update_stats[bucket_name]["old"] = pl.read_excel(target_path).shape[
+                        0
+                    ]
                     moved = backup_existing_file(
                         target_path=target_path,
                         backups_dir=backups_dir,
@@ -230,6 +222,12 @@ async def export_faculty_workflow_files(
 
             # write complete data then add data entry sheet
             try:
+                if bucket_df.is_empty():
+                    logger.info(
+                        f"No items for {faculty} -> {bucket_name}; skipping file creation"
+                    )
+                    continue
+
                 store_complete_data(settings=settings, file=target_path, data=bucket_df)
                 style_iter = finalize_sheet(
                     settings=settings,
@@ -240,10 +238,11 @@ async def export_faculty_workflow_files(
                 logger.info(f"Wrote {len(bucket_df)} rows to {target_path}")
             except Exception as e:
                 logger.error(f"Failed writing faculty workflow file {target_path}: {e}")
+                raise e
                 continue
 
             # protect done.xlsx and set active sheet to Data Entry
-            if bucket_name == "Done":
+            if bucket_name in ["Done", "Overview"]:
                 try:
                     protect_workbook(
                         target_path,
@@ -257,6 +256,35 @@ async def export_faculty_workflow_files(
                 except Exception as e:
                     logger.warning(f"Failed to protect workbook {target_path}: {e}")
 
+        # Create a simple text file indicating last update time
+        # first remove any existing update_info_*.txt files
+        for file in faculty_dir.files:
+            if file.name.startswith("update_info_") and file.extension == ".txt":
+                try:
+                    file.path.unlink()
+                except Exception:
+                    logger.debug(
+                        f"Failed to remove old update info file {file.path}; continuing"
+                    )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with (faculty_dir.full / f"update_info_{timestamp}.txt").open(
+            "w", encoding="utf-8"
+        ) as fh:
+            fh.write(f"\n{'Update information for':{' '}^{40}}\n{faculty:{' '}^{40}}")
+            fh.write(
+                f"\n{'Last sync with main database:':{' '}^{40}}\n{datetime.now().strftime('%Y-%m-%d -- %H:%M:%S'):{' '}^{40}}"
+            )
+            # write update stats
+            fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}':{' '}^{40}}")
+            fh.write(
+                f"\n{f'{"Sheet":{" "}<12}|{"Old":{" "}^{5}}|{"New":{" "}^{5}}|{"Δ":{" "}^{5}}':{' '}^{40}}"
+            )
+            fh.write(f"\n{f'{"-" * 12}+{"-" * 5}+{"-" * 5}+{"-" * 5}':{' '}^{40}}")
+            for bucket_name, stats in update_stats.items():
+                fh.write(
+                    f"\n{f'{bucket_name:{" "}<12}|{stats["old"]:{" "}^{5}}|{stats["new"]:{" "}^{5}}|{stats["new"] - stats["old"]:^+5}':{' '}^{40}}"
+                )
+            fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}\n':{' '}^{40}}")
     return style_iter
 
 

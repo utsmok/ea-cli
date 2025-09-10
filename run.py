@@ -232,6 +232,7 @@ def process_data(
     if run_enrich:
         logger.info("Running enrichment stage...")
         tool.run_enrich()
+    tool.run_relations()
     if run_file_exists and not no_file_exists:
         logger.info("Running file existence verification stage...")
         tool.run_verify_file_existence()

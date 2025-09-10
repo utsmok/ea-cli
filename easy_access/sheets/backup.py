@@ -23,7 +23,7 @@ def ensure_dir(path: Path) -> None:
 
 def timestamped_filename(original: Path, timestamp: datetime | None = None) -> str:
     ts = (timestamp or datetime.utcnow()).strftime("%Y%m%d_%H%M%S")
-    return f"{original.stem}_{ts}{original.suffix}"
+    return f"{original.stem}_backup_{ts}{original.suffix}"
 
 
 def backup_existing_file(
