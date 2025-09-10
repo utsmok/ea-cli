@@ -9,10 +9,13 @@ from pathlib import Path
 from tortoise import fields
 from tortoise.models import Model
 
-from easy_access.classification.classifier_models import (
-    AllowedUsageByUT,
-    CopyrightStatus,
-    ItemType,
+from easy_access.db.enums import (
+    Classification,
+    Filetype,
+    Infringement,
+    Period,
+    Status,
+    WorkflowStatus,
 )
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import File
@@ -23,106 +26,6 @@ class TimestampMixin:
     modified_at = fields.DatetimeField(null=True, auto_now=True)
 
 
-class Classification(Enum):
-    OPEN_ACCESS = "open access"
-    KORTE_OVERNAME = "korte overname"
-    MIDDELLANGE_OVERNAME = "middellange overname"
-    LANGE_OVERNAME = "lange overname"
-
-    EIGEN_MATERIAAL_POWERPOINT = "eigen materiaal - powerpoint"
-    EIGEN_MATERIAAL_TITELINDICATIE = "eigen materiaal - titelindicatie"
-    EIGEN_MATERIAAL_OVERIG = "eigen materiaal - overig"
-    EIGEN_MATERIAAL = "eigen materiaal"
-
-    ONBEKEND = "onbekend"
-    NIET_GEANALYSEERD = "niet geanalyseerd"
-    IN_ONDERZOEK = "in onderzoek"
-    VERWIJDERVERZOEK_VERSTUURD = "verwijderverzoek verstuurd"
-    LICENTIE_BESCHIKBAAR = "licentie beschikbaar"
-    ANDERS = "anders"
-
-
-def str_to_classification(classification_str: str) -> Classification | None:
-    """
-    helper function to convert a string to a Classification enum.
-    """
-
-    if classification_str in Classification.__members__:
-        return Classification[classification_str]
-
-    if "eigen" in classification_str.lower():
-        if "powerpoint" in classification_str.lower():
-            return Classification.EIGEN_MATERIAAL_POWERPOINT
-        if "titelindicatie" in classification_str.lower():
-            return Classification.EIGEN_MATERIAAL_TITELINDICATIE
-        if "overig" in classification_str.lower():
-            return Classification.EIGEN_MATERIAAL_OVERIG
-    if "overname" in classification_str.lower():
-        if "korte" in classification_str.lower():
-            return Classification.KORTE_OVERNAME
-        if "middel" in classification_str.lower():
-            return Classification.MIDDELLANGE_OVERNAME
-        if "lange" in classification_str.lower():
-            return Classification.LANGE_OVERNAME
-        return (
-            Classification.LANGE_OVERNAME
-        )  # default to lange overname if no specific type is found
-
-    if "anders" in classification_str.lower():
-        return Classification.ANDERS
-    if "overig" in classification_str.lower():
-        return Classification.ANDERS
-
-    # fallback case
-    return None
-
-
-class Filetype(Enum):
-    PDF = "pdf"
-    PPT = "ppt"
-    DOC = "doc"
-    XLSX = "xlsx"
-    MP4 = "mp4"
-    JPG = "jpg"
-    PNG = "png"
-    UNKNOWN = "unknown"
-    FILE = "file"
-
-
-class Status(Enum):
-    PUBLISHED = "Published"
-    UNPUBLISHED = "Unpublished"
-    DELETED = "Deleted"
-
-
-class WorkflowStatus(Enum):
-    ToDo = "ToDo"
-    Done = "Done"
-    InProgress = "InProgress"
-
-
-class Infringement(Enum):
-    YES = "yes"
-    NO = "no"
-    MAYBE = "maybe"
-    UNDETERMINED = "undetermined"
-
-
-"""
-Programatically generate enums for years between 2020 and 2030 for valid periods using one of these formats:
-YYYY-[12]{1}[AB]{1} (eg. 2022-1A or 2022-2B)
-YYYY-3 (eg. 2022-3)
-YYYY-SEM[12]{1} (eg. 2022-SEM1 or 2022-SEM2)
-YYYY-JAAR (eg. 2022-JAAR)
-"""
-Period = Enum(
-    "Period",
-    {
-        f"{year}_{period}": f"{year}-{period}"
-        for year in range(2020, 2031)
-        for period in ["1A", "1B", "2A", "2B", "3", "SEM1", "SEM2", "JAAR"]
-    },
-)
 Department = Enum(
     "Department",
     {
@@ -178,6 +81,9 @@ class CopyrightItem(Model, TimestampMixin):
     reliability = fields.IntField()
     pages_x_students = fields.IntField()
     count_students_registered = fields.IntField()
+    filehash = fields.CharField(max_length=255, null=True)
+    last_scan_date_university = fields.DateField(null=True)
+    last_scan_date_course = fields.DateField(null=True)
 
     # Workflow data, added by the tool -- not present in the raw data!
     retrieved_from_copyright_on = fields.DatetimeField(null=True, db_index=True)
@@ -191,6 +97,12 @@ class CopyrightItem(Model, TimestampMixin):
     infringement = fields.CharEnumField(
         enum_type=Infringement, max_length=255, default=Infringement.UNDETERMINED
     )
+    file_exists = fields.BooleanField(
+        null=True, default=None
+    )  # whether the file exists on Canvas. Null = unchecked.
+    last_canvas_check = fields.DatetimeField(
+        null=True
+    )  # when was the file existence last checked on Canvas
 
     # relations
 
@@ -198,20 +110,36 @@ class CopyrightItem(Model, TimestampMixin):
     faculty = fields.ForeignKeyField(
         "models.Faculty", related_name="faculty_items", to_field="abbreviation"
     )
-    llm_classification = fields.OneToOneField(
-        "models.LLMClassification", related_name="item", null=True
-    )
     changes = fields.ManyToManyField("models.ItemUpdate", related_name="item")
 
     is_duplicate = fields.BooleanField(
         db_index=True, null=True
     )  # if this item is a duplicate of another item -- determined by comparing PDFs
-    replacement_id = fields.IntField(
-        null=True, db_index=True
-    )  # if this item is a duplicate, this field has the material_id of the original item
 
     class Meta:
         table = "copyright_data"
+
+    def actual_status(self) -> Status:
+        if not self.url or self.url.strip() == "":
+            return Status.DELETED
+        elif self.file_exists in [True, 1, "1"]:
+            return self.status
+        else:
+            return Status.DELETED
+
+    def misaligned_status(self) -> bool:
+        return self.status != self.actual_status()
+
+    def status_details(self) -> dict[str, str | bool | datetime | int | Status]:
+        return {
+            "material_id": self.material_id,
+            "filename": self.filename,
+            "url": self.url,
+            "status": self.status,
+            "actual_status": self.actual_status(),
+            "file_exists": self.file_exists,
+            "last_canvas_check": self.last_canvas_check,
+        }
 
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"
@@ -260,7 +188,7 @@ class Course(Model, TimestampMixin):
         null=True,
         to_field="abbreviation",
     )
-    ec = fields.IntField(null=True)
+    ec = fields.FloatField(null=True)
     programme = fields.CharField(
         max_length=2048, null=True
     )  # try to turn into a relation to Programme later.
@@ -272,7 +200,7 @@ class Course(Model, TimestampMixin):
     )  # made null=True for optional category
     teachers = fields.ManyToManyField(
         "models.Person",
-        through="models.CourseEmployee",
+        through="course_employee",
         forward_key="person_id",
         backward_key="course_cursuscode",
         related_name="courses",
@@ -311,9 +239,7 @@ class Person(Model, TimestampMixin):
     input_name = fields.CharField(max_length=2048, db_index=True, unique=True)
     main_name = fields.CharField(max_length=2048, null=True)
     match_confidence = fields.FloatField(null=True)
-    first_name = fields.CharField(
-        max_length=2048, null=True
-    )  #'other_names' should be a list with len 1 containing only the first name
+    first_name = fields.CharField(max_length=2048, null=True)
     email = fields.CharField(max_length=2048, null=True)
     faculty = fields.ForeignKeyField(
         "models.Faculty",
@@ -331,47 +257,6 @@ class Person(Model, TimestampMixin):
         return (
             self.main_name + f" ({self.faculty})" if self.main_name else self.input_name
         )
-
-
-class LLMClassification(Model, TimestampMixin):
-    """
-    Additional classification data generated by an LLM to enrich items.
-    """
-
-    id = fields.IntField(primary_key=True)
-    allowed_usage = fields.CharEnumField(
-        enum_type=AllowedUsageByUT,
-        max_length=255,
-        default=AllowedUsageByUT.UNDETERMINED,
-    )
-    allowed_usage_reasoning = fields.CharField(max_length=10000)
-    copyright_status = fields.CharEnumField(
-        enum_type=CopyrightStatus, max_length=255, default=CopyrightStatus.OTHER
-    )
-    copyright_classification_reason = fields.CharField(max_length=10000)
-    item_type = fields.CharEnumField(
-        enum_type=ItemType, max_length=255, default=ItemType.UNKNOWN
-    )
-    item_type_classification_reason = fields.CharField(max_length=10000)
-    pdf_name = fields.CharField(max_length=2048)
-    publisher_name = fields.CharField(max_length=2048)
-    copyright_holder = fields.CharField(max_length=2048)
-    item_title = fields.CharField(max_length=2048)
-    pdf_page_count = fields.IntField()
-    remarks = fields.CharField(max_length=10000)
-
-    author_names = fields.JSONField()
-    doi = fields.JSONField()
-    isbn = fields.JSONField()
-    source_url = fields.JSONField()
-    license = fields.JSONField()
-    topic = fields.JSONField()
-
-    used_material_id = fields.IntField()
-    item: fields.OneToOneNullableRelation[CopyrightItem]
-
-    class Meta:
-        table = "llm_classification_data"
 
 
 class Organization(Model, TimestampMixin):
@@ -471,6 +356,17 @@ class PDF(Model, TimestampMixin):
         null=True, default=False
     )  # if the file could not be parsed, set to True
 
+    # Download-related fields
+    # -> Has an download been attempted?
+    # defaults to false for new items. Use to create a list of items to download.
+    # Set to True once an initial attempt has been made, then never change again.
+    # -> Did the download succeed?
+    # The function that downloads the file sets this to True if the files is downloaded and is >0kb. Else it sets it to False.
+    # Defaults to None (if no download attempts have been made yet).
+
+    download_attempted = fields.BooleanField(null=True, default=False)
+    download_succeeded = fields.BooleanField(null=True, default=None)
+
     class Meta:
         table = "pdf_data"
 
@@ -498,3 +394,118 @@ class PDF(Model, TimestampMixin):
 
     def __str__(self):
         return self.current_file_name + " (" + str(self.material_id) + ")"
+
+
+class StagedCopyrightItem(Model, TimestampMixin):
+    """
+    Staging table for raw data ingested from copyright export files.
+    Fields are kept as simple as possible to accommodate raw data.
+
+    The raw fields we expect:
+        [
+        "Material id",
+        "Period",
+        "Department",
+        "Course code",
+        "Course name",
+        "url",
+        "Filename",
+        "Title",
+        "Owner",
+        "Filetype",
+        "Classification",
+        "Type",
+        "ML Prediction",
+        "Manual classification",
+        "Manual identifier",
+        "Scope",
+        "Remarks",
+        "Auditor",
+        "Last change",
+        "Status",
+        "Google search file",
+        "ISBN",
+        "DOI",
+        "In collection",
+        "pagecount",
+        "wordcount",
+        "picturecount",
+        "Author",
+        "Publisher",
+        "Reliability",
+        "Pages * Students",
+        "#students_registered"
+    ]
+
+    Before ingestion, these should be lowercased, spaces replaced with underscores, * replaced with x, and # replaced with count_.
+    e.g. by calling standardize_dataframe in db.base
+
+    """
+
+    material_id = fields.IntField(primary_key=True)
+    period = fields.CharField(max_length=255, null=True)
+    department = fields.CharField(max_length=2048, null=True)
+    course_code = fields.CharField(max_length=255, null=True)
+    course_name = fields.CharField(max_length=2048, null=True)
+    url = fields.CharField(max_length=255, null=True)
+    filename = fields.CharField(max_length=2048, null=True)
+    title = fields.CharField(max_length=2048, null=True)
+    owner = fields.CharField(max_length=2048, null=True)
+    filetype = fields.CharField(max_length=255, null=True)
+    classification = fields.CharField(max_length=255, null=True)
+    manual_classification = fields.CharField(max_length=2048, null=True)
+    manual_identifier = fields.CharField(max_length=2048, null=True)
+    scope = fields.CharField(max_length=255, null=True)
+    remarks = fields.CharField(max_length=10000, null=True)
+    ml_prediction = fields.CharField(max_length=255, null=True)
+    isbn = fields.CharField(max_length=255, null=True)
+    doi = fields.CharField(max_length=255, null=True)
+    in_collection = fields.CharField(max_length=255, null=True)
+    pagecount = fields.CharField(max_length=255, null=True)
+    wordcount = fields.CharField(max_length=255, null=True)
+    picturecount = fields.CharField(max_length=255, null=True)
+    author = fields.CharField(max_length=255, null=True)
+    publisher = fields.CharField(max_length=255, null=True)
+    auditor = fields.CharField(max_length=10000, null=True)
+    last_change = fields.DateField(null=True)
+    status = fields.CharField(max_length=255, null=True)
+    reliability = fields.CharField(max_length=255, null=True)
+    pages_x_students = fields.CharField(max_length=255, null=True)
+    count_students_registered = fields.CharField(max_length=255, null=True)
+    retrieved_from_copyright_on = fields.DatetimeField(null=True)
+    workflow_status = fields.CharField(max_length=255, null=True)
+    faculty = fields.CharField(max_length=255, null=True)
+    file_exists = fields.CharField(max_length=255, null=True)
+
+    class Meta:
+        table = "staged_copyright_item"
+
+
+class StagedFacultyUpdate(Model, TimestampMixin):
+    """
+    Staging table for updates from faculty sheets.
+    """
+
+    material_id = fields.IntField(primary_key=True)
+    manual_classification = fields.CharField(max_length=2048, null=True)
+    remarks = fields.CharField(max_length=10000, null=True)
+    workflow_status = fields.CharField(max_length=255, null=True)
+
+    class Meta:
+        table = "staged_faculty_update"
+
+
+class StagedProcessingFailure(Model, TimestampMixin):
+    """
+    Stores failures encountered while processing staged rows.
+    Each row references the staged material_id (if available), the raw payload
+    (as JSON), and an error message to aid debugging/retry.
+    """
+
+    id = fields.IntField(primary_key=True)
+    material_id = fields.IntField(null=True, db_index=True)
+    staged_payload = fields.JSONField(null=True)
+    error_message = fields.CharField(max_length=2000, null=True)
+
+    class Meta:
+        table = "staged_processing_failures"

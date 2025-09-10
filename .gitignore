@@ -1,5 +1,7 @@
 compare/
 compare/*.*
+dashboard/*.*
+
 # datafiles
 *.xls
 *.xlsx
@@ -8,7 +10,6 @@ compare/*.*
 *.ndjson
 *.db
 *.parquet
-*.md
 *.pdf
 *.txt
 *.woff
@@ -36,6 +37,7 @@ script_data/
 overviews_backup/
 full_backups/
 logs/
+pdf_downloads/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -5,6 +5,7 @@
 unsorted:
 # values that don't (yet) fit anywhere else
   fine_amount: 0.3 # fine amount per page per item per student
+  dashboard_reload: true # Auto-reload dashboard on code changes (dev setting)
   classification_options:
     - open access
     - eigen materiaal - powerpoint
@@ -64,30 +65,47 @@ data_settings:
   data_entry_name: Data entry
   data_entry_cols:
     - name: "material_id"
+    - name: "period"
     - name: "is_duplicate"
-    - name: "replacement_id"
     - name: "url"
       is_url: true
+    - name: "file_exists"
+    - name: "last_canvas_check"
+      new_name: "latest_filecheck_date"
     - name: "workflow_status"
       is_new: true
       is_editable: true
       dropdown_options: '"ToDo,Done,InProgress"'
       default_val: "ToDo"
     - name: "manual_classification"
+      new_name: "v1_manual_classification"
       is_editable: true
-      dropdown_options: '"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,-"'
+      dropdown_options: '"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,onbekend"'
+    - name: "manual_classification_v2"
+      new_name: "v2_manual_classification"
+      is_editable: true
+      dropdown_options: 'ENUM:ClassificationV2'
+    - name: "length"
+      new_name: "v2_length"
+      is_editable: true
+      dropdown_options: 'ENUM:Lengte'
+    - name: "overname_status"
+      new_name: "v2_overname_status"
+      is_editable: true
+      dropdown_options: 'ENUM:OvernameStatus'
     - name: "remarks"
       is_editable: true
     - name: "ml_prediction"
     - name: "filename"
+      new_name: "pdf_filename"
     - name: "title"
+      new_name: "pdf_title"
     - name: 'owner'
       new_name: "uploaded_by"
     - name: "author"
-      new_name: "detected_author"
+      new_name: "detected_pdf_author"
     - name: "course_contacts_names"
     - name: "course_contacts_emails"
-    - name: "course_contacts_organizations"
     - name: 'course_name'
       new_name: "course_name_canvas"
     - name: "course_names"
@@ -146,6 +164,8 @@ data_settings:
     course_code,
     course_name,
     url,
+    file_exists,
+    last_canvas_check,
     filename,
     title,
     owner,
@@ -185,6 +205,11 @@ data_settings:
     cursuscodes,
     osiris_catalogue_url,
     programmes,
+    filehash,
+    last_scan_date_university,
+    last_scan_date_course,
+
+
   ]
 
 
@@ -212,6 +237,8 @@ data_settings:
       default:
         - Unmapped
 
+  url_truncation_marker: "..." # Marker used for a truncated URL in the data entry sheet.
+  url_default_base: "https://utwente.instructure.com/files" # Default base for file urls in the sheets
 
 
 # University settings
@@ -221,17 +248,23 @@ data_settings:
 university:
   name: University of Twente
   abbreviation: UT
-  lms: # Learning Management System
-    name: canvas
+  lms: # Main LMS
+    name: Canvas
     url: https://canvas.utwente.nl
-  course_catalogue: # The course catalogue of the university, to retrieve extra info about courses
+  course_catalogue: # Retrieve detailed course information from this page
     name: OSIRIS
     url: https://utwente.osiris-student.nl/onderwijscatalogus/extern/cursus
     query_url: https://utwente.osiris-student.nl/student/osiris/owc/cursussen/
-  employee_catalogue: # The employee catalogue of the university, to retrieve extra info about employees
+  employee_catalogue: # Scrape employee data from this page
     name: People pages
     url: https://people.utwente.nl/
     query_url: https://people.utwente.nl/overview?query=
+  manual_department_mappings: # Manual overrides for entries that do not fit the standard structured mapping below -- e.g. alternative spellings.
+    "Master Risicomanagement": "BMS"
+    "Master Public Management": "BMS"
+    "BMS: Behavioural, Management and Social Sciences": "BMS"
+    "EEMCS: Electrical Engineering, Mathematics and Computer Science": "EEMCS"
+    "ET: Engineering Technology": "ET"
   faculties: # this is a hierarchical structure of faculties and programmes. This is used to split the copyright data per faculty (and optionally per programme).
     - name: Faculty of Behavioural, Management and Social Sciences
       abbreviation: BMS

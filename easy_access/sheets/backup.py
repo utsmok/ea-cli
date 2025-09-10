@@ -1,8 +1,60 @@
+"""Helpers for backing up existing export files.
+
+Centralizes move+timestamp logic used by overview export and the workflow-based exports.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
+
+from loguru import logger
 
 from easy_access.settings import SETTINGS, DirSetting
-from easy_access.utils import Directory, cool, info, print, warn
+from easy_access.utils import Directory
+
+
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def timestamped_filename(original: Path, timestamp: datetime | None = None) -> str:
+    ts = (timestamp or datetime.utcnow()).strftime("%Y%m%d_%H%M%S")
+    return f"{original.stem}_backup_{ts}{original.suffix}"
+
+
+def backup_existing_file(
+    target_path: Path, backups_dir: Path, manifest: dict | None = None
+) -> Path:
+    """Move ``target_path`` into ``backups_dir`` and return the moved path.
+
+    If the target doesn't exist, the original Path is returned unchanged.
+    """
+    if not target_path.exists():
+        return target_path
+
+    ensure_dir(backups_dir)
+    new_name = timestamped_filename(target_path)
+    dest = backups_dir / new_name
+    # Use shutil.move to preserve perms where possible
+    shutil.move(str(target_path), str(dest))
+
+    # Write optional manifest next to the moved file (best-effort)
+    if manifest is not None:
+        manifest_path = dest.with_suffix(dest.suffix + ".manifest.json")
+        try:
+            with manifest_path.open("w", encoding="utf-8") as fh:
+                json.dump(manifest, fh, ensure_ascii=False, indent=2)
+        except Exception:
+            logger.debug("Failed to write backup manifest; continuing without manifest")
+
+    return dest
+
+
+# OLD backup logic down here
 
 
 class BackupFlag(Enum):
@@ -26,18 +78,10 @@ class RestoreStrategy(Enum):
 
 class Backupper:
     def __init__(self) -> None:
-        """
-        This class contains the functions for handling and restoring backups.
-        Restoring is handled with cli flags, see run.py in the root dir (use --help for more details in your cli).
-        Backup settings are in the 'backup' and 'directories' sections of the settings.yaml file:
-        <settings.yaml>
-            backup:
-                backup_all: true  #backup all sheets in selected directories before starting? (bool)
-                backup_dirs: #directories to backup, use keys from the 'directories' section in settings.yaml
-                    - faculties_dir
-                max_backups: 3                 # maximum number of backups to keep (int)
-            directories:
-                full_backups: full_backups    # directory to store the backups (str - relative path)
+        """Utilities for creating and restoring backups.
+
+        The CLI hooks into this class; backup configuration lives in settings.yaml
+        under the `backup` and `directories` sections.
         """
         ...
 
@@ -47,29 +91,33 @@ class Backupper:
         max_backups = SETTINGS.backup_settings.max_backups
 
         if not dirs_to_backup:
-            warn(
+            logger.warning(
                 "backup_all is set to true in settings.yaml, but no dirs to backup were specified. Skipping."
             )
             return
         if not backup_location:
-            warn(
+            logger.warning(
                 "backup_all is set to true in settings.yaml, but no backup location was specified. Skipping."
             )
             return
         if not max_backups:
-            warn(
+            logger.warning(
                 "backup_all is set to true in settings.yaml, but no max amount of backups was specified. Skipping."
             )
             return
-
-        if len(backup_location.dirs) >= max_backups:
-            info(
-                f"Found {len(backup_location.dirs)} backups, making room by deleting oldest backup(s)."
+        backup_location_dirs = backup_location.dirs()
+        if len(backup_location_dirs) >= max_backups:
+            logger.info(
+                f"Found {len(backup_location_dirs)} backups, making room by deleting oldest backup(s)."
             )
-            while len(backup_location.dirs) >= max_backups:
-                min(backup_location.dirs, key=lambda x: x.created).delete()
+            while len(backup_location_dirs) >= max_backups:
+                dir_by_date = {d.created: d for d in backup_location_dirs if d.created}
+                dates = list(dir_by_date.keys())
+                dates.sort()
+                dir_by_date[dates[0]].delete()
+                backup_location_dirs = backup_location.dirs()
 
-        info(
+        logger.info(
             f"Creating backup of all data in dirs: {[d.full.name for d in dirs_to_backup]}"
         )
         for i in range(0, max_backups + 4):
@@ -85,78 +133,76 @@ class Backupper:
         for d in dirs_to_backup:
             d.copy(new_backup_dir)
 
-        cool(f"Backups done, stored in {new_backup_dir.full}")
+        logger.success(f"Backups done, stored in {new_backup_dir.full}")
 
     def restore_backup(
         self,
-        backup_dir: Directory = None,
+        backup_dir: Directory | None = SETTINGS.backup_settings.backup_location,
         strategy: RestoreStrategy = RestoreStrategy.REPLACE,
         select: RestoreOptions = RestoreOptions.LATEST,
     ) -> None:
-        """
-        Restore a backup from a directory. Defaults to restoring the latest backup.
+        """Restore a backup from a directory. Defaults to restoring the latest backup.
 
         Parameters:
             backup_dir: Directory: the directory to restore from. If not specified, the dir in backup_settings will be used.
-            strategy: RestoreStrategy: the strategy to use for restoring the backup. options:
-                                - "replace" (default): remove 'faculties' dir and replace with backup dir
-                                - "merge_prefer_backup": merge the backup dir with the 'faculties' dir: overwrite files with the same name, add new files, keep old files
-                                - "merge_prefer_existing": merge the backup dir with the 'faculties' dir: DO NOT overwrite files that already exist. Add new files, keep existing files
-            select: RestoreOptions: Which backup to restore. Valid options:
-                                - "latest" (default): restore the latest backup
-                                - "oldest": restore the oldest backup
-                                - "manual": let the user select which backup to restore
+            strategy: RestoreStrategy: the strategy to use for restoring the backup.
+            select: RestoreOptions: Which backup to restore.
         """
 
         target_dir = SETTINGS.dirs[DirSetting.FACULTIES_DIR]
 
         if not backup_dir:
             backup_dir = SETTINGS.backup_settings.backup_location
-        if not isinstance(backup_dir, Directory):
+        if backup_dir is None:
+            logger.warning("No backup location configured; cannot restore backup.")
+            return
+        if not isinstance(backup_dir, Directory) and backup_dir:
             try:
                 backup_dir = Directory(backup_dir)
             except Exception:
-                warn(
+                logger.warning(
                     f"Could not convert {backup_dir} to a Directory object. Cannot restore backup."
                 )
                 return
         if not backup_dir.exists:
-            warn(
+            logger.warning(
                 f"Backup dir {backup_dir.full} does not exist -- cannot restore backup."
             )
             return
 
         selected_backup_dir = None
         if select == RestoreOptions.LATEST:
-            selected_backup_dir = max(backup_dir.dirs, key=lambda x: x.created)
+            selected_backup_dir = max(backup_dir.dirs(), key=lambda x: x.created)
         elif select == RestoreOptions.OLDEST:
-            selected_backup_dir = min(backup_dir.dirs, key=lambda x: x.created)
+            selected_backup_dir = min(backup_dir.dirs(), key=lambda x: x.created)
         elif select == RestoreOptions.MANUAL:
-            print(f"  Select backup to restore from {backup_dir.full}:")
-            print("------------------------------------------------------\n")
-            for num, dir in enumerate(backup_dir.dirs):
-                print(f"    {num}: {dir.full}")
-            print("\n")
+            logger.info(f"  Select backup to restore from {backup_dir.full}:")
+            logger.info("------------------------------------------------------\n")
+            for num, dir in enumerate(backup_dir.dirs()):
+                logger.info(f"    {num}: {dir.full}")
+            logger.info("\n")
             while not selected_backup_dir:
                 try:
-                    selected_backup_dir = backup_dir.dirs[
+                    selected_backup_dir = backup_dir.dirs()[
                         int(
                             input(
-                                f"  Select backup to restore (0-{len(backup_dir.dirs) - 1}): "
+                                f"  Select backup to restore (0-{len(backup_dir.dirs()) - 1}): "
                             )
                         )
                     ]
                 except Exception as e:
-                    warn(f"Invalid input. Please select a valid backup. ({e})")
+                    logger.warning(
+                        f"Invalid input. Please select a valid backup. ({e})"
+                    )
 
         if not selected_backup_dir:
-            warn("No valid backup selected, cannot restore.")
+            logger.warning("No valid backup selected, cannot restore.")
             return
 
         if strategy == RestoreStrategy.REPLACE:
             target_dir.delete()
-            info(f"Deleted {target_dir.full}")
-            info(
+            logger.info(f"Deleted {target_dir.full}")
+            logger.info(
                 f"Restoring backup from {selected_backup_dir.full} to {target_dir.full} using strategy: {strategy}"
             )
             selected_backup_dir.copy(target_dir)
@@ -165,6 +211,8 @@ class Backupper:
         elif strategy == RestoreStrategy.MERGE_PREFER_EXISTING:
             selected_backup_dir.copy(target_dir, overwrite=False)
         else:
-            warn(f"Unrecognized strategy: {strategy}. Cannot restore backup.")
+            logger.warning(f"Unrecognized strategy: {strategy}. Cannot restore backup.")
             return
-        cool(f"Backup restored to {target_dir.full} using strategy: {strategy}")
+        logger.success(
+            f"Backup restored to {target_dir.full} using strategy: {strategy}"
+        )
