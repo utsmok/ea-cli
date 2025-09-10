@@ -36,7 +36,7 @@ Branch / context:
  - [ ] Ensure exported Excel files open showing the `Data Entry` sheet by default (both the `Complete Data` and `Data Entry` sheets must still be present).
 
 ## (features & integration)
-- [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable.
+ - [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable. (in-progress: `easy_access/sheets/backup.py` added)
 - [ ] Add calculate_derived_fields pipeline stage before export to compute non-persistent derived fields used only for reporting.
 
  - [ ] Long-term: implement reactive faculty sheets workflow and monitor script.
