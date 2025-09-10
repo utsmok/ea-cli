@@ -21,6 +21,8 @@ from easy_access.settings import DirSetting, Settings
 from easy_access.sheets.analysis import create_faculty_overviews
 from easy_access.sheets.sheet import finalize_sheet, store_complete_data
 from easy_access.utils import Directory, File
+from easy_access.sheets.backup import backup_existing_file
+from easy_access.sheets.sheet import protect_workbook
 
 
 async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
@@ -138,6 +140,100 @@ async def export_faculty_sheets(
             data=new_data,
             style_iter=style_iter,
         )
+
+    return style_iter
+
+
+async def export_faculty_workflow_files(
+    settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
+) -> int:
+    """
+    Export per-faculty files driven by the `workflow_status` column.
+
+    For each faculty produce three files in the faculty folder:
+    - inbox.xlsx (ToDo)
+    - in_progress.xlsx (InProgress)
+    - done.xlsx (Done) -- protected after write
+
+    Existing files are moved into a timestamped backups folder next to the faculty dir.
+    """
+    logger.info("Exporting faculty workflow files (inbox/in_progress/done)...")
+
+    canonical_map = {
+        "todo": "ToDo",
+        "inprogress": "InProgress",
+        "in_progress": "InProgress",
+        "done": "Done",
+    }
+
+    for faculty, data in faculty_data.items():
+        if data.is_empty():
+            continue
+
+        faculty_dir = Directory(settings.dirs[DirSetting.FACULTIES_DIR].full / faculty)
+        faculty_dir.full.mkdir(parents=True, exist_ok=True)
+
+        # small backups dir inside faculty dir
+        backups_dir = faculty_dir.full / "backups"
+
+        # normalize workflow_status and bucket
+        df = data.with_columns(
+            pl.col("workflow_status").fill_null("ToDo").cast(pl.Utf8)
+        )
+
+        buckets: dict[str, pl.DataFrame] = {"ToDo": pl.DataFrame(), "InProgress": pl.DataFrame(), "Done": pl.DataFrame()}
+
+        for row in df.to_dicts():
+            ws_raw = (row.get("workflow_status") or "").strip()
+            key = canonical_map.get(ws_raw.replace(" ", "").lower(), None)
+            if not key:
+                # unknown values -> ToDo by default
+                key = "ToDo"
+                logger.warning(f"Unknown workflow_status '{ws_raw}' for material_id={row.get('material_id')} - defaulting to ToDo")
+            if buckets[key].is_empty():
+                buckets[key] = pl.DataFrame([row])
+            else:
+                buckets[key] = pl.concat([buckets[key], pl.DataFrame([row])])
+
+        for bucket_name, bucket_df in buckets.items():
+            if bucket_df.is_empty():
+                logger.info(f"No items for {faculty} -> {bucket_name}; skipping file creation")
+                continue
+
+            filename = {
+                "ToDo": "inbox.xlsx",
+                "InProgress": "in_progress.xlsx",
+                "Done": "done.xlsx",
+            }[bucket_name]
+
+            target_path = faculty_dir.full / filename
+
+            # backup existing
+            if target_path.exists():
+                try:
+                    moved = backup_existing_file(target_path=target_path, backups_dir=backups_dir, manifest={"faculty": faculty, "bucket": bucket_name})
+                    logger.info(f"Backed up existing {target_path.name} -> {moved}")
+                except Exception as e:
+                    logger.warning(f"Failed to backup existing file {target_path}: {e}")
+
+            # write complete data then add data entry sheet
+            try:
+                store_complete_data(settings=settings, file=target_path, data=bucket_df)
+                style_iter = finalize_sheet(
+                    settings=settings, file=File(str(target_path)), data=bucket_df, style_iter=style_iter
+                )
+                logger.info(f"Wrote {len(bucket_df)} rows to {target_path}")
+            except Exception as e:
+                logger.error(f"Failed writing faculty workflow file {target_path}: {e}")
+                continue
+
+            # protect done.xlsx and set active sheet to Data Entry
+            if bucket_name == "Done":
+                try:
+                    protect_workbook(target_path, protect_sheets=[settings.data_settings.complete_data_name, settings.data_settings.data_entry_name], active_sheet=settings.data_settings.data_entry_name)
+                    logger.info(f"Protected {target_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to protect workbook {target_path}: {e}")
 
     return style_iter
 
