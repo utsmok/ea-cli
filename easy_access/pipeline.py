@@ -152,10 +152,30 @@ class DataPipeline:
 
     async def export_reports_async(self) -> None:
         """Exports processed data to Excel reports (faculty sheets, programme sheets, etc.)."""
-        from easy_access.sheets.export import export_reports_async
+        from easy_access.sheets.export import (
+            export_faculty_workflow_files,
+            export_reports_async,
+        )
 
         logger.info("Exporting reports...")
-        await export_reports_async(self.settings)
+
+        # Run either the legacy top-level exporter OR the new workflow exporter
+        # depending on the runtime flag in ea_settings. Previously we always ran
+        # the legacy exporter and then optionally the workflow exporter which
+        # resulted in duplicate/undesired outputs. Choose one path here.
+        if self.ea_settings and getattr(self.ea_settings, "export_workflow", False):
+            # gather faculty data and call the workflow writer
+            from easy_access.sheets.export import gather_faculty_data
+
+            faculty_data = await gather_faculty_data(self.settings)
+            if faculty_data:
+                style_iter = 9
+                await export_faculty_workflow_files(
+                    self.settings, faculty_data, style_iter
+                )
+        else:
+            # Default: run the legacy top-level exporter which handles full orchestration
+            await export_reports_async(self.settings)
         logger.info("Reports exported.")
 
     async def enrich_data_async(self) -> None:

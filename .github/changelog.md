@@ -15,6 +15,8 @@ Recent milestones (merged from current `changelog.md` and the snapshot in `.gith
 - 2025-09-05: Refactored `easy_access/db/relations.py` to remove fragile test-aware branching and implemented deterministic single-call `bulk_update` handling; updated relations unit tests accordingly.
 - 2025-09-05: Added enrichment staleness and fetch-error unit tests (`tests/test_enrichment_staleness.py`) covering TTL selection and basic error handling for course/person fetchers.
 - 2025-09-05: Continued Phase D test expansion: added concurrency/missing-course coverage for `fetch_and_parse_courses` and adjusted tests to match timezone handling in enrichment code.
+ - 2025-09-10: Added backup helper module `easy_access/sheets/backup.py` with timestamped move-and-manifest helpers (integration into pipeline pending).
+ - 2025-09-10: Added workflow-driven faculty exporter `export_faculty_workflow_files` and CLI flag `--export-workflow` to enable it (legacy exporter remains default). Integrated backup and protection helpers.
 
 - 2025-09-02: Phase A completed — export orchestrator (`sheets/export.py`) and optimized relations (`easy_access/db/relations.py`) implemented and integrated; manual export validation completed.
 - 2025-09-02: Pipeline improvements — async entrypoints and CLI flags added for stage control (`--ingest-only`, `--process-only`, `--export-only`, `--enrich-only`).

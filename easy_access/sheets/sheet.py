@@ -582,6 +582,52 @@ def store_complete_data(
     logger.info(f"Stored {data.shape[0]} rows to {file}")
 
 
+def protect_workbook(
+    file_path: str | Path,
+    protect_sheets: list[str] | None = None,
+    active_sheet: str | None = None,
+    password: str | None = None,
+) -> None:
+    """Protect specified sheets in an existing workbook and set the active sheet.
+
+    This is intended to be run after the atomic write has placed the final file.
+    It will attempt to open the workbook with openpyxl, enable protection on the
+    requested sheets (if present) and set the workbook.active to the requested
+    sheet name if available.
+    """
+    try:
+        wb = openpyxl.load_workbook(filename=str(file_path))
+    except Exception as e:
+        logger.warning(f"Could not open workbook for protection: {file_path}: {e}")
+        return
+
+    protect_sheets = protect_sheets or []
+
+    for name in protect_sheets:
+        if name in wb.sheetnames:
+            ws = wb[name]
+            try:
+                # enable sheet protection; set a password if provided
+                ws.protection.sheet = True
+                if password:
+                    # openpyxl will hash the password as needed
+                    ws.protection.set_password(password)
+            except Exception as e:
+                logger.debug(f"Could not set protection on sheet {name}: {e}")
+
+    if active_sheet and active_sheet in wb.sheetnames:
+        try:
+            wb.active = wb[active_sheet]
+        except Exception:
+            # best-effort: ignore if setting the active sheet fails
+            pass
+
+    try:
+        wb.save(filename=str(file_path))
+    except Exception as e:
+        logger.warning(f"Failed saving workbook after protection step: {e}")
+
+
 def read_faculty_sheets(settings: Settings) -> pl.DataFrame:
     """
     Reads all faculty sheets and returns a single DataFrame.

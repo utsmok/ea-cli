@@ -19,7 +19,12 @@ from loguru import logger
 from easy_access.db.retrieve import retrieve_full_data
 from easy_access.settings import DirSetting, Settings
 from easy_access.sheets.analysis import create_faculty_overviews
-from easy_access.sheets.sheet import finalize_sheet, store_complete_data
+from easy_access.sheets.backup import backup_existing_file
+from easy_access.sheets.sheet import (
+    finalize_sheet,
+    protect_workbook,
+    store_complete_data,
+)
 from easy_access.utils import Directory, File
 
 
@@ -59,7 +64,6 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
         if not faculty_df.is_empty():
             faculty_data[faculty] = faculty_df
             logger.info(f"Faculty {faculty}: {faculty_df.shape[0]} items")
-
     logger.info(f"Gathered data for {len(faculty_data)} faculties")
     return faculty_data
 
@@ -139,6 +143,148 @@ async def export_faculty_sheets(
             style_iter=style_iter,
         )
 
+    return style_iter
+
+
+async def export_faculty_workflow_files(
+    settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
+) -> int:
+    """
+    Export per-faculty files driven by the `workflow_status` column.
+
+    For each faculty produce three files in the faculty folder:
+    - inbox.xlsx (ToDo)
+    - in_progress.xlsx (InProgress)
+    - done.xlsx (Done) -- protected after write
+
+    Existing files are moved into a timestamped backups folder next to the faculty dir.
+    """
+    logger.info("Exporting faculty workflow files (inbox/in_progress/done)...")
+
+    for faculty, data in faculty_data.items():
+        if data.is_empty():
+            continue
+
+        faculty_dir = Directory(settings.dirs[DirSetting.FACULTIES_DIR].full / faculty)
+        faculty_dir.full.mkdir(parents=True, exist_ok=True)
+
+        # small backups dir inside faculty dir
+        backups_dir_base = (
+            settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / "v2_style_backups"
+        )
+        if not backups_dir_base.exists():
+            backups_dir_base.mkdir(parents=True, exist_ok=True)
+
+        backups_dir = backups_dir_base / faculty
+        if not backups_dir.exists():
+            backups_dir.mkdir(parents=True, exist_ok=True)
+
+        # normalize workflow_status and bucket
+        df = data.with_columns(
+            pl.col("workflow_status").fill_null("ToDo").cast(pl.Utf8)
+        )
+
+        buckets: dict[str, pl.DataFrame] = {
+            "inbox": df.filter(pl.col("workflow_status").is_in(["ToDo", "todo"])),
+            "in_progress": df.filter(
+                pl.col("workflow_status").is_in(
+                    ["InProgress", "inprogress", "in_progress"]
+                )
+            ),
+            "done": df.filter(pl.col("workflow_status").is_in(["Done", "done"])),
+            "overview": df,  # all items for overview file
+        }
+        update_stats = {
+            "inbox": {"old": 0, "new": buckets["inbox"].shape[0]},
+            "in_progress": {"old": 0, "new": buckets["in_progress"].shape[0]},
+            "done": {"old": 0, "new": buckets["done"].shape[0]},
+            "overview": {"old": 0, "new": buckets["overview"].shape[0]},
+        }
+        for bucket_name, bucket_df in buckets.items():
+            filename = bucket_name + ".xlsx"
+
+            target_path = faculty_dir.full / filename
+
+            # backup existing
+            if target_path.exists():
+                try:
+                    update_stats[bucket_name]["old"] = pl.read_excel(target_path).shape[
+                        0
+                    ]
+                    moved = backup_existing_file(
+                        target_path=target_path,
+                        backups_dir=backups_dir,
+                        manifest={"faculty": faculty, "bucket": bucket_name},
+                    )
+                    logger.info(f"Backed up existing {target_path.name} -> {moved}")
+                except Exception as e:
+                    logger.warning(f"Failed to backup existing file {target_path}: {e}")
+
+            # write complete data then add data entry sheet
+            try:
+                if bucket_df.is_empty():
+                    logger.info(
+                        f"No items for {faculty} -> {bucket_name}; skipping file creation"
+                    )
+                    continue
+
+                store_complete_data(settings=settings, file=target_path, data=bucket_df)
+                style_iter = finalize_sheet(
+                    settings=settings,
+                    file=File(str(target_path)),
+                    data=bucket_df,
+                    style_iter=style_iter,
+                )
+                logger.info(f"Wrote {len(bucket_df)} rows to {target_path}")
+            except Exception as e:
+                logger.error(f"Failed writing faculty workflow file {target_path}: {e}")
+                raise e
+                continue
+
+            # protect done.xlsx and set active sheet to Data Entry
+            if bucket_name in ["done", "overview"]:
+                try:
+                    protect_workbook(
+                        target_path,
+                        protect_sheets=[
+                            settings.data_settings.complete_data_name,
+                            settings.data_settings.data_entry_name,
+                        ],
+                        active_sheet=settings.data_settings.data_entry_name,
+                    )
+                    logger.info(f"Protected {target_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to protect workbook {target_path}: {e}")
+
+        # Create a simple text file indicating last update time
+        # first remove any existing update_info_*.txt files
+        for file in faculty_dir.files:
+            if file.name.startswith("update_info_") and file.extension == ".txt":
+                try:
+                    file.path.unlink()
+                except Exception:
+                    logger.debug(
+                        f"Failed to remove old update info file {file.path}; continuing"
+                    )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with (faculty_dir.full / f"update_info_{timestamp}.txt").open(
+            "w", encoding="utf-8"
+        ) as fh:
+            fh.write(f"\n{'Update information for':{' '}^{40}}\n{faculty:{' '}^{40}}")
+            fh.write(
+                f"\n{'Last sync with main database:':{' '}^{40}}\n{datetime.now().strftime('%Y-%m-%d -- %H:%M:%S'):{' '}^{40}}"
+            )
+            # write update stats
+            fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}':{' '}^{40}}")
+            fh.write(
+                f"\n{f'{"Sheet":{" "}<12}|{"Old":{" "}^{5}}|{"New":{" "}^{5}}|{"Δ":{" "}^{5}}':{' '}^{40}}"
+            )
+            fh.write(f"\n{f'{"-" * 12}+{"-" * 5}+{"-" * 5}+{"-" * 5}':{' '}^{40}}")
+            for bucket_name, stats in update_stats.items():
+                fh.write(
+                    f"\n{f'{bucket_name:{" "}<12}|{stats["old"]:{" "}^{5}}|{stats["new"]:{" "}^{5}}|{stats["new"] - stats["old"]:^+5}':{' '}^{40}}"
+                )
+            fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}\n':{' '}^{40}}")
     return style_iter
 
 

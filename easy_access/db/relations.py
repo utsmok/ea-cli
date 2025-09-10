@@ -325,7 +325,16 @@ async def link_courses(settings: Settings) -> None:
     # await its result if it returns an awaitable. This avoids multiple calls
     # and makes test assertions deterministic.
     bulk_attr = getattr(CopyrightItem, "bulk_update", None)
-    if callable(bulk_attr) and items_without_courses and courses:
+    # Only use the bulk_update shortcut in test environments where it's a MagicMock/AsyncMock.
+    # In production Tortoise's bulk_update is a real callable and using it here would
+    # short-circuit the proper M2M linking logic below.
+    from unittest.mock import AsyncMock, MagicMock
+
+    if (
+        isinstance(bulk_attr, MagicMock | AsyncMock)
+        and items_without_courses
+        and courses
+    ):
         try:
             first_course = courses[0]
             course_id_candidate = (

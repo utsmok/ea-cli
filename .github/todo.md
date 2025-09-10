@@ -24,6 +24,7 @@ Branch / context:
 
 ##  (export safety & validation)
 - [ ] Add export dataframe schema validator + unit test: ensure required columns (e.g., `material_id`) exist and fail early with clear errors.
+ - [ ] Add export dataframe schema validator + unit test: ensure required columns (e.g., `material_id`) exist and fail early with clear errors.
 - [ ] Verify atomic Excel writes are used across all export paths and add failure-simulation tests (simulate write error leaving tmp file and ensure final file not corrupted).
 
  - [ ] Generalize conditional formatting helper in `sheet.py`: refactor `_add_conditional_formatting` so it can be applied to any column and support all current condition types. Drive conditions and targets from `settings.yaml` and `ColInfo` in `settings.py`. Define a small set of premade styles (also configurable from `settings.yaml`) for reuse across sheets.
@@ -36,7 +37,9 @@ Branch / context:
  - [ ] Ensure exported Excel files open showing the `Data Entry` sheet by default (both the `Complete Data` and `Data Entry` sheets must still be present).
 
 ## (features & integration)
-- [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable.
+ - [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable. (in-progress: `easy_access/sheets/backup.py` added)
+ - [ ] Integrate backup module into pipeline: add optional pre/post backup stages with settings-driven enable/disable. (in-progress: `easy_access/sheets/backup.py` added)
+ - [ ] Add unit tests for `export_faculty_workflow_files` and CI coverage for workflow-mode exports.
 - [ ] Add calculate_derived_fields pipeline stage before export to compute non-persistent derived fields used only for reporting.
 
  - [ ] Long-term: implement reactive faculty sheets workflow and monitor script.
@@ -88,6 +91,8 @@ The list below is a merged, de-duplicated history combining both versions. When 
 - [x] Add DateFieldStrategy and EnumFieldStrategy for more field-specific comparisons.
 - [x] Implement comprehensive unit test coverage for all refactored components.
 - [x] Phase A: Implement export stage (`export_reports_async`) in `pipeline.py` coordinating all export types (faculty, program, overview, all_items).
+ - [x] Phase A: Implement export stage (`export_reports_async`) in `pipeline.py` coordinating all export types (faculty, program, overview, all_items).
+ - [x] Add workflow-mode exporter and CLI flag `--export-workflow` (branch: `export-workflow`).
 - [x] Phase A: Create `sheets/export.py` recreating legacy export functions: `create_faculty_sheets`, `create_programme_sheets`, `create_overviews`, `create_all_items_sheet` with file uniqueness handling.
 - [x] Phase A: Extract existing relations functions from `db/update.py` into `easy_access/db/relations.py` (move `link_courses_to_copyright_items`, `update_duplicate_status`) and optimize to eliminate N+1 queries.
 - [x] Phase A: Add `update_relations_async` pipeline stage calling optimized relations functions (batch prefetch, bulk updates).

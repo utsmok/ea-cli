@@ -1124,6 +1124,29 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
     """
     Processes the staged faculty updates and updates the main CopyrightItem table.
     """
+    def _normalize_wf(val: str) -> str | None:
+        if not val:
+            return None
+        s = str(val).strip()
+        # direct match to enum values
+        enum_vals = {e.value for e in WorkflowStatus}
+        if s in enum_vals:
+            return s
+        # member names
+        if s in WorkflowStatus.__members__:
+            return WorkflowStatus[s].value
+        lower = s.lower()
+        mapping = {
+            "todo": WorkflowStatus.ToDo.value,
+            "to do": WorkflowStatus.ToDo.value,
+            "inbox": WorkflowStatus.ToDo.value,
+            "in_progress": WorkflowStatus.InProgress.value,
+            "in progress": WorkflowStatus.InProgress.value,
+            "inprogress": WorkflowStatus.InProgress.value,
+            "in-progress": WorkflowStatus.InProgress.value,
+            "done": WorkflowStatus.Done.value,
+        }
+        return mapping.get(lower)
     await ensure_db_inited(settings)
     staged_updates = await StagedFacultyUpdate.all()
     if not staged_updates:
@@ -1169,14 +1192,20 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                         #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating remarks"
                         # )
 
-                    if (
-                        update.workflow_status
-                        and item.workflow_status != update.workflow_status
-                    ):
-                        wf_st = safe_enum(WorkflowStatus, update.workflow_status)
-                        if wf_st:
-                            item.workflow_status = wf_st
-                            update_fields.append("workflow_status")
+                    if update.workflow_status:
+                        # Accept explicit workflow status choices made by faculty users.
+                        # Normalize common variants so things like "inbox", "in_progress",
+                        # "inprogress", "todo" (case-insensitive) are mapped to the
+                        # canonical enum values. If a recognizable value is found, always
+                        # apply it (this represents an explicit user choice).
+                        
+
+                        normalized = _normalize_wf(update.workflow_status)
+                        if normalized:
+                            wf_st = safe_enum(WorkflowStatus, normalized)
+                            if wf_st and item.workflow_status != wf_st:
+                                item.workflow_status = wf_st
+                                update_fields.append("workflow_status")
                             # logger.debug(
                             #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status"
                             # )

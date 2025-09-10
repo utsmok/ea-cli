@@ -187,6 +187,8 @@ class EasyAccessSettings:
     disable_writes: bool = False
     faculty: str | None = None
     no_file_exists: bool = False
+    # Enable the new workflow-based exporter (inbox/in_progress/done)
+    export_workflow: bool = False
 
     @classmethod
     def create_for_runtime(
