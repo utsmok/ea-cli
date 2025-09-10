@@ -48,6 +48,10 @@ def retrieve_copyright_items(
         col_order.remove("google_search_file")
     if "type" in col_order:
         col_order.remove("type")
+    if "replacement_id" in col_order:
+        col_order.remove("replacement_id")
+    if "is_duplicate" in col_order:
+        col_order.remove("is_duplicate")
     if "faculty" in col_order:
         col_order.remove("faculty")
         select_cols = {*col_order, "faculty_id AS faculty"}
@@ -117,6 +121,7 @@ def retrieve_full_data(
 ) -> pl.DataFrame:
     """
     Retrieves copyright items, enriched with related data, with optional filtering.
+    Note: removed LLM data for now -- needs to be reimplemented.
 
     Memory-optimized version with:
     - Pre-aggregated data to avoid correlated subqueries
@@ -405,7 +410,6 @@ def retrieve_full_data_original(
             WHERE 1=1  -- Placeholder for easier AND clause addition
             {faculty_where_clause}
             {material_exclusion_clause}
-
             """
         df = pl.read_database(query=query, connection=conn, infer_schema_length=None)
 

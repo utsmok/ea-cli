@@ -1124,6 +1124,7 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
     """
     Processes the staged faculty updates and updates the main CopyrightItem table.
     """
+
     def _normalize_wf(val: str) -> str | None:
         if not val:
             return None
@@ -1147,6 +1148,7 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
             "done": WorkflowStatus.Done.value,
         }
         return mapping.get(lower)
+
     await ensure_db_inited(settings)
     staged_updates = await StagedFacultyUpdate.all()
     if not staged_updates:
@@ -1198,7 +1200,6 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                         # "inprogress", "todo" (case-insensitive) are mapped to the
                         # canonical enum values. If a recognizable value is found, always
                         # apply it (this represents an explicit user choice).
-                        
 
                         normalized = _normalize_wf(update.workflow_status)
                         if normalized:

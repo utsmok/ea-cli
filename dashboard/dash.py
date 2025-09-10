@@ -16,6 +16,10 @@ from monsterui.all import *
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 
+from dashboard.files import Entities, get_entities, get_extracted_text
+from dashboard.urls import URLS as global_urls
+from dashboard.urls import Url
+from dashboard.web import Login, bware, load_app_state, login_redir, users
 from easy_access.dashboard.components import (
     ItemDetailCard,
     create_checkbox_filter_group,
@@ -34,7 +38,6 @@ from easy_access.dashboard.constants import (
     INIT_HEADERS,
     MODAL_INTERACTION,
     MODAL_TRIGGER,
-    PORT,
     ROOT_URL,
 )
 from easy_access.dashboard.data import (
@@ -44,10 +47,6 @@ from easy_access.dashboard.data import (
     process_state,
     store_item_changes,
 )
-from dashboard.files import Entities, get_entities, get_extracted_text
-from dashboard.urls import URLS as global_urls
-from dashboard.urls import Url
-from dashboard.web import Login, bware, load_app_state, login_redir, users
 from easy_access.db.retrieve import (
     retrieve_osiris_data,
 )
@@ -919,7 +918,7 @@ URLS = {
 global_urls.update(URLS)
 
 
-def start():
+def start(host: str = "http://localhost", port: int = 8000):
     """
     Start the FastHTML server with the defined routes.
     """
@@ -927,7 +926,8 @@ def start():
     logger.info("Starting the FastHTML server...")
     serve(
         app=app,
-        port=PORT,
+        host=host,
+        port=port,
         reload=True,
     )
 
