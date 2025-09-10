@@ -1,10 +1,54 @@
+"""Helpers for backing up existing export files.
+
+Centralizes move+timestamp logic used by overview export and the workflow-based exports.
+"""
+from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
+import json
+import shutil
+from pathlib import Path
 
 from loguru import logger
 
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import Directory
+
+
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def timestamped_filename(original: Path, timestamp: datetime | None = None) -> str:
+    ts = (timestamp or datetime.utcnow()).strftime("%Y%m%d_%H%M%S")
+    return f"{original.stem}_{ts}{original.suffix}"
+
+
+def backup_existing_file(target_path: Path, backups_dir: Path, manifest: dict | None = None) -> Path:
+    """Move ``target_path`` into ``backups_dir`` and return the moved path.
+
+    If the target doesn't exist, the original Path is returned unchanged.
+    """
+    if not target_path.exists():
+        return target_path
+
+    ensure_dir(backups_dir)
+    new_name = timestamped_filename(target_path)
+    dest = backups_dir / new_name
+    # Use shutil.move to preserve perms where possible
+    shutil.move(str(target_path), str(dest))
+
+    # Write optional manifest next to the moved file (best-effort)
+    if manifest is not None:
+        manifest_path = dest.with_suffix(dest.suffix + ".manifest.json")
+        try:
+            with manifest_path.open("w", encoding="utf-8") as fh:
+                json.dump(manifest, fh, ensure_ascii=False, indent=2)
+        except Exception:
+            logger.debug("Failed to write backup manifest; continuing without manifest")
+
+    return dest
 
 
 class BackupFlag(Enum):
@@ -28,18 +72,10 @@ class RestoreStrategy(Enum):
 
 class Backupper:
     def __init__(self) -> None:
-        """
-        This class contains the functions for handling and restoring backups.
-        Restoring is handled with cli flags, see run.py in the root dir (use --help for more details in your cli).
-        Backup settings are in the 'backup' and 'directories' sections of the settings.yaml file:
-        <settings.yaml>
-            backup:
-                backup_all: true  #backup all sheets in selected directories before starting? (bool)
-                backup_dirs: #directories to backup, use keys from the 'directories' section in settings.yaml
-                    - faculties_dir
-                max_backups: 3                 # maximum number of backups to keep (int)
-            directories:
-                full_backups: full_backups    # directory to store the backups (str - relative path)
+        """Utilities for creating and restoring backups.
+
+        The CLI hooks into this class; backup configuration lives in settings.yaml
+        under the `backup` and `directories` sections.
         """
         ...
 
@@ -99,28 +135,24 @@ class Backupper:
         strategy: RestoreStrategy = RestoreStrategy.REPLACE,
         select: RestoreOptions = RestoreOptions.LATEST,
     ) -> None:
-        """
-        Restore a backup from a directory. Defaults to restoring the latest backup.
+        """Restore a backup from a directory. Defaults to restoring the latest backup.
 
         Parameters:
             backup_dir: Directory: the directory to restore from. If not specified, the dir in backup_settings will be used.
-            strategy: RestoreStrategy: the strategy to use for restoring the backup. options:
-                                - "replace" (default): remove 'faculties' dir and replace with backup dir
-                                - "merge_prefer_backup": merge the backup dir with the 'faculties' dir: overwrite files with the same name, add new files, keep old files
-                                - "merge_prefer_existing": merge the backup dir with the 'faculties' dir: DO NOT overwrite files that already exist. Add new files, keep existing files
-            select: RestoreOptions: Which backup to restore. Valid options:
-                                - "latest" (default): restore the latest backup
-                                - "oldest": restore the oldest backup
-                                - "manual": let the user select which backup to restore
+            strategy: RestoreStrategy: the strategy to use for restoring the backup.
+            select: RestoreOptions: Which backup to restore.
         """
 
         target_dir = SETTINGS.dirs[DirSetting.FACULTIES_DIR]
 
         if not backup_dir:
-            backup_dir: Directory = SETTINGS.backup_settings.backup_location
+            backup_dir = SETTINGS.backup_settings.backup_location
+        if backup_dir is None:
+            logger.warning("No backup location configured; cannot restore backup.")
+            return
         if not isinstance(backup_dir, Directory) and backup_dir:
             try:
-                backup_dir: Directory = Directory(backup_dir)
+                backup_dir = Directory(backup_dir)
             except Exception:
                 logger.warning(
                     f"Could not convert {backup_dir} to a Directory object. Cannot restore backup."
