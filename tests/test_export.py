@@ -434,3 +434,21 @@ class TestExportIntegration:
             assert mock_store.call_count >= 3  # faculty + programme + all items
             assert mock_finalize.call_count >= 3
             mock_overviews.assert_called_once()
+
+
+class TestStoreCompleteData:
+    """Tests for store_complete_data export validation."""
+
+    def test_store_complete_data_missing_material_id(self, tmp_path):
+        """store_complete_data should raise ValueError when material_id is missing."""
+        settings = Settings()
+        from easy_access.sheets.sheet import store_complete_data
+
+        out_file = tmp_path / "out.xlsx"
+        # DataFrame missing required 'material_id' column
+        data = pl.DataFrame({"title": ["Item 1"]})
+
+        with pytest.raises(ValueError) as excinfo:
+            store_complete_data(settings, out_file, data)
+
+        assert "Export dataframe missing required columns" in str(excinfo.value)

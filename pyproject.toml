@@ -22,6 +22,7 @@ dependencies = [
     "tortoise-orm[accel]",
     "tqdm",
     "fastexcel>=0.15.1",
+    "pytest-asyncio>=1.1.0",
 ]
 
 [tool.uv]

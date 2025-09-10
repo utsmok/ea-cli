@@ -537,6 +537,9 @@ def store_complete_data(
                 f"Export dataframe missing required columns: {sorted(missing)}"
             )
 
+    # Validate minimal required columns before any column selection/unique operations
+    validate_export_dataframe(data, required_cols={"material_id"})
+
     selectcols = [
         col
         for col in settings.data_settings.final_data_col_order
@@ -556,10 +559,8 @@ def store_complete_data(
         if c in data.columns and c not in selectcols:
             selectcols.append(c)
     data = data.select(selectcols)
+    # Deduplicate by material_id (material_id guaranteed to exist due to earlier validation)
     data = data.unique("material_id")
-
-    # Validate minimal required columns before writing
-    validate_export_dataframe(data, required_cols={"material_id"})
 
     # Remove internal-only columns from the exported Complete Data
     for drop_col in ("is_duplicate", "replacement_id"):
