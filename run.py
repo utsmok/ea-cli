@@ -162,6 +162,13 @@ def process_data(
             rich_help_panel="Processing Options",
         ),
     ] = False,
+    export_workflow: Annotated[
+        bool,
+        typer.Option(
+            help="Enable new workflow-based exporter (writes inbox/in_progress/done per faculty).",
+            rich_help_panel="Stage Selection",
+        ),
+    ] = False,
 ) -> None:
     """Runs the main Easy Access data processing workflow."""
     if other_sheet:
@@ -210,6 +217,7 @@ def process_data(
         disable_writes=disable_writes,
         faculty=single_faculty,
         no_file_exists=no_file_exists,
+        export_workflow=export_workflow,
     )
 
     tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)

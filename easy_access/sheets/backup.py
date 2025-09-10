@@ -2,12 +2,13 @@
 
 Centralizes move+timestamp logic used by overview export and the workflow-based exports.
 """
+
 from __future__ import annotations
 
-from datetime import datetime
-from enum import Enum
 import json
 import shutil
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from loguru import logger
@@ -25,7 +26,9 @@ def timestamped_filename(original: Path, timestamp: datetime | None = None) -> s
     return f"{original.stem}_{ts}{original.suffix}"
 
 
-def backup_existing_file(target_path: Path, backups_dir: Path, manifest: dict | None = None) -> Path:
+def backup_existing_file(
+    target_path: Path, backups_dir: Path, manifest: dict | None = None
+) -> Path:
     """Move ``target_path`` into ``backups_dir`` and return the moved path.
 
     If the target doesn't exist, the original Path is returned unchanged.
@@ -49,6 +52,9 @@ def backup_existing_file(target_path: Path, backups_dir: Path, manifest: dict | 
             logger.debug("Failed to write backup manifest; continuing without manifest")
 
     return dest
+
+
+# OLD backup logic down here
 
 
 class BackupFlag(Enum):

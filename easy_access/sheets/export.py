@@ -19,10 +19,13 @@ from loguru import logger
 from easy_access.db.retrieve import retrieve_full_data
 from easy_access.settings import DirSetting, Settings
 from easy_access.sheets.analysis import create_faculty_overviews
-from easy_access.sheets.sheet import finalize_sheet, store_complete_data
-from easy_access.utils import Directory, File
 from easy_access.sheets.backup import backup_existing_file
-from easy_access.sheets.sheet import protect_workbook
+from easy_access.sheets.sheet import (
+    finalize_sheet,
+    protect_workbook,
+    store_complete_data,
+)
+from easy_access.utils import Directory, File
 
 
 async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
@@ -181,7 +184,11 @@ async def export_faculty_workflow_files(
             pl.col("workflow_status").fill_null("ToDo").cast(pl.Utf8)
         )
 
-        buckets: dict[str, pl.DataFrame] = {"ToDo": pl.DataFrame(), "InProgress": pl.DataFrame(), "Done": pl.DataFrame()}
+        buckets: dict[str, pl.DataFrame] = {
+            "ToDo": pl.DataFrame(),
+            "InProgress": pl.DataFrame(),
+            "Done": pl.DataFrame(),
+        }
 
         for row in df.to_dicts():
             ws_raw = (row.get("workflow_status") or "").strip()
@@ -189,7 +196,9 @@ async def export_faculty_workflow_files(
             if not key:
                 # unknown values -> ToDo by default
                 key = "ToDo"
-                logger.warning(f"Unknown workflow_status '{ws_raw}' for material_id={row.get('material_id')} - defaulting to ToDo")
+                logger.warning(
+                    f"Unknown workflow_status '{ws_raw}' for material_id={row.get('material_id')} - defaulting to ToDo"
+                )
             if buckets[key].is_empty():
                 buckets[key] = pl.DataFrame([row])
             else:
@@ -197,7 +206,9 @@ async def export_faculty_workflow_files(
 
         for bucket_name, bucket_df in buckets.items():
             if bucket_df.is_empty():
-                logger.info(f"No items for {faculty} -> {bucket_name}; skipping file creation")
+                logger.info(
+                    f"No items for {faculty} -> {bucket_name}; skipping file creation"
+                )
                 continue
 
             filename = {
@@ -211,7 +222,11 @@ async def export_faculty_workflow_files(
             # backup existing
             if target_path.exists():
                 try:
-                    moved = backup_existing_file(target_path=target_path, backups_dir=backups_dir, manifest={"faculty": faculty, "bucket": bucket_name})
+                    moved = backup_existing_file(
+                        target_path=target_path,
+                        backups_dir=backups_dir,
+                        manifest={"faculty": faculty, "bucket": bucket_name},
+                    )
                     logger.info(f"Backed up existing {target_path.name} -> {moved}")
                 except Exception as e:
                     logger.warning(f"Failed to backup existing file {target_path}: {e}")
@@ -220,7 +235,10 @@ async def export_faculty_workflow_files(
             try:
                 store_complete_data(settings=settings, file=target_path, data=bucket_df)
                 style_iter = finalize_sheet(
-                    settings=settings, file=File(str(target_path)), data=bucket_df, style_iter=style_iter
+                    settings=settings,
+                    file=File(str(target_path)),
+                    data=bucket_df,
+                    style_iter=style_iter,
                 )
                 logger.info(f"Wrote {len(bucket_df)} rows to {target_path}")
             except Exception as e:
@@ -230,7 +248,14 @@ async def export_faculty_workflow_files(
             # protect done.xlsx and set active sheet to Data Entry
             if bucket_name == "Done":
                 try:
-                    protect_workbook(target_path, protect_sheets=[settings.data_settings.complete_data_name, settings.data_settings.data_entry_name], active_sheet=settings.data_settings.data_entry_name)
+                    protect_workbook(
+                        target_path,
+                        protect_sheets=[
+                            settings.data_settings.complete_data_name,
+                            settings.data_settings.data_entry_name,
+                        ],
+                        active_sheet=settings.data_settings.data_entry_name,
+                    )
                     logger.info(f"Protected {target_path.name}")
                 except Exception as e:
                     logger.warning(f"Failed to protect workbook {target_path}: {e}")
