@@ -1,50 +1,54 @@
 # Easy Access Sheet Toolkit
-*March 2025*
+*September 2025*
 
 The Easy Access Sheet Toolkit is a comprehensive Python application with a built-in CLI designed to automate the processing, enrichment, and export of copyright data from university systems. It provides a complete pipeline for transforming raw copyright data into enriched, faculty-organized Excel sheets.
 
 ## Features
 
-- **Multi-stage Pipeline**: Modular processing pipeline with independent stages
-- **Data Enrichment**: Automatic enrichment with OSIRIS course and person data
-- **File Existence Verification**: TTL-based Canvas API file existence checking
-- **Bulk Operations**: Optimized database operations for performance
-- **Export Generation**: Multiple export formats (faculty sheets, overview, all items)
-- **Modern Architecture**: Async/await, dependency injection, comprehensive testing
+- Multi-stage Pipeline: Modular processing pipeline with independent stages (ingest, process, enrich, file-existence, export)
+- Data Enrichment: Automatic enrichment with OSIRIS course and person data using TTL-based freshness
+- File Existence Verification: TTL-based Canvas API file existence checking with rate limiting
+- Bulk Operations: Optimized database operations for performance using Tortoise ORM
+- Export Generation: Multiple export formats (faculty sheets, overview, all items) with conditional formatting
+- Backup & Restore: Automated backup of faculty sheets with configurable retention
+- Admin Tools: Failure inspection, retry mechanisms, and cleanup utilities
+- Modern Architecture: Async/await, dependency injection, comprehensive testing
+- Workflow Mode: Optional reactive workflow exports (new/to_check/checked sheets)
 
 ## Pipeline Stages
 
-The toolkit operates through several configurable pipeline stages:
+The toolkit's main processing function operates through several configurable pipeline stages:
 
 ### 1. Data Ingestion (`--ingest-only`)
 - Reads raw copyright data from SURF CopyRight exports
-- Processes data into standardized format
-- Handles duplicate detection and merging
-- Stores processed data in database
+- Processes data into standardized format using `copyright_item_from_dict`
+- Handles duplicate detection and merging via `merge_rules.py`
+- Stores processed data in SQLite database using Tortoise ORM
 
 ### 2. Data Processing (`--process-only`)
 - Applies business rules and transformations
-- Updates copyright item relationships
+- Updates copyright item relationships and faculty mappings
 - Performs data validation and cleanup
-- Prepares data for enrichment
+- Prepares data for enrichment with staged processing
 
 ### 3. Data Enrichment (`--enrich-only`)
-- Fetches course data from OSIRIS API
-- Retrieves person/contact information
-- Links courses to copyright items
-- TTL-based freshness policies
+- Fetches course data from OSIRIS API with concurrent requests
+- Retrieves person/contact information from people pages
+- Links courses to copyright items with bulk M2M operations
+- TTL-based freshness policies (configurable in settings.yaml)
 
 ### 4. File Existence Check (`--file-exists-only`)
-- Verifies file existence via Canvas API
-- TTL-based checking (configurable)
-- Rate-limited API calls
-- Bulk database updates
+- Verifies file existence via Canvas API with rate limiting
+- TTL-based checking to avoid unnecessary API calls
+- Bulk database updates for efficiency
+- Handles 404s and other API responses gracefully
 
 ### 5. Export Generation (`--export-only`)
-- Creates faculty-specific Excel sheets
+- Creates faculty-specific Excel sheets with data entry and complete data sheets
 - Generates overview and summary sheets
-- Applies formatting and styling
+- Applies conditional formatting and dropdowns from settings.yaml
 - Handles file uniqueness and versioning
+- Optional workflow mode: new/to_check/checked sheets for reactive processing
 
 ## Quick Start
 
@@ -54,139 +58,182 @@ The toolkit operates through several configurable pipeline stages:
 
 ### Installation
 
-1. **Install uv** (recommended):
+1. Install uv (recommended):
    ```bash
    # Windows PowerShell
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-   uv python install
    ```
 
-2. **Clone and setup**:
+2. Clone and setup:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/utsmok/ea-cli.git
    cd ea-cli
    uv sync
    ```
 
 ### Configuration
 
-1. **Settings File**: Copy and modify `settings.yaml`:
-   ```yaml
-   university_settings:
-     canvas_api_token: "your_canvas_token"
-     osiris_base_url: "https://osiris.utwente.nl"
+1. Settings File: The main configuration is in `settings.yaml`. Key sections include:
 
-   enrichment_settings:
-     course_ttl_days: 30
-     person_ttl_days: 30
-     file_exists_ttl_days: 30
-     file_exists_rate_limit_delay: 0.1
+   - Directories: Paths for input/output folders
+   - University: Faculty hierarchy, LMS details, OSIRIS URLs
+   - Data Settings: Column orders, new fields, dropdown options
+   - Backup: Auto-backup settings and retention
+   - Files: Script data and enrichment file paths
+
+   Example configuration:
+   ```yaml
+   university:
+     name: University of Twente
+     abbreviation: UT
+     lms:
+       name: Canvas
+       url: https://canvas.utwente.nl
+     course_catalogue:
+       name: OSIRIS
+       query_url: https://utwente.osiris-student.nl/student/osiris/owc/cursussen/
+     faculties:
+       - name: Faculty of Behavioural, Management and Social Sciences
+         abbreviation: BMS
+         programmes: [...]
 
    data_settings:
-     raw_data_col_order: [...]
+     data_entry_cols:
+       - name: "workflow_status"
+         dropdown_options: '"ToDo,Done,InProgress"'
+         default_val: "ToDo"
+       - name: "manual_classification"
+         dropdown_options: '"open access,eigen materiaal - powerpoint,..."'
+     final_data_col_order: [material_id, is_duplicate, ...]
    ```
 
-2. **Add Copyright Data**: Place SURF CopyRight exports in `raw_copyright_data/`
+2. Add Copyright Data: Place SURF CopyRight exports in `raw_copyright_data/`
 
 ### Running the Pipeline
 
-**Full pipeline** (default):
+Full pipeline (default):
 ```bash
-uv run run.py
+uv run run.py process
 ```
 
-**Individual stages**:
+Individual stages:
 ```bash
 # Only ingest new data
-uv run run.py --ingest-only
+uv run run.py process --ingest-only
 
 # Only process existing data
-uv run run.py --process-only
+uv run run.py process --process-only
 
 # Only enrich with external data
-uv run run.py --enrich-only
+uv run run.py process --enrich-only
 
 # Only check file existence
-uv run run.py --file-exists-only
+uv run run.py process --file-exists-only
 
 # Only generate exports
-uv run run.py --export-only
+uv run run.py process --export-only
 ```
 
-**Skip stages**:
+Other commands:
 ```bash
-# Skip file existence checks
-uv run run.py --no-file-exists
+# Run dashboard
+uv run run.py dashboard --port 8000
 
-# Skip enrichment
-uv run run.py --no-enrich
+# Export for single faculty
+uv run run.py export --single-faculty BMS
+
+# Create backup
+uv run run.py backup create
+
+# Restore backup
+uv run run.py backup restore --restore-dir latest
+
+# Inspect processing failures
+uv run run.py admin inspect-failures
+
+# Retry failed items
+uv run run.py admin retry-failures --material-id 12345
 ```
 
 ## Architecture
 
 ### Core Components
 
-- **`pipeline.py`**: Main orchestrator coordinating all stages
-- **`db/`**: Database models and operations
-  - `models.py`: Tortoise ORM models
-  - `update.py`: Data processing and merging logic
-  - `relations.py`: M2M relationship management
+- `pipeline.py`: Main orchestrator coordinating all stages with async entrypoints
+- `db/`: Database models and operations
+  - `models.py`: Tortoise ORM models (CopyrightItem, CourseData, PersonData, etc.)
+  - `ingest.py`: Raw data ingestion and processing
+  - `update.py`: Data processing and merging logic with staged failure handling
+  - `relations.py`: M2M relationship management with bulk operations
   - `retrieve.py`: Optimized data retrieval with aggregation
-- **`enrichment/`**: External data fetching
-  - `osiris.py`: Course and person data APIs
-- **`maintenance/`**: Ongoing data maintenance
-  - `file_existence.py`: Canvas API file verification
-- **`sheets/`**: Export generation
+- `enrichment/`: External data fetching
+  - `osiris.py`: Course and person data APIs with concurrent fetching
+- `maintenance/`: Ongoing data maintenance
+  - `file_existence.py`: Canvas API file verification with TTL
+- `sheets/`: Export generation
   - `export.py`: Excel sheet creation and formatting
+  - `backup.py`: Backup and restore operations
+  - `sheet.py`: Sheet utilities and conditional formatting
+- `settings.py`: Configuration management with Settings dataclass
+- `utils.py`: Safe parsing helpers and utilities
 
 ### Database Schema
 
 Key entities:
-- **CopyrightItem**: Core copyright data
-- **CourseData**: Course information from OSIRIS
-- **PersonData**: Contact information
-- **Faculty**: Organizational hierarchy
-- **OrganizationData**: Department affiliations
+- CopyrightItem: Core copyright data with filehash, scan dates
+- CourseData: Course information from OSIRIS
+- PersonData: Contact information
+- Faculty: Organizational hierarchy
+- StagedProcessingFailure: Failure tracking for retries
+- StagedCopyrightItem/StagedFacultyUpdate: Staging tables
 
 ### Performance Optimizations
 
-- **Bulk Operations**: Raw SQL for efficient batch updates
-- **Memory Management**: Streaming/chunked data processing
-- **Rate Limiting**: Configurable delays for API calls
-- **Connection Pooling**: Optimized database connections
-- **Async Processing**: Concurrent API calls with semaphores
+- Bulk Operations: Raw SQL for efficient batch updates
+- Memory Management: Streaming/chunked data processing
+- Rate Limiting: Configurable delays for API calls
+- Connection Pooling: Optimized Tortoise connections
+- Async Processing: Concurrent API calls with semaphores
+- TTL Caching: Avoid redundant API calls
 
 ## Configuration Options
 
-### CLI Flags
+See `settings.yaml` for full configuration options.
+Some example snippets:
 
-| Flag | Description |
-|------|-------------|
-| `--ingest-only` | Run only data ingestion stage |
-| `--process-only` | Run only data processing stage |
-| `--enrich-only` | Run only data enrichment stage |
-| `--export-only` | Run only export generation stage |
-| `--file-exists-only` | Run only file existence verification |
-| `--no-enrich` | Skip data enrichment stage |
-| `--no-file-exists` | Skip file existence verification |
-| `--force` | Force reprocessing of all data |
+Directory Settings:
 
-### Settings Configuration
-
-**Enrichment Settings** (`settings.yaml`):
 ```yaml
-enrichment_settings:
-  course_ttl_days: 30          # Days before course data is considered stale
-  person_ttl_days: 30          # Days before person data is considered stale
-  file_exists_ttl_days: 30     # Days before file existence is rechecked
-  file_exists_rate_limit_delay: 0.1  # Seconds between API calls
+directories:
+  raw_copyright_data: raw_copyright_data
+  faculties_dir: faculty_sheets
+  all_items_dir: cip_sheets
+  script_data: script_data
+  pdf_downloads: pdf_downloads
 ```
 
-**Data Settings**:
+University Settings:
+
+```yaml
+university:
+  faculties:
+    - name: Faculty of Behavioural, Management and Social Sciences
+      abbreviation: BMS
+      programmes:
+        - abbreviation: B-COM
+          name: Communication Science
+```
+
+Data Settings:
+
 ```yaml
 data_settings:
-  raw_data_col_order: [...]     # Column ordering for exports
-  faculty_hierarchy: {...}      # Faculty/program hierarchy
+  data_entry_cols:
+    - name: "workflow_status"
+      dropdown_options: '"ToDo,Done,InProgress"'
+    - name: "manual_classification_v2"
+      dropdown_options: 'ENUM:ClassificationV2'
+  final_data_col_order: [material_id, is_duplicate, ...]
 ```
 
 ## Development
@@ -195,18 +242,36 @@ data_settings:
 ```
 ea-cli/
 ├── easy_access/
-│   ├── db/                    # Database operations
-│   ├── enrichment/           # External data fetching
-│   ├── maintenance/          # Ongoing maintenance tasks
-│   ├── sheets/              # Export generation
+│   ├── main.py              # module entry point
+│   ├── pipeline.py          # Main pipeline orchestrator
 │   ├── settings.py          # Configuration management
-│   ├── pipeline.py          # Main orchestration
-│   └── main.py              # CLI entry point
+│   ├── utils.py             # Safe parsing helpers
+│   ├── merge_rules.py       # Data merging logic
+│   ├── read_data_and_update.py # Legacy data reading
+│   ├── db/
+│   │   ├── models.py        # Tortoise ORM models
+│   │   ├── ingest.py        # Data ingestion
+│   │   ├── update.py        # Data processing
+│   │   ├── relations.py     # M2M relationships
+│   │   └── retrieve.py      # Data retrieval
+│   ├── enrichment/
+│   │   └── osiris.py        # OSIRIS API client
+│   ├── maintenance/
+│   │   └── file_existence.py # File existence checks
+│   └── sheets/
+│       ├── export.py        # Export generation
+│       ├── backup.py        # Backup operations
+│       └── sheet.py         # Sheet utilities
 ├── tests/                   # Unit and integration tests
 ├── raw_copyright_data/      # Input data directory
-├── cip_sheets/             # Generated faculty sheets
-├── pdf_downloads/          # Downloaded PDF files
-└── settings.yaml           # Configuration file
+├── cip_sheets/              # Generated faculty sheets
+├── faculty_sheets/          # Faculty-specific exports
+├── pdf_downloads/           # Downloaded PDF files
+├── script_data/             # Intermediate data files
+├── settings.yaml            # Configuration file
+├── pyproject.toml           # Project dependencies
+├── uv.lock                  # Lock file
+└── run.py                   # CLI runner, main entry point
 ```
 
 ### Testing
@@ -219,52 +284,53 @@ uv run pytest
 Run specific test categories:
 ```bash
 # Unit tests only
-uv run pytest tests/test_*.py -v
+uv run pytest tests/ -k "test_" -v
 
 # Integration tests
-uv run pytest tests/test_integration_*.py -v
+uv run pytest tests/ -k "integration" -v
 
 # With coverage
 uv run pytest --cov=easy_access --cov-report=html
 ```
 
+### Branch Information
+- Current Branch: `main` (merged from `new-dataflow` after large refactor)
+- Working Branch: Create feature branches from `main`
+- Changelog: See `.github/changelog.md` for recent updates
+
+### Known Issues & Under Development
+
+- Type Hints: Complete coverage across all files (currently inconsistent)
+- Documentation: Add comprehensive docstrings to public functions
+- File Size: Decompose large files (>800 lines): `settings.py`, `models.py`, `sheet.py`
+
+- Testing: Expand test coverage, especially integration tests
+- Performance: Monitor and optimize for large datasets
+- Error Handling: Standardize exception handling patterns
+- Conditional Formatting: Make configurable per column via settings.yaml
+- New Fields: Implement `filehash`, `last_scan_date_university`, `last_scan_date_course`
+- Reactive Workflow: Implement new/to_check/checked sheet states
+- Backup Integration: Add pre/post pipeline backup stages
+
+- Docs: Update README with architecture diagram
+- Maintenance: Add teardown leak detection for tests
+
+#### Completed
+- Pipeline refactor with async entrypoints
+- Export read-only by default with `--disable-writes`
+- Staged processing with failure persistence
+- OSIRIS enrichment with TTL and concurrency
+- File existence TTL-based checks
+- Backup and restore functionality
+- Admin tools for failure management
+
 ### Contributing
 
-1. **Branching**: Create feature branches from `new-dataflow`
-2. **Testing**: Add tests for new functionality
-3. **Documentation**: Update README for new features
-4. **Code Style**: Follow existing patterns and add type hints
+1. Branching: Create feature branches from `main`
+2. Testing: Add tests for new functionality
+3. Documentation: Update README and `.github/changelog.md`
+4. Code Style: Follow existing patterns, add type hints
 
-## Troubleshooting
-
-### Common Issues
-
-1. **API Token Missing**: Ensure `canvas_api_token` is set in `settings.yaml`
-2. **Database Errors**: Check database file permissions and disk space
-3. **Memory Issues**: Reduce batch sizes in settings for large datasets
-4. **Rate Limiting**: Increase `file_exists_rate_limit_delay` if hitting API limits
-
-### Logs
-
-Check logs in the console output or enable debug logging:
-```bash
-uv run run.py --verbose
-```
-
-### Performance Tuning
-
-For large datasets, adjust these settings:
-```yaml
-# Reduce memory usage
-batch_size: 500
-
-# Reduce API load
-max_concurrent: 25
-file_exists_rate_limit_delay: 0.2
-
-# Database optimization
-pool_size: 10
-```
 
 ## License
 
