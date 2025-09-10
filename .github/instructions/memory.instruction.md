@@ -55,7 +55,6 @@ External review anchors (2025-09-03):
 - Pending enrichment TTL tests, raw SQL relations path test, atomic Excel write, bulk_create optimization.
 - Backup module integration: add pre/post stages to pipeline for file backup/restore.
  - 2025-09-10: `easy_access/sheets/backup.py` added with timestamped move and manifest helpers; pipeline integration is pending.
- - 2025-09-10: `easy_access/sheets/backup.py` added with timestamped move and manifest helpers; pipeline integration is pending.
  - 2025-09-10: Added `export_faculty_workflow_files` in `easy_access/sheets/export.py` and wired an opt-in CLI flag `--export-workflow` that enables per-faculty workflow exports while keeping the legacy exporter as default. Changes committed on branch `export-workflow`.
 - Legacy cleanup: remove globals from settings.py **COMPLETED** - global constants refactored to Settings properties. Note: the export stage still contained a DB update call; it has been changed to be read-only by default (gated by `disable_writes`), so documentation and code are now aligned.
 
