@@ -163,7 +163,6 @@ class DataPipeline:
         # depending on the runtime flag in ea_settings. Previously we always ran
         # the legacy exporter and then optionally the workflow exporter which
         # resulted in duplicate/undesired outputs. Choose one path here.
-        print(self.ea_settings)
         if self.ea_settings and getattr(self.ea_settings, "export_workflow", False):
             # gather faculty data and call the workflow writer
             from easy_access.sheets.export import gather_faculty_data
