@@ -454,9 +454,6 @@ async def enrich_async(settings: Settings) -> None:
         logger.info(f"Will fetch {len(courses_to_fetch)} courses")
 
         # Fetch course data concurrently
-        if len(courses_to_fetch) > 5:
-            print("Limiting to first 5 courses for testing!!!")
-            courses_to_fetch = set(list(courses_to_fetch)[:5])
         courses_data = await fetch_and_parse_courses(settings, courses_to_fetch)
 
         if not courses_data:
