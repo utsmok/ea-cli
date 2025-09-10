@@ -39,6 +39,9 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
 
     # Get all data from DB
     all_data = retrieve_full_data(settings=settings)
+    # debug: print head for course_contacts_emails
+    print("in all_data")
+    print(all_data.select(pl.col("course_contacts_emails")).head(5))
 
     if all_data.is_empty():
         logger.warning("No data found for export.")
@@ -64,7 +67,8 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
         if not faculty_df.is_empty():
             faculty_data[faculty] = faculty_df
             logger.info(f"Faculty {faculty}: {faculty_df.shape[0]} items")
-
+            print(f"in faculty {faculty} df")
+            print(faculty_df.select(pl.col("course_contacts_emails")).head(5))
     logger.info(f"Gathered data for {len(faculty_data)} faculties")
     return faculty_data
 
@@ -162,13 +166,6 @@ async def export_faculty_workflow_files(
     """
     logger.info("Exporting faculty workflow files (inbox/in_progress/done)...")
 
-    canonical_map = {
-        "todo": "ToDo",
-        "inprogress": "InProgress",
-        "in_progress": "InProgress",
-        "done": "Done",
-    }
-
     for faculty, data in faculty_data.items():
         if data.is_empty():
             continue
@@ -177,39 +174,33 @@ async def export_faculty_workflow_files(
         faculty_dir.full.mkdir(parents=True, exist_ok=True)
 
         # small backups dir inside faculty dir
-        backups_dir = faculty_dir.full / "backups"
+        backups_dir_base = (
+            settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / "v2_style_backups"
+        )
+        if not backups_dir_base.exists():
+            backups_dir_base.mkdir(parents=True, exist_ok=True)
 
+        backups_dir = backups_dir_base / "backups"
+        if not backups_dir.exists():
+            backups_dir.mkdir(parents=True, exist_ok=True)
+
+            # debug: print head for columns with 'contacts' in name
+        print(data.select(pl.col("course_contacts_emails")).head(5))
         # normalize workflow_status and bucket
         df = data.with_columns(
             pl.col("workflow_status").fill_null("ToDo").cast(pl.Utf8)
         )
 
         buckets: dict[str, pl.DataFrame] = {
-            "ToDo": pl.DataFrame(),
-            "InProgress": pl.DataFrame(),
-            "Done": pl.DataFrame(),
+            "ToDo": df.filter(pl.col("workflow_status").is_in(["ToDo", "todo"])),
+            "InProgress": df.filter(
+                pl.col("workflow_status").is_in(
+                    ["InProgress", "inprogress", "in_progress"]
+                )
+            ),
+            "Done": df.filter(pl.col("workflow_status").is_in(["Done", "done"])),
         }
-        # instead of iterating over rows instead groupby in df!!
-        for row in df.to_dicts():
-            try:
-                mat_id = row.get("material_id")
-                if not isinstance(mat_id, int):
-                    continue
-                ws_raw = (row.get("workflow_status") or "").strip()
-                key = canonical_map.get(ws_raw.replace(" ", "").lower(), None)
-                if not key:
-                    # unknown values -> ToDo by default
-                    key = "ToDo"
-                    logger.warning(
-                        f"Unknown workflow_status '{ws_raw}' for material_id={row.get('material_id')} - defaulting to ToDo"
-                    )
-                if buckets[key].is_empty():
-                    buckets[key] = pl.DataFrame([row])
-                else:
-                    buckets[key] = pl.concat([buckets[key], pl.DataFrame([row])])
-            except Exception as e:
-                logger.error(f"Error processing row {row}: {e}")
-                continue
+
         for bucket_name, bucket_df in buckets.items():
             if bucket_df.is_empty():
                 logger.info(
