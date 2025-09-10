@@ -242,7 +242,7 @@ async def export_faculty_workflow_files(
                 continue
 
             # protect done.xlsx and set active sheet to Data Entry
-            if bucket_name in ["Done", "Overview"]:
+            if bucket_name in ["done", "overview"]:
                 try:
                     protect_workbook(
                         target_path,
