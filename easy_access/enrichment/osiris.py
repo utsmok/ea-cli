@@ -118,7 +118,7 @@ async def select_missing_or_stale_courses(
         if m.modified_at is None:
             retry_missing.add(m.cursuscode)
             continue
-        age_days = (now - m.modified_at.astimezone(datetime.now().tzinfo)).days
+        age_days = (now - m.modified_at.astimezone(now.tzinfo)).days
         if age_days > ttl_days:
             retry_missing.add(m.cursuscode)
 
