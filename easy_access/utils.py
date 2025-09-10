@@ -423,7 +423,12 @@ class Directory:
         return self.full.is_dir()
 
     def create(self) -> None:
-        """Creates the directory, including any necessary parent directories."""
+        """
+        Creates the directory, including any necessary parent directories.
+
+        If the directory already exists, no exception is raised and the method
+        silently succeeds. This method is safe to call multiple times.
+        """
         with contextlib.suppress(FileExistsError):
             self.full.mkdir(parents=True, exist_ok=True)  # exist_ok=True is safer
 
