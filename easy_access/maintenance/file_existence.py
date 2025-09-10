@@ -86,7 +86,7 @@ async def select_items_needing_file_check(
                         "url": url,
                     }
                 )
-        if limit and ((len(res) >= limit) | len(res) + offset >= limit):
+        if limit and ((len(res) >= limit) or len(res) + offset >= limit):
             return res[:limit]
         if len(res) >= batch_size:
             offset += batch_size
