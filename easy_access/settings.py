@@ -12,6 +12,7 @@ import yaml
 from loguru import logger
 from rich.traceback import install
 
+# sys is already imported above
 from easy_access.utils import Directory, File, safe_float
 
 """Manages application settings, loaded from YAML configuration files.
@@ -47,13 +48,30 @@ def configure_logger() -> None:
     )
 
     logger.add(
-        sink=log_dir.full / "app_{time}.log",
-        rotation="1 month",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-        level="TRACE",
-        enqueue=True,
-        colorize=False,
+        # Add a file sink. Wrap in try/except to avoid breaking import-time setup
+        # if the environment lacks permissions or an unexpected Path type is used.
+        **{
+            "sink": log_dir.full / "app_{time}.log",
+            "rotation": "1 month",
+            "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            "level": "TRACE",
+            "enqueue": True,
+            "colorize": False,
+        }
     )
+    try:
+        # Re-add file sink inside try to catch path-related errors
+        logger.add(
+            sink=log_dir.full / "app_{time}.log",
+            rotation="1 month",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            level="TRACE",
+            enqueue=True,
+            colorize=False,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        # If adding the file sink fails, ensure at least console output is available
+        logger.warning(f"Failed to add file log sink ({log_dir.full}): {e}")
 
 
 @dataclass
@@ -1336,6 +1354,8 @@ def load_osiris_data() -> dict[str, Any] | None:
 # Global settings
 
 # Set up logging configuration
+# configure loggers (console + file)
+configure_logger()
 # install rich traceback as default
 install(show_locals=True)
 

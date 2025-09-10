@@ -4,14 +4,18 @@ from enum import Enum
 """
 Mapping notes:
 
-- Lange overname zou moeten mappen naar --> Ja, anders volgens SURF, denk niet dat dat klopt!
-- V1 open access kan ook publiek domein zijn in v2
-- studentwerk is in v1 niet apart, in v2 wel -- vaak als eigen werk gemarkeerd
+- `Lange overname` zou moeten mappen naar --> `Ja, anders` volgens SURF, denk niet dat dat klopt!
+- V1 `open access` kan ook publiek domein zijn in v2
+- `studentwerk` is in v1 geen specifieke categorie, in v2 wel -- vaak als `eigen werk` gemarkeerd
 
 """
 
 
 class Classification(Enum):
+    """
+    Classification v1 system -- will be replaced by v2 system once we migrate fully.
+    """
+
     OPEN_ACCESS = "open access"
     KORTE_OVERNAME = "korte overname"
     MIDDELLANGE_OVERNAME = "middellange overname"
