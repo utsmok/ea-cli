@@ -197,28 +197,6 @@ class DataEntrySheet:
     def add_data(self, data: pl.DataFrame) -> None:
         self.max_row = data.shape[0]
         colnum = 0
-        if "manual_classification" in data.columns:
-            logger.warning(
-                "Testing new methods for adding v2 classification fields in the db, disabled functionality in the sheet"
-            )
-            if False:
-                # select only rows that do not yet have v2 classification fields
-                data_to_update = data.filter(
-                    pl.col("v2_manual_classification").is_null()
-                )
-                data_to_update = add_v2_classification(data_to_update)
-                data = data.join(
-                    data_to_update.select(
-                        [
-                            "material_id",
-                            "v2_manual_classification",
-                            "v2_lengte",
-                            "v2_overnamestatus",
-                        ]
-                    ),
-                    on="material_id",
-                    how="left",
-                )
         for col in self.cols:
             colnum += 1
             col_name = col.new_name if col.new_name else col.name

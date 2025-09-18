@@ -17,9 +17,10 @@ from collections import defaultdict
 from pathlib import Path
 
 import polars as pl
+from loguru import logger
 from rich import print
 
-from easy_access.db.base import ensure_db_inited
+from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.enums import (
     Classification,
     Filetype,
@@ -67,7 +68,7 @@ def import_v1_sheets(
     Reads in data from the v1 sheets from the given path, and returns a dict structure with dfs for each of the found sheets.
     """
     all_files = list(path.glob("*.xlsx"))
-    print(f"Found {len(all_files)} excel files in {path}")
+    logger.info(f"Found {len(all_files)} excel files in {path}")
     sheets = {}
     weekly = 0
     for file in all_files:
@@ -84,7 +85,7 @@ def import_v1_sheets(
 
         else:
             weekly += 1
-    print(f"Found {weekly} weekly sheets in total.")
+    logger.info(f"Found {weekly} weekly sheets in total.")
 
     return sheets
 
@@ -96,6 +97,72 @@ def clean_and_cast_cols(
     Cleans and casts columns in the dataframe to appropriate types.
     Handles conflict columns by prioritizing non-null values from the first column.
     """
+
+    # first we normalize col values for key col manual_classification
+
+    man_class_cols: list[str] = []
+    if "manual_classification" in df.columns:
+        man_class_cols.append("manual_classification")
+    if "manual_classification_entry" in df.columns:
+        man_class_cols.append("manual_classification_entry")
+
+    for col in man_class_cols:
+        # all values in these cols should be a valid value in the Classification enum.
+        # all lowercased strings.
+        # Other values should be translated to the correct value.
+        # Possible values:
+        # - Classification.[CATEGORY] (so the enum class+key as string, e.g. "Classification.ONBEKEND")
+        # - anders and/or Classification.ANDERS: do not exist in this enum, translate to "onbekend"
+
+        ALLOWED_VALUES = {c.value.lower(): c.value for c in Classification}
+        TRANSLATIONS = {
+            "anders": "onbekend",
+            "classification.anders": "onbekend",
+            "to be determined": "onbekend",
+            "eigen materiaal powerpoint": "eigen materiaal - powerpoint",
+            "eigen materiaal overig": "eigen materiaal - overig",
+            "deleted": "onbekend",
+            "removed?": "onbekend",
+            "remove": "onbekend",
+            "error": "onbekend",
+            "overig": "onbekend",
+            "publiek domein": "open access",
+            "eigen werk - overig": "eigen materiaal - overig",
+            "eigen material - overig": "eigen materiaal - overig",
+            "removed": "onbekend",
+            "eigen werk powerpoint": "eigen materiaal - powerpoint",
+            "eigen werk overig": "eigen materiaal - overig",
+            "empty": "onbekend",
+            "unknown-removed": "onbekend",
+            "software manual says it is licensed to the ut but on the side it says only for one computer system": "onbekend",
+            "unknown - removed": "onbekend",
+            "public domain": "open access",
+            "unknown - deleted": "onbekend",
+            "done": "onbekend",
+        }
+
+        TRANSLATIONS.update(
+            {"classification." + c.name.lower(): c.value for c in Classification}
+        )
+
+        # first strip excess whitespace and lowercase
+        df = df.with_columns(
+            pl.col(col).str.strip_chars().str.to_lowercase().alias(col)
+        )
+
+        # use the translation dict to map values
+        df = df.with_columns(
+            pl.col(col).replace(TRANSLATIONS, default="onbekend").alias(col)
+        )
+
+        # check if any values are not in the allowed values
+        values = (df[col]).to_list()
+        invalid_values = {
+            v for v in values if v is not None and v not in ALLOWED_VALUES
+        }
+        if invalid_values:
+            logger.warning(f"Invalid values in {col}: {invalid_values}")
+
     for col_entry, col_base in conflict_cols:
         if col_base not in df.columns:
             df = df.rename({col_entry: col_base})
@@ -189,7 +256,7 @@ def clean_and_cast_cols(
                     pl.col(col).str.strptime(dtype, format=format, strict=False)
                 )
             except Exception as e:
-                print(f"Error parsing datetime column {col}: {e}")
+                logger.error(f"Error parsing datetime column {col}: {e}")
         if col in df.columns and dtype in [pl.Date]:
             if df[col].dtype == pl.Date:
                 continue
@@ -203,7 +270,7 @@ def clean_and_cast_cols(
                     pl.col(col).str.to_date(strict=False, format=format)
                 )
             except Exception as e:
-                print(f"Error parsing date column {col}: {e}")
+                logger.error(f"Error parsing date column {col}: {e}")
     return df
 
 
@@ -235,7 +302,7 @@ def process_v1_sheet(filename: str, dfs: dict[str, pl.DataFrame]) -> pl.DataFram
             entry_df, on="material_id", how="inner", suffix="_entry"
         )
     except Exception as e:
-        print(f"[{filename}] Error merging dataframes: {e}")
+        logger.error(f"[{filename}] Error merging dataframes: {e}")
         return pl.DataFrame()
 
     # Col selection
@@ -276,7 +343,7 @@ def process_v1_sheet(filename: str, dfs: dict[str, pl.DataFrame]) -> pl.DataFram
     combined_df = clean_and_cast_cols(combined_df, conflict_cols)
 
     if details:
-        print(f"Details for {filename}:")
+        logger.info(f"Details for {filename}:")
         print_details(combined_df)
     return combined_df
 
@@ -318,7 +385,7 @@ def merge_all_sheets(
                     df, on="material_id", how="outer", suffix="_entry"
                 )
             except Exception as e:
-                print(f"Error merging {filename}: {e}")
+                logger.error(f"Error merging {filename}: {e}")
                 continue
             try:
                 conflict_cols = [
@@ -328,7 +395,7 @@ def merge_all_sheets(
                 ]
                 main_df = clean_and_cast_cols(main_df, conflict_cols)
             except Exception as e:
-                print(f"Error cleaning columns in {filename}: {e}")
+                logger.error(f"Error cleaning columns in {filename}: {e}")
 
     print_details(main_df)
     return main_df
@@ -410,7 +477,7 @@ async def match_v1_to_copyright_items(
         f"Matched {len(matched_items)} matches. {len(unmatched_v1_items)} v1 items have no corresponding match. {len(unmatched_current_items)} current items have no corresponding v1 item."
     )
     print(
-        f"So {(1 - (len(unmatched_current_items) / len(current_items))) * 100:.2f} % of current items have a corresponding v1 item."
+        f"So {(1 - (len(unmatched_current_items) / (len(current_items) or 1))) * 100:.2f} % of current items have a corresponding v1 item."
     )
     updated_manual_classifications = 0
     updated_remarks = 0
@@ -436,6 +503,32 @@ async def match_v1_to_copyright_items(
     print(
         f"Matches by tier: {dict((tier, sum(1 for _, _, t in matched_items if t == tier)) for tier in compare_fields)}"
     )
+
+
+async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
+    """
+    given a base directory with subdirectories for each faculty containing v1 sheets,
+    ingest all data into the database.
+    """
+
+    individual_results = {}
+    processed_results = {}
+    final_results: dict[str, pl.DataFrame] = {}
+    for subdir in base_dir.iterdir():
+        if subdir.is_dir():
+            logger.info(f"Processing faculty directory: {subdir.name}")
+
+            result = import_v1_sheets(subdir)
+            individual_results[subdir.name] = result
+            final = process_v1_sheets(result)
+            processed_results[subdir.name] = final
+            main = merge_all_sheets(final)
+            final_results[subdir.name] = main
+
+    await ensure_db_inited(settings)
+    for faculty, df in final_results.items():
+        await ingest_v1_items(df)
+    await close_connections()
 
 
 #

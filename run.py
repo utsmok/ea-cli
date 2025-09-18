@@ -15,11 +15,20 @@ quickstart:
 3. you'll probably see a lot of error messages, try to fix them and run again! :)
 """
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from loguru import logger
+
+from easy_access.db.base import close_connections
+from easy_access.db.update import (
+    map_v1_to_v2_classifications,
+    update_workflow_status_from_db,
+)
+from easy_access.maintenance.v1_items import match_v1_to_copyright_items
+from easy_access.settings import Settings
 
 # Compatibility shim: some combinations of Typer and Click/Rich have a
 # small signature mismatch where Typer's rich help calls
@@ -270,6 +279,32 @@ def process_data(
         tool.run_export()
 
     logger.success("Processing done!")
+    typer.Exit()
+
+
+@app.command(name="update-from-v1")
+def update_from_v1(
+    path: Annotated[
+        Path, typer.Option(help="Path to the dir containing the v1 faculty sheets.")
+    ] = Path("faculty_sheets/"),
+) -> None:
+    """Updates the database from Easy Access V1 faculty sheets, focusing on ingesting the old manual classifications."""
+
+    from easy_access.maintenance.v1_items import ingest_v1_data
+
+    async def run_ingest_pipeline(settings: Settings, path: Path):
+        await ingest_v1_data(settings, path)
+        await match_v1_to_copyright_items(settings)
+        await map_v1_to_v2_classifications(settings)
+        await update_workflow_status_from_db(settings)
+        await close_connections()
+
+    settings = Settings()
+    logger.info(
+        f"Running v1 to v2 update pipeline on sheets in: {path.resolve()}, {type(path)}"
+    )
+    asyncio.run(run_ingest_pipeline(settings, path))
+    logger.success("v1 to v2 update pipeline completed.")
     typer.Exit()
 
 
