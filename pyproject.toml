@@ -47,6 +47,7 @@ pdf = [
     "xxhash",
     "kreuzberg[paddleocr,document-classification,langdetect,crypto,entity-extraction]",
     "paddlepaddle-gpu",
+    "textacy>=0.13.0",
 ]
 
 

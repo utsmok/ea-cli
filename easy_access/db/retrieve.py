@@ -735,3 +735,93 @@ async def retrieve_tortoise_copyright_items(
         items = await CopyrightItem.filter(material_id__in=material_ids).all()
     await Tortoise.close_connections()
     return items
+
+
+async def retrieve_pdfs(
+    settings: Settings,
+    filter: dict[str, Any] | None = None,
+    only_successful_extracts=False,
+    only_attempted_extracts=False,
+    prefetch_copyright_item=False,
+) -> list[PDF]:
+    """
+    Retrieves PDF records from the database including all directly related data
+    from PDFText, PDFCanvasMetadata, and Entities.
+
+    Optionally accepts a filter dictionary to filter the PDFs. Recommended to use the prebuilt
+    functions like retrieve_pdfs_by_material_id() and retrieve_pdfs_by_filename() etc instead of
+    calling this function directly -- see below.
+
+    Args:
+        settings: The application settings.
+        filter: An optional dictionary of filter conditions. Keys are field names, values are the values to filter by.
+        only_successful_extracts: If True, only PDFs with successful text extraction are returned.
+        only_attempted_extracts: If True, only PDFs where text extraction was attempted (regardless of success).
+        prefetch_copyright_item: If True, prefetch the related copyright item for each PDF.
+    """
+
+    if not settings:
+        raise ValueError("Settings must be provided to retrieve_pdfs")
+    await ensure_db_inited(settings)
+
+    prefetch_list = ["canvas_metadata", "extracted_text", "extracted_entities"]
+    if prefetch_copyright_item:
+        prefetch_list.append("copyright_item")
+
+    query = PDF.all().prefetch_related(*prefetch_list)
+
+    filter_obj = []
+    if filter:
+        for field, value in filter.items():
+            if isinstance(value, list) and value:
+                filter_obj.append(Q(kwargs={f"{field}__in": value}))
+            elif value is not None:
+                filter_obj.append(Q(kwargs={field: value}))
+
+    if only_successful_extracts:
+        filter_obj.append(Q(extraction_successful=True))
+    if only_attempted_extracts:
+        filter_obj.append(Q(extraction_attempted=True))
+
+    if filter_obj:
+        query = query.filter(*filter_obj)
+
+    pdfs = await query
+    await Tortoise.close_connections()
+    return pdfs
+
+
+async def retrieve_pdfs_by_material_id(
+    settings: Settings, material_ids: list[int] | int
+) -> list[PDF]:
+    """
+    Retrieves PDF records by material IDs including all directly related data
+    from PDFText, PDFCanvasMetadata, and Entities.
+
+    Args:
+        settings: The application settings.
+        material_ids: A list of material IDs or a single material ID to retrieve PDFs for.
+    Returns:
+        A list of PDF instances.
+    """
+    if not isinstance(material_ids, Iterable):
+        material_ids = [material_ids]  # Convert to list if not already
+    return await retrieve_pdfs(settings=settings, filter={"material_id": material_ids})
+
+
+async def retrieve_pdfs_by_filename(
+    settings: Settings, filenames: list[str] | str
+) -> list[PDF]:
+    """
+    Retrieves PDF records by filenames including all directly related data
+    from PDFText, PDFCanvasMetadata, and Entities.
+
+    Args:
+        settings: The application settings.
+        filenames: A list of filenames or a single filename to retrieve PDFs for.
+    Returns:
+        A list of PDF instances.
+    """
+    if not isinstance(filenames, Iterable):
+        filenames = [filenames]  # Convert to list if not already
+    return await retrieve_pdfs(settings=settings, filter={"filename": filenames})

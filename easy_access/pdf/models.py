@@ -11,11 +11,10 @@ class Entity:
 
     text: str  # the actual text of the entity
     label: str  # the label/type of the entity
-    entity_name: str  # the actual name of the entity that was matched with this text,
-    start_char: int  # start char index (inclusive)
-    end_char: int  # end char index (exclusive)
+    entity_name: str  # the actual name of the entity that was matched with this text, e.g. the input name for a person that was used to create the regex or something
+    start: int  # start char index (inclusive)
+    end: int  # end char index (exclusive)
     confidence: float  # confidence score of the extraction (0-1)
-    page: int  # page number where the entity was found in the PDF (1-based)
 
 
 @dataclass

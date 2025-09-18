@@ -411,50 +411,53 @@ class DataEntrySheet:
             from openpyxl.styles import Border, Font, PatternFill, Side
 
             #          'ERROR' style
-            # red color setting:
-            # subtle red fill, very dark red text, thin dark orange border
+            # yello color setting:
+            # subtle yellow fill,  dark yellow text, thin dark orange border
 
-            subtle_red_fill = PatternFill(
-                start_color="FFFFCCCB", end_color="FFFFCCCB", fill_type="solid"
+            subtle_yellow_fill = PatternFill(
+                start_color="#FFF8DC", end_color="#FFF8DC", fill_type="solid"
             )
-            dark_orange_side = Side(style="thin", color="FFCC6600")
+
+            dark_orange_side = Side(style="thin", color="#CC6600")
+
             dark_orange_border = Border(
                 left=dark_orange_side,
                 right=dark_orange_side,
                 top=dark_orange_side,
                 bottom=dark_orange_side,
             )
-            dark_red_font = Font(color="9C0006", bold=True)
+
+            dark_yellow_font = Font(color="#DAA520", bold=True)
 
             #          'file deleted style'
             # blue color setting:
             # light blue fill, dark blue text, thin dark blue border
             light_blue_fill = PatternFill(
-                start_color="FFCCFFFF", end_color="FFCCFFFF", fill_type="solid"
+                start_color="#CCFFFF", end_color="#CCFFFF", fill_type="solid"
             )
-            dark_blue_side = Side(style="thin", color="FF0000FF")
+            dark_blue_side = Side(style="thin", color="#0000FF")
             dark_blue_border = Border(
                 left=dark_blue_side,
                 right=dark_blue_side,
                 top=dark_blue_side,
                 bottom=dark_blue_side,
             )
-            dark_blue_font = Font(color="0000FF", bold=True)
+            dark_blue_font = Font(color="#0000FF", bold=True)
 
             # Create the conditional formatting rule
             rule_onbekend = CellIsRule(
                 operator="equal",
                 formula=['"onbekend"'],
-                fill=subtle_red_fill,
+                fill=subtle_yellow_fill,
                 border=dark_orange_border,
-                font=dark_red_font,
+                font=dark_yellow_font,
             )
             rule_todo = CellIsRule(
                 operator="equal",
                 formula=['"ToDo"'],
-                fill=subtle_red_fill,
+                fill=subtle_yellow_fill,
                 border=dark_orange_border,
-                font=dark_red_font,
+                font=dark_yellow_font,
             )
             rule_file_deleted = CellIsRule(
                 operator="equal",

@@ -17,7 +17,6 @@ from easy_access.db.enums import (
     Status,
     WorkflowStatus,
 )
-from easy_access.pdf.models import ExtractedEntities  # to avoid circular import
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import File
 
@@ -34,6 +33,62 @@ Department = Enum(
         for department in SETTINGS.university_settings.department_mapping
     },
 )
+
+
+class v1_CopyrightItem(Model, TimestampMixin):
+    """
+    Copyright item as imported from the v1 sheets (2024-2025).
+    """
+
+    material_id = fields.IntField(primary_key=True)
+    workflow_status = fields.CharEnumField(
+        enum_type=WorkflowStatus, max_length=255, default=WorkflowStatus.ToDo
+    )
+    retrieved_from_copyright_on = fields.DatetimeField(null=True)
+    url = fields.CharField(max_length=2048, null=True)
+    manual_classification = fields.CharField(max_length=2048, null=True, db_index=True)
+    remarks = fields.CharField(max_length=10000, null=True)
+    scope = fields.CharField(max_length=255, null=True)
+    faculty = fields.CharField(max_length=255, null=True)
+    ml_prediction = fields.CharEnumField(
+        enum_type=Classification, max_length=255, null=True
+    )
+    filename = fields.CharField(max_length=2048, null=True)
+    title = fields.CharField(max_length=2048, null=True)
+    filehash = fields.CharField(max_length=255, null=True)
+    owner = fields.CharField(max_length=2048, null=True)
+    period = fields.CharEnumField(enum_type=Period, max_length=255, null=True)
+    department = fields.CharField(
+        max_length=2048, db_index=True, null=True
+    )  # turn this into a relation w/ programmes later
+    course_code = fields.CharField(max_length=255, db_index=True, null=True)
+    course_name = fields.CharField(max_length=2048, db_index=True, null=True)
+    filetype = fields.CharEnumField(
+        enum_type=Filetype, max_length=255, default=Filetype.UNKNOWN
+    )
+    classification = fields.CharEnumField(
+        enum_type=Classification, max_length=255, default=Classification.LANGE_OVERNAME
+    )
+    manual_identifier = fields.CharField(max_length=2048, null=True)
+    auditor = fields.CharField(max_length=10000, null=True)
+    last_change = fields.DateField(null=True)
+    status = fields.CharEnumField(
+        enum_type=Status, max_length=255, default=Status.PUBLISHED, db_index=True
+    )
+    isbn = fields.CharField(max_length=255, null=True)
+    doi = fields.CharField(max_length=255, null=True)
+    in_collection = fields.BooleanField(null=True)
+    pagecount = fields.IntField(default=0)
+    wordcount = fields.IntField(default=0)
+    picturecount = fields.IntField(default=0)
+    author = fields.CharField(max_length=2048, null=True)
+    publisher = fields.CharField(max_length=2048, null=True)
+    reliability = fields.IntField(default=0)
+    pages_x_students = fields.IntField(default=0)
+    count_students_registered = fields.IntField(default=0)
+    cursuscodes = fields.CharField(
+        max_length=2048, null=True
+    )  # probably single course code(?)
 
 
 class CopyrightItem(Model, TimestampMixin):
@@ -376,10 +431,13 @@ class PDF(Model, TimestampMixin):
         "models.PDFText", related_name="pdf", null=True
     )
 
-    extracted_entities = fields.JSONField(null=True)
     keywords = fields.JSONField(
         null=True
     )  # list of keywords extracted from text w/ confidence as a dict with key = keyword, value = confidence
+
+    extracted_entities = fields.ManyToManyField(
+        "models.Entity", through="pdf_entity", related_name="parent_pdf"
+    )
 
     class Meta:
         table = "pdf_data"
@@ -387,16 +445,6 @@ class PDF(Model, TimestampMixin):
     @property
     def path(self) -> Path:
         return SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / self.current_file_name
-
-    @property
-    def entities(self) -> ExtractedEntities:
-        """
-        Parses the extracted_entities JSON field into an ExtractedEntities object, and returns that.
-        """
-        if self.extracted_entities:
-            return ExtractedEntities.from_json(self.extracted_entities)
-        else:
-            return ExtractedEntities(entities=[])
 
     def as_file(self) -> File:
         return File(self.path)
@@ -455,9 +503,34 @@ class PDFText(Model, TimestampMixin):
 
     extracted_text = fields.TextField(null=True)
     num_pages = fields.IntField(null=True)
+    text_quality = fields.FloatField(default=0)  # between 0 and 1
+    is_ocr = fields.BooleanField(default=False)
 
     class Meta:
         table = "pdf_text_data"
+
+
+class PDFEntity(Model):
+    """
+    Many-to-one relation to store extracted entities from a PDF file.
+    """
+
+    pdf = fields.ForeignKeyField("models.PDF", related_name="pdf_entities")
+    entity = fields.ForeignKeyField("models.Entity", related_name="pdf_entities")
+
+
+class Entity(Model, TimestampMixin):
+    """
+    Extracted entity from a PDF file.
+    """
+
+    id = fields.IntField(primary_key=True)
+    entity_type = fields.CharField(max_length=255)
+    entity_text = fields.CharField(max_length=2048)
+    confidence = fields.FloatField(null=True)
+
+    class Meta:
+        table = "pdf_entity_data"
 
 
 class StagedCopyrightItem(Model, TimestampMixin):

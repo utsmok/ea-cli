@@ -16,6 +16,7 @@ from pathlib import Path
 
 from kreuzberg import ExtractionConfig, ExtractionResult, extract_file
 from loguru import logger
+from textacy import preprocessing
 from xxhash import xxh3_64_hexdigest
 
 from easy_access.db.models import PDF, PDFText
@@ -86,6 +87,20 @@ async def parse_pdfs():
         except Exception as e:
             logger.error(f"Error saving PDF id={pdf.id}, path={pdf.path}: {e}")
     print("Done extracting text from PDFs")
+
+
+def clean_text(text: str) -> str:
+    """Cleans the extracted text by removing excessive whitespace, newlines, etc."""
+    preproc_pipe = preprocessing.pipeline.make_pipeline(
+        preprocessing.normalize.bullet_points,
+        preprocessing.normalize.hyphenated_words,
+        preprocessing.normalize.unicode,
+        preprocessing.normalize.whitespace,
+        preprocessing.remove.html_tags,
+    )
+
+    text = preproc_pipe(text)
+    return text
 
 
 def hash_pdf(file: Path) -> str | None:
