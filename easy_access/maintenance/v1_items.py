@@ -19,6 +19,7 @@ from pathlib import Path
 import polars as pl
 from rich import print
 
+from easy_access.db.base import ensure_db_inited
 from easy_access.db.enums import (
     Classification,
     Filetype,
@@ -26,7 +27,8 @@ from easy_access.db.enums import (
     Status,
     WorkflowStatus,
 )
-from easy_access.db.models import v1_CopyrightItem
+from easy_access.db.models import CopyrightItem, v1_CopyrightItem
+from easy_access.settings import Settings
 
 # Constants
 V1_MODEL_FIELDS = {field for field in v1_CopyrightItem._meta.fields}
@@ -333,19 +335,107 @@ def merge_all_sheets(
 
 
 #
-#   Database ingestion functions
+#   Database related functions [async]
 #
 
 
 async def ingest_v1_items(df: pl.DataFrame) -> None:
     """
     ingests the given dataframe into the v1_CopyrightItem model in the database
+    make sure the db is initialized before calling this function
     """
-    items: list[v1_CopyrightItem] = []
+
     data = df.to_dicts()
 
     for row in data:
-        await v1_CopyrightItem.create(**row)
+        await v1_CopyrightItem.update_or_create(**row)
+
+
+async def match_v1_to_copyright_items(
+    settings: Settings,
+) -> list[tuple[v1_CopyrightItem, CopyrightItem]]:
+    """
+    matches v1_CopyrightItems to CopyrightItems
+    returns a list of tuples with the matched items and the tier of the match (see compare_fields in function for details)
+    """
+
+    await ensure_db_inited(settings)
+    v1_items = list(await v1_CopyrightItem.all())
+    current_items = list(await CopyrightItem.all())
+
+    # use the compare_fields to see which fields to compare for matching
+    # start with tier 1 fields, then tier 2, etc
+    # if a match is found, add to the list and remove from the current_items list to avoid duplicate matches
+    # and continue to the next v1_item
+    # matches for tier3 and tier4 fields are dubious and should be checked manually and maybe skipped altogether
+    compare_fields = {
+        "tier1": ["filehash"],
+        "tier2": [
+            "filename",
+            "pagecount",
+            "wordcount",
+            "picturecount",
+        ],
+        "tier3": ["publisher", "author", "title", "isbn", "doi"],
+        "tier4": ["faculty", "ml_prediction", "department", "classification"],
+    }
+
+    matched_items: list[tuple[v1_CopyrightItem, CopyrightItem, str]] = []
+    unmatched_v1_items: list[v1_CopyrightItem] = []
+    unmatched_current_items = set([i.material_id for i in current_items])
+    print(
+        f"Starting matching {len(v1_items)} v1 items to {len(current_items)} current items."
+    )
+    for v1_item in v1_items:
+        match_found = False
+        for tier, fields in compare_fields.items():
+            if match_found:
+                break
+
+            for current_item in current_items:
+                if all(
+                    getattr(v1_item, field) is not None
+                    and getattr(current_item, field) is not None
+                    and getattr(v1_item, field) == getattr(current_item, field)
+                    for field in fields
+                ):
+                    matched_items.append((v1_item, current_item, tier))
+                    if current_item.material_id in unmatched_current_items:
+                        unmatched_current_items.remove(current_item.material_id)
+                    match_found = True
+        if not match_found:
+            unmatched_v1_items.append(v1_item)
+
+    print(
+        f"Matched {len(matched_items)} matches. {len(unmatched_v1_items)} v1 items have no corresponding match. {len(unmatched_current_items)} current items have no corresponding v1 item."
+    )
+    print(
+        f"So {(1 - (len(unmatched_current_items) / len(current_items))) * 100:.2f} % of current items have a corresponding v1 item."
+    )
+    updated_manual_classifications = 0
+    updated_remarks = 0
+
+    for v1_item, current_item, tier in matched_items:
+        v1_item.matching_copyright_item = current_item
+        await v1_item.save()
+        if (
+            current_item.manual_classification in [None, "", "in onderzoek"]
+            and v1_item.manual_classification != current_item.manual_classification
+        ):
+            current_item.manual_classification = v1_item.manual_classification
+            updated_manual_classifications += 1
+            await current_item.save(update_fields=["manual_classification"])
+        if current_item.remarks != v1_item.remarks and current_item.remarks in [
+            None,
+            "",
+        ]:
+            current_item.remarks = v1_item.remarks
+            updated_remarks += 1
+            await current_item.save(update_fields=["remarks"])
+
+    print(
+        f"Matches by tier: {dict((tier, sum(1 for _, _, t in matched_items if t == tier)) for tier in compare_fields)}"
+    )
 
 
 #

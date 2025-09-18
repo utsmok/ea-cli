@@ -81,16 +81,13 @@ data_settings:
       new_name: "v1_manual_classification"
       is_editable: true
       dropdown_options: '"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,onbekend"'
-    - name: "manual_classification_v2"
-      new_name: "v2_manual_classification"
+    - name: "v2_manual_classification"
       is_editable: true
       dropdown_options: 'ENUM:ClassificationV2'
-    - name: "length"
-      new_name: "v2_length"
+    - name: "v2_lengte"
       is_editable: true
       dropdown_options: 'ENUM:Lengte'
-    - name: "overname_status"
-      new_name: "v2_overname_status"
+    - name: "v2_overnamestatus"
       is_editable: true
       dropdown_options: 'ENUM:OvernameStatus'
     - name: "remarks"

@@ -198,7 +198,27 @@ class DataEntrySheet:
         self.max_row = data.shape[0]
         colnum = 0
         if "manual_classification" in data.columns:
-            data = add_v2_classification(data)
+            logger.warning(
+                "Testing new methods for adding v2 classification fields in the db, disabled functionality in the sheet"
+            )
+            if False:
+                # select only rows that do not yet have v2 classification fields
+                data_to_update = data.filter(
+                    pl.col("v2_manual_classification").is_null()
+                )
+                data_to_update = add_v2_classification(data_to_update)
+                data = data.join(
+                    data_to_update.select(
+                        [
+                            "material_id",
+                            "v2_manual_classification",
+                            "v2_lengte",
+                            "v2_overnamestatus",
+                        ]
+                    ),
+                    on="material_id",
+                    how="left",
+                )
         for col in self.cols:
             colnum += 1
             col_name = col.new_name if col.new_name else col.name
@@ -415,10 +435,10 @@ class DataEntrySheet:
             # subtle yellow fill,  dark yellow text, thin dark orange border
 
             subtle_yellow_fill = PatternFill(
-                start_color="#FFF8DC", end_color="#FFF8DC", fill_type="solid"
+                start_color="FFF8DC", end_color="FFF8DC", fill_type="solid"
             )
 
-            dark_orange_side = Side(style="thin", color="#CC6600")
+            dark_orange_side = Side(style="thin", color="CC6600")
 
             dark_orange_border = Border(
                 left=dark_orange_side,
@@ -427,22 +447,22 @@ class DataEntrySheet:
                 bottom=dark_orange_side,
             )
 
-            dark_yellow_font = Font(color="#DAA520", bold=True)
+            dark_yellow_font = Font(color="DAA520", bold=True)
 
             #          'file deleted style'
             # blue color setting:
             # light blue fill, dark blue text, thin dark blue border
             light_blue_fill = PatternFill(
-                start_color="#CCFFFF", end_color="#CCFFFF", fill_type="solid"
+                start_color="CCFFFF", end_color="CCFFFF", fill_type="solid"
             )
-            dark_blue_side = Side(style="thin", color="#0000FF")
+            dark_blue_side = Side(style="thin", color="0000FF")
             dark_blue_border = Border(
                 left=dark_blue_side,
                 right=dark_blue_side,
                 top=dark_blue_side,
                 bottom=dark_blue_side,
             )
-            dark_blue_font = Font(color="#0000FF", bold=True)
+            dark_blue_font = Font(color="0000FF", bold=True)
 
             # Create the conditional formatting rule
             rule_onbekend = CellIsRule(

@@ -11,8 +11,11 @@ from tortoise.models import Model
 
 from easy_access.db.enums import (
     Classification,
+    ClassificationV2,
     Filetype,
     Infringement,
+    Lengte,
+    OvernameStatus,
     Period,
     Status,
     WorkflowStatus,
@@ -41,6 +44,9 @@ class v1_CopyrightItem(Model, TimestampMixin):
     """
 
     material_id = fields.IntField(primary_key=True)
+    matching_copyright_item = fields.ForeignKeyField(
+        "models.CopyrightItem", related_name="v1_items", null=True
+    )
     workflow_status = fields.CharEnumField(
         enum_type=WorkflowStatus, max_length=255, default=WorkflowStatus.ToDo
     )
@@ -119,6 +125,27 @@ class CopyrightItem(Model, TimestampMixin):
     )
     manual_classification = fields.CharField(max_length=2048, null=True, db_index=True)
     manual_identifier = fields.CharField(max_length=2048, null=True)
+    v2_manual_classification = fields.CharEnumField(
+        enum_type=ClassificationV2,
+        max_length=255,
+        db_index=True,
+        null=True,
+        default=ClassificationV2.ONBEKEND,
+    )
+    v2_overnamestatus = fields.CharEnumField(
+        enum_type=OvernameStatus,
+        max_length=255,
+        db_index=True,
+        null=True,
+        default=OvernameStatus.ONBEKEND,
+    )
+    v2_lengte = fields.CharEnumField(
+        enum_type=Lengte,
+        max_length=255,
+        db_index=True,
+        default=Lengte.ONBEKEND,
+        null=True,
+    )
     scope = fields.CharField(max_length=255, null=True)
     remarks = fields.CharField(max_length=10000, null=True, db_index=True)
     auditor = fields.CharField(max_length=10000, null=True)

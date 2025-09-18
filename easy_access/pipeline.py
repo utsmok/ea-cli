@@ -114,6 +114,8 @@ class DataPipeline:
         else:
             await self.parse_pdfs_async()
 
+        await self.process_db_changes_async()
+
         await self.export_reports_async()
         logger.info("Data processing pipeline finished.")
 
@@ -251,3 +253,6 @@ class DataPipeline:
         logger.info("Parsing unparsed PDFs...")
         await parse_pdfs()
         logger.info("PDF parsing completed.")
+
+    async def process_db_changes_async(self) -> None:
+        """Go through the DB and ensure all fields are updated based on current status; e.g. set workflow status to Done if a file has a proper classification and no action is needed, etc"""

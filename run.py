@@ -176,6 +176,13 @@ def process_data(
             rich_help_panel="Processing Options",
         ),
     ] = False,
+    no_ingest: Annotated[
+        bool,
+        typer.Option(
+            help="Skip ingestion of data from sheets (raw crc data / faculty sheets) when running the workflow.",
+            rich_help_panel="Processing Options",
+        ),
+    ] = False,
     new_workflow: Annotated[
         bool,
         typer.Option(
@@ -209,9 +216,7 @@ def process_data(
         typer.Exit(1)
 
     # Determine which stages to run
-    run_ingest = ingest_only or not any(
-        stage_options
-    )  # Default to all if no stage specified
+    run_ingest = (ingest_only or not any(stage_options)) and not no_ingest
     run_process = process_only or not any(stage_options)
     run_export = export_only or not any(stage_options)
     run_enrich = enrich_only or not any(stage_options)

@@ -12,12 +12,14 @@ from typing import Any
 import polars as pl
 from loguru import logger
 from tortoise import Tortoise
+from tortoise.expressions import Q
 from tortoise.transactions import in_transaction
 
 from easy_access.db.base import (
     copyright_item_from_dict,
     ensure_db_inited,
 )
+from easy_access.db.enums import Classification, ClassificationV2
 from easy_access.db.models import (
     CopyrightItem,
     Course,
@@ -1613,3 +1615,113 @@ async def _apply_person_org_relations(
             logger.debug(
                 f"Could not add org '{full_abbr}' to person {person_obj.input_name}: {exc}"
             )
+
+
+async def update_workflow_status_from_db(settings: Settings) -> None:
+    """
+    ensures that workflow status matches the current state of the item,
+    e.g. if a manual_classification is present that requires no actions, set workflow_status to Done,
+    if a file does not exist, also set it to Done, etc.
+    """
+    await ensure_db_inited(settings)
+    # grab all items with non-Done workflow status
+    items = await CopyrightItem.filter(~Q(workflow_status=WorkflowStatus.Done)).all()
+
+    DONE_MANUAL_CLASSIFICATIONS = [
+        Classification.OPEN_ACCESS.value,
+        Classification.EIGEN_MATERIAAL_POWERPOINT.value,
+        Classification.EIGEN_MATERIAAL_OVERIG.value,
+        Classification.EIGEN_MATERIAAL_TITELINDICATIE.value,
+        Classification.EIGEN_MATERIAAL.value,
+    ]
+
+    if not items:
+        logger.info("No items to update workflow status for.")
+        return
+    logger.info(f"Updating workflow status for {len(items)} items...")
+    updated_count = 0
+    for item in items:
+        if item.file_exists is False:
+            item.workflow_status = WorkflowStatus.Done
+            await item.save(update_fields=["workflow_status"])
+            updated_count += 1
+            continue
+        if (
+            item.manual_classification
+            and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
+        ):
+            print(
+                f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
+            )
+            item.workflow_status = WorkflowStatus.Done
+            await item.save(update_fields=["workflow_status"])
+            updated_count += 1
+            continue
+
+
+async def map_v1_to_v2_classifications(settings: Settings) -> None:
+    """
+    uses the classification mapping to map manual_classification values from v1 items to v2 items
+    for items that do not yet have a v2 classification.
+    Modify the code in `add_v2_classification` to work directly on the db through tortoise orm instead of the polars df.
+    """
+    # select all items:
+    # - without a v2 classification (null or empty)
+    await ensure_db_inited(settings)
+    selected_items = await CopyrightItem.filter(
+        Q(v2_manual_classification__isnull=True)
+        | Q(v2_manual_classification=ClassificationV2.ONBEKEND)
+    ).all()
+
+    if not selected_items:
+        logger.info("No items to map v1 to v2 classifications for.")
+        return
+    # add mapping logic here, see add_v2_classification for reference
+    # relevant fields on CopyrightItem:
+    # - manual_classification (v1)
+    # - v2_manual_classification
+    # - v2_lengte
+    # - v2_overnamestatus
+
+    # perform mapping using the same lookup as the old DataFrame-based helper
+    from easy_access.db.enums import CLASSIFICATION_MAPPING_V1_TO_V2, Classification
+
+    mapped_count = 0
+    failed_count = 0
+
+    async with in_transaction():
+        for item in selected_items:
+            try:
+                current = item.manual_classification or "onbekend"
+                if not current or current == "-":
+                    current = "onbekend"
+
+                # normalize common variations to improve enum lookup
+                if isinstance(current, str):
+                    current = current.strip().lower()
+
+                # try to coerce to the v1 Classification enum; fall back to ONBEKEND
+                try:
+                    key = Classification(current)
+                except Exception:
+                    key = Classification.ONBEKEND
+
+                mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
+                if not mapped:
+                    mapped = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
+
+                item.v2_manual_classification = mapped.classification
+                item.v2_lengte = mapped.length
+                item.v2_overnamestatus = mapped.overname_status
+
+                await item.save()
+                mapped_count += 1
+            except Exception as exc:
+                logger.exception(
+                    f"Failed to map v1->v2 classification for material_id={getattr(item, 'material_id', None)}: {exc}"
+                )
+                failed_count += 1
+
+    logger.info(
+        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count} (out of {len(selected_items)})"
+    )

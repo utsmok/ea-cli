@@ -52,6 +52,7 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
             .otherwise(pl.lit("No"))
             .alias("file_exists")
         )
+
     # Group by faculty
     faculty_data = {}
     faculties = all_data.select("faculty").unique().to_series().to_list()
