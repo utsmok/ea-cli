@@ -8,6 +8,8 @@ from typing import Any
 
 from loguru import logger
 
+from easy_access.settings import EasyAccessSettings, Settings
+
 
 def _run_sync(coro: Any):
     """Run coroutine in a sync-friendly way.
@@ -38,7 +40,9 @@ class DataPipeline:
     Provides both synchronous and asynchronous interfaces.
     """
 
-    def __init__(self, settings, ea_settings=None):
+    def __init__(
+        self, settings: Settings, ea_settings: EasyAccessSettings | None = None
+    ):
         self.settings = settings
         self.ea_settings = ea_settings
 
@@ -75,6 +79,15 @@ class DataPipeline:
         """Synchronous wrapper for verifying file existence."""
         return _run_sync(self.verify_file_existence_async())
 
+    def download_pdfs(self) -> None:
+        """Synchronous wrapper for downloading PDFs."""
+        return _run_sync(self.download_pdfs_async())
+
+    def parse_pdfs(self) -> None:
+        """Synchronous wrapper for parsing PDFs."""
+
+        return _run_sync(self.parse_pdfs_async())
+
     # Asynchronous interface
     async def run_async(self) -> None:
         """Runs the full data processing pipeline asynchronously."""
@@ -90,6 +103,16 @@ class DataPipeline:
             await self.verify_file_existence_async()
         else:
             logger.info("File existence verification disabled, skipping...")
+
+        if self.ea_settings and getattr(self.ea_settings, "no_pdf_download", False):
+            logger.info("PDF downloading disabled, skipping...")
+        else:
+            await self.download_pdfs_async()
+
+        if self.ea_settings and getattr(self.ea_settings, "no_pdf_parse", False):
+            logger.info("PDF parsing disabled, skipping...")
+        else:
+            await self.parse_pdfs_async()
 
         await self.export_reports_async()
         logger.info("Data processing pipeline finished.")
@@ -212,3 +235,19 @@ class DataPipeline:
                 f"{result.get('exists', 0)} exist, "
                 f"{result.get('not_exists', 0)} not found"
             )
+
+    async def download_pdfs_async(self) -> None:
+        """Downloads undownloaded PDFs from Canvas and creates PDF entries in the database."""
+        from easy_access.pdf.download import download_pdfs
+
+        logger.info("Downloading undownloaded PDFs...")
+        await download_pdfs(self.settings)
+        logger.info("PDF downloading completed.")
+
+    async def parse_pdfs_async(self) -> None:
+        """Parses undparsed PDFs to extract text, filehashes, metadata..."""
+        from easy_access.pdf.parse import parse_pdfs
+
+        logger.info("Parsing unparsed PDFs...")
+        await parse_pdfs()
+        logger.info("PDF parsing completed.")

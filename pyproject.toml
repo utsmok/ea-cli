@@ -5,30 +5,30 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = "==3.12.2"
 dependencies = [
+    "pyyaml",
+    "levenshtein",
     "openpyxl",
     "typer",
     "polars[sqlalchemy]",
-    "python-dotenv",
     "xlsxwriter",
-    "trogon",
     "httpx",
-    "lxml",
     "bs4",
-    "pyyaml",
     "loguru",
-    "nameparser",
-    "levenshtein",
     "aiometer",
     "tortoise-orm[accel]",
     "tqdm",
     "fastexcel>=0.15.1",
-    "pytest-asyncio>=1.1.0",
 ]
 
 [tool.uv]
 default-groups = ["dev"]
 
 [dependency-groups]
+
+tui = [
+    "trogon"
+]
+
 dev = [
     {include-group="lint"},
     {include-group="test"}
@@ -43,30 +43,15 @@ test = [
     "pytest-asyncio",
 ]
 
-classification = [
-    "pikepdf",
-    "numpy",
-    "pydantic",
-    "pypdf",
+pdf = [
     "xxhash",
-    "kreuzberg[paddleocr]",
-    "qdrant-client[fastembed]",
-    "pdfreader",
-    "flashtext",
-    "fastlite",
-    "spacy",
-    "spacy-layout",
-    "sqlglot",
-    "sentence-transformers",
-    "pymupdf4llm",
-    "pytesseract",
-    "gliner",
-    "langchain-text-splitters",
-    "selenium",
-    "google-genai",
-
+    "kreuzberg[paddleocr,document-classification,langdetect,crypto,entity-extraction]",
+    "paddlepaddle-gpu",
 ]
+
+
 dashboard = [
+    "fastlite",
     "fastcore",
     "starlette",
     "monsterui",

@@ -200,13 +200,15 @@ class EasyAccessSettings:
     refresh_osiris_data: bool = False
     only_retrieve_missing_osiris_data: bool = False
     other_sheet: Path | None = None
-    enrich_with_osiris_data: bool = True
+    enrich_with_osiris_data: bool = True  # whether to enrich with osiris data
     dirs: dict[DirSetting, Directory] = field(default_factory=dict)
-    disable_writes: bool = False
+    disable_writes: bool = False  # skip file writes
     faculty: str | None = None
-    no_file_exists: bool = False
+    no_file_exists: bool = False  # skip file existence checks
+    no_pdf_download: bool = False  # skip pdf downloading
+    no_pdf_parse: bool = False  # skip pdf parsing
     # Enable the new workflow-based exporter (inbox/in_progress/done)
-    export_workflow: bool = False
+    export_workflow: bool = True
 
     @classmethod
     def create_for_runtime(

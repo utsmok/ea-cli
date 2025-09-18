@@ -15,7 +15,6 @@ from tortoise.transactions import in_transaction
 
 from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.models import (
-    PDF,
     CopyrightItem,
     Course,
     CourseEmployee,
@@ -85,120 +84,6 @@ async def awaitable(obj):
     if inspect.isawaitable(obj):
         return await obj
     return obj
-
-
-async def update_duplicates(settings: Settings) -> None:
-    """
-    Update duplicate status for all copyright items.
-
-    Uses batch operations to minimize database queries:
-    1. Fetch all PDFs with replace_with_id in one query
-    2. Build replacement mapping in memory
-    3. Bulk update items that have duplicates
-
-    Args:
-        settings: Application settings
-    """
-    logger.info("Updating duplicate statuses...")
-
-    # Fetch all PDFs that have replacements in one query. Tests often patch
-    # PDF.filter to return either a Mock, a QuerySetMock (awaitable), or a plain list.
-    pdfs_candidate = PDF.filter(replace_with_id__not_isnull=True)
-    pdfs_with_replacements = await _resolve_queryset_candidate(
-        pdfs_candidate, "replace_with"
-    )
-    # Ensure we have an iterable list
-    if pdfs_with_replacements is None:
-        pdfs_with_replacements = []
-    elif not hasattr(pdfs_with_replacements, "__iter__") or isinstance(
-        pdfs_with_replacements, str | bytes
-    ):
-        pdfs_with_replacements = [pdfs_with_replacements]
-
-    if not pdfs_with_replacements:
-        logger.info("No PDFs with replacements found")
-        return
-
-    # Build mapping of material_id -> replacement_material_id (only valid ints)
-    replacement_map: dict[int, int] = {}
-    for pdf in pdfs_with_replacements:
-        rw = getattr(pdf, "replace_with", None)
-        if not rw:
-            continue
-        mid = safe_int(getattr(pdf, "material_id", None))
-        rid = safe_int(getattr(rw, "material_id", None))
-        if mid is not None and rid is not None:
-            replacement_map[mid] = rid
-
-    if not replacement_map:
-        logger.info("No valid replacements found")
-        return
-
-    # Get all items that might be duplicates
-    material_ids = list(replacement_map.keys())
-    items_candidate = CopyrightItem.filter(material_id__in=material_ids)
-    items_to_update = await _resolve_queryset_candidate(items_candidate)
-    if items_to_update is None:
-        items_to_update = []
-    elif not hasattr(items_to_update, "__iter__") or isinstance(
-        items_to_update, str | bytes
-    ):
-        items_to_update = [items_to_update]
-
-    # Update items in memory
-    updated_items = []
-    for item in items_to_update:
-        mid = getattr(item, "material_id", None)
-        if mid in replacement_map:
-            item.is_duplicate = True
-            item.replacement_id = replacement_map[mid]
-            updated_items.append(item)
-        else:
-            # Skip items without a resolvable material_id in production path
-            continue
-
-    if updated_items:
-        # Prefer bulk_update if the model supports it (tests often patch bulk_update).
-        # Call it once and await its result if it returns an awaitable to avoid
-        # double-calling the patched mock in tests.
-        bulk_attr = getattr(CopyrightItem, "bulk_update", None)
-        if callable(bulk_attr):
-            try:
-                result = bulk_attr(
-                    updated_items, fields=["is_duplicate", "replacement_id"]
-                )
-                if inspect.isawaitable(result):
-                    await result
-                logger.success(f"Bulk-updated {len(updated_items)} duplicate statuses")
-            except Exception:
-                # Fallback to per-item save
-                try:
-                    async with in_transaction():
-                        for item in updated_items:
-                            await item.save(
-                                update_fields=["is_duplicate", "replacement_id"]
-                            )
-                    logger.success(
-                        f"Updated {len(updated_items)} duplicate statuses (fallback)"
-                    )
-                except Exception:
-                    logger.error(
-                        "Could not perform fallback per-item updates; skipping in test environment"
-                    )
-        else:
-            try:
-                async with in_transaction():
-                    for item in updated_items:
-                        await item.save(
-                            update_fields=["is_duplicate", "replacement_id"]
-                        )
-                logger.success(f"Updated {len(updated_items)} duplicate statuses")
-            except Exception:
-                logger.error(
-                    "DB not initialized; skipping per-item updates in test environment"
-                )
-    else:
-        logger.info("No items needed duplicate status updates")
 
 
 async def link_courses(settings: Settings) -> None:
@@ -600,10 +485,6 @@ async def update_relations_async(settings: Settings) -> None:
 
     # Run subtasks but don't let one failure stop the other; tests expect
     # errors to be logged and the orchestration to continue.
-    try:
-        await update_duplicates(settings)
-    except Exception as e:
-        logger.error(f"update_duplicates failed: {e}")
 
     try:
         await link_courses(settings)

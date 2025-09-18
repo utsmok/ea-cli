@@ -17,6 +17,7 @@ from easy_access.db.enums import (
     Status,
     WorkflowStatus,
 )
+from easy_access.pdf.models import ExtractedEntities  # to avoid circular import
 from easy_access.settings import SETTINGS, DirSetting
 from easy_access.utils import File
 
@@ -115,6 +116,8 @@ class CopyrightItem(Model, TimestampMixin):
     is_duplicate = fields.BooleanField(
         db_index=True, null=True
     )  # if this item is a duplicate of another item -- determined by comparing PDFs
+
+    pdf: fields.ReverseRelation["PDF"]
 
     class Meta:
         table = "copyright_data"
@@ -323,49 +326,60 @@ class Programme(Model, TimestampMixin):
 class PDF(Model, TimestampMixin):
     """
     data for a PDF file
-    Each file should be directly related to a CopyrightItem
+    Each file should be directly related to a single CopyrightItem
     """
 
-    material_id = fields.IntField(primary_key=True)
-    current_file_name = fields.CharField(
-        max_length=2048
-    )  # this is also used to get the path to the file, see self.path()
-    replace_with = fields.ForeignKeyField(
-        "models.PDF", related_name="replacement_for", null=True
-    )  # if this file is a duplicate, this field points to the original file
-    replacement_for: fields.ReverseRelation["PDF"]
-    extracted_text = fields.TextField(null=True)
-    extracted_text_max_pages = fields.IntField(
-        null=True
-    )  # how many pages were processed to get the extracted text
-    extracted_text_max_length = fields.IntField(
-        null=True
-    )  # how many characters were kept from the extracted text
+    id = fields.IntField(primary_key=True)
 
-    original_file_name = fields.CharField(max_length=2048, null=True)
-    original_page_count = fields.IntField(null=True)
+    # one-to-one relation with CopyrightItem
+    copyright_item = fields.OneToOneField("models.CopyrightItem", related_name="pdf")
+
+    # one-to-one relation with Canvas metadata
+    # should always exist, as it is used to retrieve the PDF in the first place
+    canvas_metadata = fields.OneToOneField(
+        "models.PDFCanvasMetadata", related_name="pdf"
+    )
+
+    # core fields: filename, url, material_id, size, retrieval date, current filename (as stored on disk)
+
+    filename = fields.CharField(max_length=2048, null=True)  # original filename
+    url = fields.CharField(max_length=2048, null=True)  # original url
+    file_size = fields.IntField(null=True)  # in bytes
+    retrieved_on = fields.DatetimeField(null=True, default=datetime.utcnow)
+    current_file_name = fields.CharField(max_length=2048)
+
+    # created fields: metadata (see which fields to include later), filehash (from CRC and also self-computed)
+
     author = fields.CharField(max_length=2048, null=True)
-    file_modification_date = fields.DatetimeField(null=True)
-    file_creation_date = fields.DatetimeField(null=True)
-    producer = fields.CharField(max_length=2048, null=True)
-    creator = fields.CharField(max_length=2048, null=True)
-    subject = fields.CharField(max_length=2048, null=True)
     title = fields.CharField(max_length=2048, null=True)
+    subject = fields.CharField(max_length=2048, null=True)
+    keywords = fields.JSONField(null=True)  # list of keywords
+    producer = fields.CharField(max_length=2048, null=True)
+    creation_date = fields.DatetimeField(null=True)
+    mod_date = fields.DatetimeField(null=True)
+    creator = fields.CharField(max_length=2048, null=True)
+    summary = fields.CharField(max_length=10000, null=True)
+    description = fields.CharField(max_length=10000, null=True)
 
-    parsing_failed = fields.BooleanField(
-        null=True, default=False
-    )  # if the file could not be parsed, set to True
+    filehash = fields.CharField(max_length=255, null=True, db_index=True)
 
-    # Download-related fields
-    # -> Has an download been attempted?
-    # defaults to false for new items. Use to create a list of items to download.
-    # Set to True once an initial attempt has been made, then never change again.
-    # -> Did the download succeed?
-    # The function that downloads the file sets this to True if the files is downloaded and is >0kb. Else it sets it to False.
-    # Defaults to None (if no download attempts have been made yet).
+    # info about parsing (no attempt/success/failure, pages, length, ...)
+    extraction_attempted = fields.BooleanField(default=False)
+    extraction_successful = fields.BooleanField(default=False)
 
-    download_attempted = fields.BooleanField(null=True, default=False)
-    download_succeeded = fields.BooleanField(null=True, default=None)
+    num_pages = fields.IntField(null=True)
+    num_words = fields.IntField(null=True)
+    num_images = fields.IntField(null=True)
+
+    # 1-to-1 relation to extracted text
+    extracted_text = fields.OneToOneField(
+        "models.PDFText", related_name="pdf", null=True
+    )
+
+    extracted_entities = fields.JSONField(null=True)
+    keywords = fields.JSONField(
+        null=True
+    )  # list of keywords extracted from text w/ confidence as a dict with key = keyword, value = confidence
 
     class Meta:
         table = "pdf_data"
@@ -375,25 +389,75 @@ class PDF(Model, TimestampMixin):
         return SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / self.current_file_name
 
     @property
-    def age(self) -> int:
+    def entities(self) -> ExtractedEntities:
         """
-        Depending on which date info is available, determine the age of the file in seconds.
-        Start with 'file_modification_date', then try 'file_creation_date'.
-        If neither are available, use 'modified_at', which should always be present.
+        Parses the extracted_entities JSON field into an ExtractedEntities object, and returns that.
         """
-        now = datetime.now().timestamp()
-        if self.file_modification_date:
-            return int(now - self.file_modification_date.timestamp())
-        elif self.file_creation_date:
-            return int(now - self.file_creation_date.timestamp())
+        if self.extracted_entities:
+            return ExtractedEntities.from_json(self.extracted_entities)
         else:
-            return int(now - self.modified_at.timestamp())
+            return ExtractedEntities(entities=[])
 
     def as_file(self) -> File:
         return File(self.path)
 
-    def __str__(self):
-        return self.current_file_name + " (" + str(self.material_id) + ")"
+
+class PDFCanvasMetadata(Model, TimestampMixin):
+    """
+    Metadata about a PDF file as retrieved from Canvas.
+    """
+
+    id = fields.IntField(primary_key=True)
+    uuid = fields.CharField(max_length=255)
+    folder_id = fields.IntField(null=True)
+
+    display_name = fields.CharField(max_length=2048)
+    filename = fields.CharField(max_length=2048)
+
+    upload_status = fields.CharField(max_length=255)
+
+    content_type = fields.CharField(max_length=255)
+    mime_class = fields.CharField(max_length=255)
+    category = fields.CharField(max_length=255)
+
+    download_url = fields.CharField(max_length=2048)
+    size = fields.IntField()  # in bytes
+    thumbnail_url = fields.CharField(max_length=2048, null=True)
+
+    canvas_created_at = fields.DatetimeField()
+    canvas_updated_at = fields.DatetimeField()
+    modified_at = fields.DatetimeField(null=True)
+
+    locked = fields.BooleanField()
+    hidden = fields.BooleanField()
+    lock_at = fields.DatetimeField(null=True)
+    unlock_at = fields.DatetimeField(null=True)
+    visibility_level = fields.CharField(max_length=255)
+
+    pdf: fields.ReverseRelation["PDF"]
+
+    # data for user who uploaded the file
+    user_id = fields.IntField(null=True)
+    user_anonymous_id = fields.CharField(max_length=255, null=True)
+    user_display_name = fields.CharField(max_length=2048, null=True)
+    user_avatar_image_url = fields.CharField(max_length=2048, null=True)
+    user_html_url = fields.CharField(max_length=2048, null=True)
+    user_pronouns = fields.CharField(max_length=255, null=True)
+
+    class Meta:
+        table = "pdf_canvas_metadata"
+
+
+class PDFText(Model, TimestampMixin):
+    """
+    Extracted text from a PDF file.
+    """
+
+    extracted_text = fields.TextField(null=True)
+    num_pages = fields.IntField(null=True)
+
+    class Meta:
+        table = "pdf_text_data"
 
 
 class StagedCopyrightItem(Model, TimestampMixin):

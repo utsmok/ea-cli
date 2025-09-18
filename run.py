@@ -52,23 +52,9 @@ except Exception:
 
 app = typer.Typer(
     name="ea-cli",
-    help="Easy Access toolkit for managing faculty sheet data.",
+    help="Easy Access toolkit for the University of Twente.",
     add_completion=False,
 )
-
-preprocess_app = typer.Typer(
-    name="preprocess",
-    help="Pre-processing: PDF download, classification, deduplication.",
-)
-app.add_typer(preprocess_app)
-
-backup_app = typer.Typer(name="backup", help="Backup and restore operations.")
-app.add_typer(backup_app)
-
-admin_app = typer.Typer(
-    name="admin", help="Administrative operations and failure management."
-)
-app.add_typer(admin_app)
 
 
 # Commands for main app
@@ -155,6 +141,20 @@ def process_data(
             rich_help_panel="Stage Selection",
         ),
     ] = False,
+    pdf_download_only: Annotated[
+        bool,
+        typer.Option(
+            help="Only run the PDF downloading stage.",
+            rich_help_panel="Stage Selection",
+        ),
+    ] = False,
+    parse_only: Annotated[
+        bool,
+        typer.Option(
+            help="Only run the PDF parsing stage.",
+            rich_help_panel="Stage Selection",
+        ),
+    ] = False,
     no_file_exists: Annotated[
         bool,
         typer.Option(
@@ -162,13 +162,27 @@ def process_data(
             rich_help_panel="Processing Options",
         ),
     ] = False,
-    export_workflow: Annotated[
+    no_pdf_download: Annotated[
+        bool,
+        typer.Option(
+            help="Skip PDF downloading stage.",
+            rich_help_panel="Processing Options",
+        ),
+    ] = False,
+    no_pdf_parse: Annotated[
+        bool,
+        typer.Option(
+            help="Skip PDF parsing stage.",
+            rich_help_panel="Processing Options",
+        ),
+    ] = False,
+    new_workflow: Annotated[
         bool,
         typer.Option(
             help="Enable new workflow-based exporter (writes inbox/in_progress/done per faculty).",
             rich_help_panel="Stage Selection",
         ),
-    ] = False,
+    ] = True,
 ) -> None:
     """Runs the main Easy Access data processing workflow."""
     if other_sheet:
@@ -186,6 +200,7 @@ def process_data(
         export_only,
         enrich_only,
         file_exists_only,
+        pdf_download_only,
     ]
     if sum(stage_options) > 1:
         logger.error(
@@ -201,7 +216,8 @@ def process_data(
     run_export = export_only or not any(stage_options)
     run_enrich = enrich_only or not any(stage_options)
     run_file_exists = file_exists_only or not any(stage_options)
-
+    run_pdf_download = pdf_download_only or not any(stage_options)
+    run_parse = parse_only or not any(stage_options)
     # Import project modules here to avoid import-time side-effects when showing --help
     from easy_access.main import EasyAccessTool
     from easy_access.settings import SETTINGS, EasyAccessSettings
@@ -217,7 +233,9 @@ def process_data(
         disable_writes=disable_writes,
         faculty=single_faculty,
         no_file_exists=no_file_exists,
-        export_workflow=export_workflow,
+        export_workflow=new_workflow,
+        no_pdf_download=no_pdf_download,
+        no_pdf_parse=no_pdf_parse,
     )
 
     tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)
@@ -236,6 +254,12 @@ def process_data(
     if run_file_exists and not no_file_exists:
         logger.info("Running file existence verification stage...")
         tool.run_verify_file_existence()
+    if run_pdf_download and not no_pdf_download:
+        logger.info("Running PDF downloading stage...")
+        tool.run_download_pdfs()
+    if run_parse and not no_pdf_parse:
+        logger.info("Running PDF parsing stage...")
+        tool.run_parse_pdfs()
     if run_export:
         logger.info("Running export stage...")
         tool.run_export()
@@ -266,530 +290,6 @@ def run_dashboard(
         reload=SETTINGS.dashboard_reload,
     )
     logger.success("Dashboard server stopped.")
-    typer.Exit()
-
-
-@app.command(name="export")
-def run_export(
-    single_faculty: Annotated[
-        str | None,
-        typer.Option(
-            help="Only export data for a single faculty. Use the faculty abbreviation (e.g. 'BMS').",
-        ),
-    ] = None,
-) -> None:
-    """Creates export sheets."""
-    from easy_access.settings import SETTINGS
-    from easy_access.sheets.sheet import create_export_sheet
-
-    if single_faculty:
-        logger.info(f"Exporting data for faculty: {single_faculty}")
-        create_export_sheet(settings=SETTINGS, faculty=single_faculty)
-    else:
-        logger.info("Creating export sheets for all faculties.")
-        create_export_sheet(settings=SETTINGS)
-    logger.success("Done creating export sheets.")
-    typer.Exit()
-
-
-# Commands for backup app
-
-
-@backup_app.command(name="create")
-def create_backup_command() -> None:
-    """Creates a backup of the current data based on settings.yaml."""
-    from easy_access.settings import SETTINGS
-    from easy_access.sheets.backup import Backupper
-
-    backupper = Backupper()
-    if SETTINGS.backup_settings.backup_all:
-        logger.info("Creating backup as per settings.yaml (backup_all: true).")
-        backupper.backup_files()
-    else:
-        logger.info(
-            "Backup not created as per settings.yaml (backup_all: false or not set)."
-        )
-    typer.Exit()
-
-
-@backup_app.command(name="restore")
-def restore_backup_command(
-    restore_dir: Annotated[
-        str,
-        typer.Option(
-            help="Set which backup to restore. Options: 'latest','oldest','manual'"
-        ),
-    ] = "latest",
-    restore_strategy: Annotated[
-        str,
-        typer.Option(
-            help="Set the strategy for restoring the backup. Options: 'replace','merge_prefer_existing','merge_prefer_backup'"
-        ),
-    ] = "replace",
-) -> None:
-    """Restores data from a backup."""
-    from easy_access.sheets.backup import Backupper, RestoreOptions, RestoreStrategy
-
-    # Map string inputs to enum values
-    try:
-        select_enum = RestoreOptions(restore_dir)
-    except Exception:
-        logger.warning(
-            f"Invalid restore option '{restore_dir}', defaulting to 'latest'."
-        )
-        select_enum = RestoreOptions.LATEST
-
-    try:
-        strategy_enum = RestoreStrategy(restore_strategy)
-    except Exception:
-        logger.warning(
-            f"Invalid restore strategy '{restore_strategy}', defaulting to 'replace'."
-        )
-        strategy_enum = RestoreStrategy.REPLACE
-
-    backupper = Backupper()
-    logger.info(
-        f"Restoring backup from '{select_enum.value}' with strategy '{strategy_enum.value}'."
-    )
-    backupper.restore_backup(
-        strategy=strategy_enum,
-        select=select_enum,
-    )
-    logger.success("Backup restoration process finished.")
-    typer.Exit()
-
-
-# Commands for pre-processing app
-
-
-@preprocess_app.command(name="run_all")
-def run_all_preprocess(
-    osiris_update: Annotated[
-        bool,
-        typer.Option(
-            help="If enabled, will retrieve fresh osiris data for all course + people page data.",
-        ),
-    ] = False,
-    osiris_full_refresh: Annotated[
-        bool,
-        typer.Option(
-            help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
-        ),
-    ] = False,
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            help="If enabled, will run the tool in dry-run mode to update the DB without changing .xlsx files.",
-        ),
-    ] = True,
-    single_faculty: Annotated[
-        str | None,
-        typer.Option(
-            help="Only run the tool for a single faculty. use the faculty abbreviation as the parameter (e.g. 'BMS').",
-        ),
-    ] = None,
-    download: Annotated[
-        bool,
-        typer.Option(help="Download pdfs from canvas."),
-    ] = False,
-    # classify: Annotated[
-    #     bool,
-    #     typer.Option(help="Classify the pdfs by LLM."),
-    # ] = False,
-    # deduplicate: Annotated[
-    #     bool,
-    #     typer.Option(help="Deduplicate the pdfs."),
-    # ] = False,
-) -> None:
-    """(Currently Stubs) Runs all pre-processing steps: PDF download, classification, deduplication."""
-    logger.info("Running pre-processing steps (download, deduplicate, classify)...")
-    logger.info(
-        "First, running the tool in read-only mode to update DB data if needed."
-    )
-
-    import asyncio
-
-    from classification.httpx_downloader import main_download_all
-    from easy_access.db.retrieve import retrieve_unmarked_deleted_items
-    from easy_access.main import EasyAccessTool
-    from easy_access.settings import SETTINGS, EasyAccessSettings
-
-    ea_temp_settings = EasyAccessSettings.create_for_runtime(
-        main_settings=SETTINGS,
-        export=False,
-        only_changes=True,
-        refresh_osiris_data=osiris_update,
-        other_sheet=None,
-        only_retrieve_missing_osiris_data=not osiris_full_refresh,
-        disable_writes=True,
-        faculty=single_faculty,
-    )
-    if dry_run:
-        temp_tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_temp_settings)
-        temp_tool.run()
-        logger.success("Done updating data in read-only mode for pre-processing.")
-
-        logger.info(
-            "Actual pre-processing steps (download, deduplicate, classify) follow."
-        )
-        logger.warning(
-            "deduplication and classification steps are currently stubs and not implemented."
-        )
-    if download:
-        logger.info("Downloading PDFs...")
-        downloaded, failed = asyncio.run(
-            main_download_all(settings=SETTINGS, max_concurrent=15)
-        )
-        logger.info(f"\nDownloaded Files ({len(downloaded)})")
-        logger.info(f"Failed Files ({len(failed)})")
-
-    # now use retrieve_unmarked_deleted_items function to see if any failed downloads correspond to unmarked deleted items
-    failed_items = asyncio.run(retrieve_unmarked_deleted_items(settings=SETTINGS))
-    if failed_items:
-        logger.info(
-            f"Found {len(failed_items)} failed downloads corresponding to unmarked deleted items."
-        )
-        skip = 0
-        for item in failed_items:
-            if not item.manual_classification:
-                skip += 1
-                continue
-            else:
-                logger.info(
-                    f" - {item.material_id} | {item.last_change} | {item.title} | {item.status} | {item.remarks} | {item.manual_classification}"
-                )
-        logger.info(
-            f"Skipped {skip}/{len(failed_items)} items without manual classification."
-        )
-
-    # if deduplicate:
-    #     logger.info("Deduplicating PDFs...")
-    #     # ... deduplicator logic ...
-    # if classify:
-    #     logger.info("Classifying PDFs...")
-    #     # ... classifier logic ...
-    logger.success("Pre-processing steps finished")
-    typer.Exit()
-
-
-# Commands for admin app
-
-
-@admin_app.command(name="inspect-failures")
-def inspect_failures(
-    limit: Annotated[int, typer.Option(help="Limit number of records to show")] = 50,
-    material_id: Annotated[
-        int | None, typer.Option(help="Filter by specific material ID")
-    ] = None,
-    show_payload: Annotated[
-        bool, typer.Option(help="Show full staged payload in output")
-    ] = False,
-) -> None:
-    """Inspect StagedProcessingFailure records for debugging."""
-    import asyncio
-    import json
-
-    from tortoise import Tortoise
-
-    from easy_access.db.models import StagedProcessingFailure
-    from easy_access.settings import SETTINGS
-
-    async def run_inspect():
-        await Tortoise.init(
-            db_url=f"sqlite://{SETTINGS.db_path}",
-            modules={"models": ["easy_access.db.models"]},
-        )
-
-        try:
-            query = StagedProcessingFailure.all().order_by("-created_at")
-
-            if material_id:
-                query = query.filter(material_id=material_id)
-
-            failures = await query.limit(limit)
-
-            if failures:
-                typer.echo(f"\nFound {len(failures)} failure records:")
-                typer.echo("-" * 80)
-
-                for failure in failures:
-                    typer.echo(f"ID: {failure.id}")
-                    typer.echo(f"Material ID: {failure.material_id}")
-                    typer.echo(f"Created: {failure.created_at}")
-                    typer.echo(f"Error: {failure.error_message}")
-
-                    if show_payload and failure.staged_payload:
-                        typer.echo(
-                            f"Payload: {json.dumps(failure.staged_payload, indent=2)}"
-                        )
-
-                    typer.echo("-" * 80)
-            else:
-                typer.echo("No failure records found.")
-        finally:
-            await Tortoise.close_connections()
-
-    asyncio.run(run_inspect())
-    typer.Exit()
-
-
-@admin_app.command(name="failure-stats")
-def failure_stats() -> None:
-    """Show statistics about StagedProcessingFailure records."""
-    import asyncio
-    from datetime import UTC, datetime, timedelta
-
-    from tortoise import Tortoise
-
-    from easy_access.db.models import StagedProcessingFailure
-    from easy_access.settings import SETTINGS
-
-    def categorize_error(error_message: str) -> str:
-        """Categorize error messages into common patterns."""
-        error_lower = error_message.lower()
-
-        if "faculty" in error_lower and (
-            "not found" in error_lower or "does not exist" in error_lower
-        ):
-            return "Faculty Lookup Error"
-        elif "material_id" in error_lower and (
-            "invalid" in error_lower or "missing" in error_lower
-        ):
-            return "Invalid Material ID"
-        elif "classification" in error_lower:
-            return "Classification Error"
-        elif "database" in error_lower or "connection" in error_lower:
-            return "Database Error"
-        elif "permission" in error_lower or "access" in error_lower:
-            return "Permission Error"
-        elif "timeout" in error_lower:
-            return "Timeout Error"
-        elif "validation" in error_lower:
-            return "Validation Error"
-        else:
-            return "Other Error"
-
-    async def run_stats():
-        await Tortoise.init(
-            db_url=f"sqlite://{SETTINGS.db_path}",
-            modules={"models": ["easy_access.db.models"]},
-        )
-
-        try:
-            total_failures = await StagedProcessingFailure.all().count()
-
-            # Group by error patterns
-            failures = await StagedProcessingFailure.all()
-            error_patterns = {}
-
-            for failure in failures:
-                if failure.error_message:
-                    error_key = categorize_error(failure.error_message)
-                    error_patterns[error_key] = error_patterns.get(error_key, 0) + 1
-
-            # Get failures by material_id
-            material_failures = await StagedProcessingFailure.filter(
-                material_id__not_isnull=True
-            ).count()
-            unknown_material_failures = await StagedProcessingFailure.filter(
-                material_id__isnull=True
-            ).count()
-
-            # Get recent failures (last 24 hours)
-            yesterday = datetime.now(UTC) - timedelta(days=1)
-            recent_failures = await StagedProcessingFailure.filter(
-                created_at__gte=yesterday
-            ).count()
-
-            typer.echo("\nFailure Statistics:")
-            typer.echo("-" * 40)
-            typer.echo(f"Total failures: {total_failures}")
-            typer.echo(f"Failures with material_id: {material_failures}")
-            typer.echo(f"Failures without material_id: {unknown_material_failures}")
-            typer.echo(f"Recent failures (24h): {recent_failures}")
-
-            if error_patterns:
-                typer.echo("\nError Patterns:")
-                for pattern, count in sorted(
-                    error_patterns.items(), key=lambda x: x[1], reverse=True
-                ):
-                    typer.echo(f"  {pattern}: {count}")
-        finally:
-            await Tortoise.close_connections()
-
-    asyncio.run(run_stats())
-    typer.Exit()
-
-
-@admin_app.command(name="retry-failures")
-def retry_failures(
-    material_id: Annotated[
-        int | None, typer.Option(help="Retry specific material ID only")
-    ] = None,
-    dry_run: Annotated[
-        bool, typer.Option(help="Show what would be done without making changes")
-    ] = True,
-) -> None:
-    """Retry processing of failed StagedProcessingFailure records."""
-    import asyncio
-
-    from tortoise import Tortoise
-
-    from easy_access.db.models import (
-        StagedCopyrightItem,
-        StagedFacultyUpdate,
-        StagedProcessingFailure,
-    )
-    from easy_access.db.update import (
-        process_staged_faculty_updates,
-        process_staged_raw_data,
-    )
-    from easy_access.settings import SETTINGS
-
-    async def retry_single_failure(failure):
-        """Retry processing a single failure."""
-        try:
-            material_id_val = failure.material_id
-            payload = failure.staged_payload
-
-            if not payload or not material_id_val:
-                return False
-
-            # Check if the original staged record still exists
-            staged_raw = await StagedCopyrightItem.filter(
-                material_id=material_id_val
-            ).first()
-            staged_faculty = await StagedFacultyUpdate.filter(
-                material_id=material_id_val
-            ).first()
-
-            if staged_raw:
-                # Retry raw data processing
-                if not dry_run:
-                    await process_staged_raw_data(SETTINGS)
-                return True
-            elif staged_faculty:
-                # Retry faculty update processing
-                if not dry_run:
-                    await process_staged_faculty_updates(SETTINGS)
-                return True
-            else:
-                typer.echo(
-                    f"Warning: No staged record found for material_id {material_id_val}"
-                )
-                return False
-
-        except Exception as e:
-            typer.echo(
-                f"Error retrying failure for material_id {failure.material_id}: {str(e)}"
-            )
-            return False
-
-    async def run_retry():
-        await Tortoise.init(
-            db_url=f"sqlite://{SETTINGS.db_path}",
-            modules={"models": ["easy_access.db.models"]},
-        )
-
-        try:
-            query = StagedProcessingFailure.all()
-
-            if material_id:
-                query = query.filter(material_id=material_id)
-
-            failures = await query
-
-            successful_retries = 0
-            failed_retries = 0
-            errors = []
-
-            for failure in failures:
-                try:
-                    if failure.staged_payload and failure.material_id:
-                        # Try to reprocess the staged data
-                        success = await retry_single_failure(failure)
-                        if success:
-                            successful_retries += 1
-                            if not dry_run:
-                                await failure.delete()  # Remove successful retry
-                        else:
-                            failed_retries += 1
-                            errors.append(
-                                f"Failed to retry material_id {failure.material_id}"
-                            )
-                    else:
-                        failed_retries += 1
-                        errors.append(
-                            f"Missing payload or material_id for failure {failure.id}"
-                        )
-
-                except Exception as e:
-                    failed_retries += 1
-                    errors.append(f"Error retrying failure {failure.id}: {str(e)}")
-
-            typer.echo(f"\nRetry Results ({'DRY RUN' if dry_run else 'LIVE'}):")
-            typer.echo("-" * 40)
-            typer.echo(f"Total attempted: {len(failures)}")
-            typer.echo(f"Successful retries: {successful_retries}")
-            typer.echo(f"Failed retries: {failed_retries}")
-
-            if errors:
-                typer.echo("\nErrors:")
-                for error in errors[:10]:  # Show first 10 errors
-                    typer.echo(f"  {error}")
-                if len(errors) > 10:
-                    typer.echo(f"  ... and {len(errors) - 10} more errors")
-        finally:
-            await Tortoise.close_connections()
-
-    asyncio.run(run_retry())
-    typer.Exit()
-
-
-@admin_app.command(name="cleanup-failures")
-def cleanup_failures(
-    days_old: Annotated[
-        int, typer.Option(help="Delete records older than N days")
-    ] = 30,
-    dry_run: Annotated[
-        bool, typer.Option(help="Show what would be done without making changes")
-    ] = True,
-) -> None:
-    """Clean up old StagedProcessingFailure records."""
-    import asyncio
-    from datetime import UTC, datetime, timedelta
-
-    from tortoise import Tortoise
-
-    from easy_access.db.models import StagedProcessingFailure
-    from easy_access.settings import SETTINGS
-
-    async def run_cleanup():
-        await Tortoise.init(
-            db_url=f"sqlite://{SETTINGS.db_path}",
-            modules={"models": ["easy_access.db.models"]},
-        )
-
-        try:
-            cutoff_date = datetime.now(UTC) - timedelta(days=days_old)
-
-            query = StagedProcessingFailure.filter(created_at__lt=cutoff_date)
-            old_failures_count = await query.count()
-
-            typer.echo(f"\nCleanup Results ({'DRY RUN' if dry_run else 'LIVE'}):")
-            typer.echo("-" * 40)
-            typer.echo(f"Cutoff date: {cutoff_date}")
-            typer.echo(f"Failures to delete: {old_failures_count}")
-
-            if not dry_run and old_failures_count > 0:
-                deleted_count = await query.delete()
-                typer.echo(f"Actually deleted: {deleted_count}")
-            else:
-                typer.echo("Actually deleted: 0")
-        finally:
-            await Tortoise.close_connections()
-
-    asyncio.run(run_cleanup())
     typer.Exit()
 
 

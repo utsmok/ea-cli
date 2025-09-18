@@ -1,3 +1,6 @@
-from easy_access.dashboard.pyinstaller import start_app
+import asyncio
 
-start_app()
+from easy_access.pdf.parse import test_func
+
+result = asyncio.run(test_func())
+print(result)

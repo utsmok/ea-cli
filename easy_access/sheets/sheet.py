@@ -157,7 +157,7 @@ def add_v2_classification(data: pl.DataFrame) -> pl.DataFrame:
         )
 
         if not mapped_data:
-            mapped_data = CLASSIFICATION_MAPPING_V1_TO_V2.get(Classification.ONBEKEND)
+            mapped_data = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
 
         new_data = {
             "manual_classification_v2": mapped_data.classification.value,
@@ -166,7 +166,8 @@ def add_v2_classification(data: pl.DataFrame) -> pl.DataFrame:
         }
         entry.update(new_data)
         update_data.append(entry)
-    data = data.join(pl.DataFrame(update_data), on="material_id", how="left")
+        new_data = pl.DataFrame(update_data, infer_schema_length=len(update_data))
+    data = data.join(new_data, on="material_id", how="left")
     return data
 
 

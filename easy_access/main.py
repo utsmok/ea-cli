@@ -96,3 +96,15 @@ class EasyAccessTool:
         Executes only the file existence verification stage.
         """
         self.pipeline.verify_file_existence()
+
+    def run_download_pdfs(self) -> None:
+        """
+        Executes only the PDF downloading stage.
+        """
+        self.pipeline.download_pdfs()
+
+    def run_parse_pdfs(self) -> None:
+        """
+        Executes only the PDF parsing stage.
+        """
+        self.pipeline.parse_pdfs()
