@@ -19,10 +19,11 @@ from easy_access.db.models import (
     Course,
     CourseEmployee,
     Person,
+    v1_CopyrightItem
 )
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
-
+import polars as pl
 
 async def _resolve_queryset_candidate(candidate, *prefetch_args):
     """Resolve a queryset-like candidate to a concrete iterable.
@@ -469,6 +470,121 @@ async def link_persons_to_courses(
         logger.info("No new course-person relations created")
 
 
+async def match_v1_to_copyright_items(
+    settings: Settings,
+) -> None:
+    """
+    Matches v1_CopyrightItems to CopyrightItems and updates the database accordingly.
+    """
+    await ensure_db_inited(settings)
+
+    v1_items_qs = v1_CopyrightItem.filter()
+    current_items_qs = CopyrightItem.filter()
+
+
+    if not v1_items_qs or not current_items_qs:
+        print("No items to match.")
+        return
+    v1_item_retrieved_dict = await v1_items_qs.values()
+    current_items_retrieved_dict = await current_items_qs.values()
+    schema_v1 = {col: (type(val) if val else pl.String) for col, val in v1_item_retrieved_dict[0].items()}
+    schema_current = {col: (type(val) if val else pl.String) for col, val in current_items_retrieved_dict[0].items()}
+    v1_df = pl.DataFrame(v1_item_retrieved_dict, schema=schema_v1)
+    current_df = pl.DataFrame(current_items_retrieved_dict, schema=schema_current)
+
+    v1_items = await v1_items_qs.all()
+    v1_item_dict = {item.material_id: item for item in v1_items}
+    current_items = await current_items_qs.all()
+    current_item_dict = {item.material_id: item for item in current_items}
+
+    # Add a unique identifier to each row to be able to retrieve the original objects
+    v1_df = v1_df.with_row_index("v1_index")
+    current_df = current_df.with_row_index("current_index")
+
+
+    compare_fields = {
+        "tier1": ["filehash"],
+        "tier2": ["filename", "pagecount", "wordcount", "picturecount"],
+        "tier3": ["publisher", "author", "title", "isbn", "doi"],
+    }
+
+    all_matched_df = pl.DataFrame()
+
+    for tier, fields in compare_fields.items():
+        if v1_df.height == 0 or current_df.height == 0:
+            break
+
+        # Drop rows with null values in the join keys
+        v1_filtered = v1_df.drop_nulls(subset=fields)
+        current_filtered = current_df.drop_nulls(subset=fields)
+
+        if v1_filtered.height == 0 or current_filtered.height == 0:
+            continue
+
+        matched_df = v1_filtered.join(
+            current_filtered, on=fields, how="inner", suffix="_right"
+        )
+
+        if matched_df.height > 0:
+            matched_df = matched_df.with_columns(pl.lit(tier).alias("tier"))
+            all_matched_df = pl.concat([all_matched_df, matched_df])
+
+            # Remove matched items for the next iteration
+            v1_df = v1_df.join(
+                matched_df.select("v1_index"),
+                left_on="v1_index",
+                right_on="v1_index",
+                how="anti",
+            )
+            current_df = current_df.join(
+                matched_df.select("current_index"),
+                left_on="current_index",
+                right_on="current_index",
+                how="anti",
+            )
+
+    if all_matched_df.is_empty():
+        print("No matches found.")
+        return
+
+    print(
+        f"Matched {all_matched_df.height} matches. {v1_df.height} v1 items have no corresponding match. {current_df.height} current items have no corresponding v1 item."
+    )
+    print(
+        f"So {(1 - (current_df.height / (len(current_items) or 1))) * 100:.2f} % of current items have a corresponding v1 item."
+    )
+
+    updated_manual_classifications = 0
+    updated_remarks = 0
+
+    for row in all_matched_df.to_dicts():
+        v1_item = v1_item_dict[row["material_id"]]
+        current_item = current_item_dict[row["material_id_right"]]
+
+        v1_item.matching_copyright_item = current_item
+        await v1_item.save()
+
+        if (
+            current_item.manual_classification is None or
+            current_item.manual_classification.lower() in ["", "in onderzoek", "onbekend"]
+        ):
+            current_item.manual_classification = v1_item.manual_classification
+            updated_manual_classifications += 1
+            await current_item.save(update_fields=["manual_classification"])
+
+        if current_item.remarks != v1_item.remarks and current_item.remarks in [
+            None,
+            "",
+        ]:
+            current_item.remarks = v1_item.remarks
+            updated_remarks += 1
+            await current_item.save(update_fields=["remarks"])
+
+
+    print(f"Updated {updated_manual_classifications} manual classifications.")
+    print(f"Updated {updated_remarks} remarks.")
+
+
 async def update_relations_async(settings: Settings) -> None:
     """
     Orchestrate all relations updates.
@@ -490,6 +606,11 @@ async def update_relations_async(settings: Settings) -> None:
         await link_courses(settings)
     except Exception as e:
         logger.error(f"link_courses failed: {e}")
+
+    try:
+        await match_v1_to_copyright_items(settings)
+    except Exception as e:
+        logger.error(f"match_v1_to_copyright_items failed: {e}")
 
     logger.info("Relations update completed")
 

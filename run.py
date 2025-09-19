@@ -22,11 +22,6 @@ import typer
 from loguru import logger
 
 from easy_access.db.base import close_connections
-from easy_access.db.update import (
-    map_v1_to_v2_classifications,
-    update_workflow_status_from_db,
-)
-from easy_access.maintenance.v1_items import match_v1_to_copyright_items
 from easy_access.settings import Settings
 
 # Compatibility shim: some combinations of Typer and Click/Rich have a
@@ -294,6 +289,11 @@ def update_from_v1(
 ) -> None:
     """Updates the database from Easy Access V1 faculty sheets, focusing on ingesting the old manual classifications."""
 
+    from easy_access.db.relations import match_v1_to_copyright_items
+    from easy_access.db.update import (
+        map_v1_to_v2_classifications,
+        update_workflow_status_from_db,
+    )
     from easy_access.maintenance.v1_items import ingest_v1_data
 
     async def run_ingest_pipeline(settings: Settings, path: Path):

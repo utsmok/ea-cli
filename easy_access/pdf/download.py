@@ -7,7 +7,12 @@ from loguru import logger
 from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import ensure_db_inited
-from easy_access.db.models import PDF, CopyrightItem, PDFCanvasMetadata, v1_CopyrightItem
+from easy_access.db.models import (
+    PDF,
+    CopyrightItem,
+    PDFCanvasMetadata,
+    v1_CopyrightItem,
+)
 from easy_access.settings import DirSetting, Settings
 from easy_access.utils import File
 
@@ -104,7 +109,8 @@ async def download_pdf_from_canvas(
 
 
 async def download_pdfs_for_items(
-    settings: Settings, items: list[dict], download_dir: Path | None = None) -> None:
+    settings: Settings, items: list[dict], download_dir: Path | None = None
+) -> None:
     """
     Downloads PDFs from the given list of items and stores them in the specified download directory.
     each item is a dict with at least 'url','filename','material_id' keys.
@@ -122,7 +128,7 @@ async def download_pdfs_for_items(
 
     semaphore = asyncio.Semaphore(value=5)
 
-    async def download_single(item: dict[str,str], session: httpx.AsyncClient):
+    async def download_single(item: dict[str, str], session: httpx.AsyncClient):
         try:
             async with semaphore:
                 filename = item.get("filename") or f"{item.get('material_id')}.pdf"
@@ -131,26 +137,38 @@ async def download_pdfs_for_items(
                 ).strip()
                 if not safe_filename:
                     safe_filename = f"{item.get('material_id')}.pdf"
-                filepath = download_dir / f"{item.get('material_id')}_{safe_filename}.pdf"
-                result = await download_pdf_from_canvas(item.get("url",""), filepath, session)
+                filepath = (
+                    download_dir / f"{item.get('material_id')}_{safe_filename}.pdf"
+                )
+                result = await download_pdf_from_canvas(
+                    item.get("url", ""), filepath, session
+                )
                 if result:
                     file, pdf_metadata_obj = result
                     pdf_dict = {
                         "current_file_name": file.name,
                         "filename": pdf_metadata_obj.filename,
-                        "url": item.get("url",""),
+                        "url": item.get("url", ""),
                         "file_size": filepath.stat().st_size,
                         "retrieved_on": datetime.datetime.now(datetime.UTC),
                         "canvas_metadata": pdf_metadata_obj,
                     }
-                    v1_copyright_item = await v1_CopyrightItem.get_or_none(material_id=item.get("material_id")),
-                    copyright_item = await CopyrightItem.get_or_none(material_id=item.get("material_id"))
+                    v1_copyright_item = (
+                        await v1_CopyrightItem.get_or_none(
+                            material_id=item.get("material_id")
+                        ),
+                    )
+                    copyright_item = await CopyrightItem.get_or_none(
+                        material_id=item.get("material_id")
+                    )
                     if v1_copyright_item:
                         pdf_dict["v1_copyright_item"] = v1_copyright_item
                     elif copyright_item:
                         pdf_dict["copyright_item"] = copyright_item
                     else:
-                        logger.warning(f"No matching CopyrightItem or v1_CopyrightItem found for material_id {item.get('material_id')}")
+                        logger.warning(
+                            f"No matching CopyrightItem or v1_CopyrightItem found for material_id {item.get('material_id')}"
+                        )
                     await PDF.create(**pdf_dict)
                 else:
                     logger.error(f"Failed to download {item.get('material_id')}")
