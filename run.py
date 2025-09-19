@@ -294,10 +294,11 @@ def update_from_v1(
         map_v1_to_v2_classifications,
         update_workflow_status_from_db,
     )
-    from easy_access.maintenance.v1_items import ingest_v1_data
+    from easy_access.maintenance.v1_items import ingest_v1_data, add_v1_hashes
 
     async def run_ingest_pipeline(settings: Settings, path: Path):
         await ingest_v1_data(settings, path)
+        await add_v1_hashes(settings)
         await match_v1_to_copyright_items(settings)
         await map_v1_to_v2_classifications(settings)
         await update_workflow_status_from_db(settings)

@@ -1,35 +1,39 @@
-# this module works on downloaded PDFs
-# each file should have a partly filled PDF object in the database
-# + a PDFCanvasMetadata object
-
-# we will use kreuzberg to extract text+metadata from the PDFs,
-# and store the metadata in the PDF object itself
-# and the text in a PDFText object (one-to-one with PDF)
-
-# we will also calculate a hash of the PDF file and store it in the PDF object
-
-# maybe later we might also calculate embeddings for the text and store them in a vector database, but not now
-
-
 import datetime
 from pathlib import Path
 
 from kreuzberg import ExtractionConfig, ExtractionResult, extract_file
 from loguru import logger
-from textacy import preprocessing
+from tortoise.expressions import Q
+
+# from textacy import preprocessing
 from xxhash import xxh3_64_hexdigest
 
 from easy_access.db.models import PDF, PDFText
 
 
-async def parse_pdfs():
+async def parse_pdfs(filter_ids: list[int] | None = None, parse_text:bool = False) -> None:
     """Parses all PDFs that have not yet been attempted for text extraction."""
 
-    pdfs = await PDF.filter(extraction_successful=False).all()
-    logger.info(f"Found {len(pdfs)} PDFs to process")
+    pdfs = PDF.filter(extraction_successful=False)
+    if filter_ids:
+        pdfs = pdfs.filter(
+            Q(copyright_item_id__in=filter_ids) | Q(v1_copyright_item_id__in=filter_ids)
+        )
+    pdfs = await pdfs.all()
 
+    logger.info(f"Found {len(pdfs)} PDFs to process")
+    if not parse_text:
+        logger.warning("Skipping text extraction as parse_text is False -- only hashing PDFs")
     async def process_pdf(pdf: PDF):
         try:
+            if hash := hash_pdf(pdf.path):
+                pdf.filehash = hash
+        except Exception as e:
+            logger.error(f"Error hashing PDF id={pdf.id}, path={pdf.path}: {e}")
+        if not parse_text:
+            return pdf
+        try:
+            pdf.extraction_attempted = True
             result = await extract_text(pdf.path)
         except Exception as e:
             logger.error(
@@ -37,7 +41,6 @@ async def parse_pdfs():
             )
             result = None
 
-        pdf.extraction_attempted = True
         if not result or len(result.content or "") < 1:
             pdf.extraction_successful = False
             return pdf
@@ -74,10 +77,6 @@ async def parse_pdfs():
             logger.error(
                 f"Error adding metadata to PDF id={pdf.id}, path={pdf.path}: {e}"
             )
-
-        if hash := hash_pdf(pdf.path):
-            pdf.filehash = hash
-
         return pdf
 
     for pdf in pdfs:
@@ -87,20 +86,6 @@ async def parse_pdfs():
         except Exception as e:
             logger.error(f"Error saving PDF id={pdf.id}, path={pdf.path}: {e}")
     print("Done extracting text from PDFs")
-
-
-def clean_text(text: str) -> str:
-    """Cleans the extracted text by removing excessive whitespace, newlines, etc."""
-    preproc_pipe = preprocessing.pipeline.make_pipeline(
-        preprocessing.normalize.bullet_points,
-        preprocessing.normalize.hyphenated_words,
-        preprocessing.normalize.unicode,
-        preprocessing.normalize.whitespace,
-        preprocessing.remove.html_tags,
-    )
-
-    text = preproc_pipe(text)
-    return text
 
 
 def hash_pdf(file: Path) -> str | None:

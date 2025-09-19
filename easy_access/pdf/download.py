@@ -79,7 +79,7 @@ async def download_pdf_from_canvas(
                 }
             )
 
-        pdf_metadata_obj = await PDFCanvasMetadata.create(**pdf_metadata)
+        pdf_metadata_obj,_ = await PDFCanvasMetadata.update_or_create(**pdf_metadata)
 
         download_link = metadata.get("url")
         if not download_link:
@@ -100,7 +100,11 @@ async def download_pdf_from_canvas(
                 async for chunk in file_response.aiter_bytes():
                     f.write(chunk)
         return File(filepath), pdf_metadata_obj
+
+
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return None # file not found, return None
         logger.error(f"HTTP error downloading from {url}: {e.response.status_code}")
         return None
     except Exception as e:
@@ -131,7 +135,11 @@ async def download_pdfs_for_items(
     async def download_single(item: dict[str, str], session: httpx.AsyncClient):
         try:
             async with semaphore:
-                filename = item.get("filename") or f"{item.get('material_id')}.pdf"
+                filename = (
+                    item.get("filename", "")
+                    if item.get("filename")
+                    else f"{item.get('material_id')}.pdf"
+                )
                 safe_filename = "".join(
                     c for c in filename if c.isalnum() or c in "._- "
                 ).strip()
@@ -156,8 +164,9 @@ async def download_pdfs_for_items(
                     v1_copyright_item = (
                         await v1_CopyrightItem.get_or_none(
                             material_id=item.get("material_id")
-                        ),
+                        )
                     )
+
                     copyright_item = await CopyrightItem.get_or_none(
                         material_id=item.get("material_id")
                     )
@@ -171,9 +180,13 @@ async def download_pdfs_for_items(
                         )
                     await PDF.create(**pdf_dict)
                 else:
-                    logger.error(f"Failed to download {item.get('material_id')}")
+                    return
         except Exception as e:
             logger.error(f"Error processing item {item.get('material_id')}: {e}")
+            # print detailed stack trace
+            import traceback
+
+            traceback.print_exc()
             return
 
     headers = {"Authorization": f"Bearer {api_token}"}
@@ -182,7 +195,7 @@ async def download_pdfs_for_items(
     ) as session:
         tasks = [download_single(item, session) for item in items]
         await tqdm_asyncio.gather(*tasks)
-    logger.info("Download complete")
+        logger.info("Downloads complete")
 
 
 async def download_pdfs(settings: Settings, limit: int = 0) -> None:

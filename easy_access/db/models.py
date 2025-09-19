@@ -505,7 +505,7 @@ class PDFCanvasMetadata(Model, TimestampMixin):
 
     canvas_created_at = fields.DatetimeField()
     canvas_updated_at = fields.DatetimeField()
-    modified_at = fields.DatetimeField(null=True)
+    canvas_modified_at = fields.DatetimeField(null=True)
 
     locked = fields.BooleanField()
     hidden = fields.BooleanField()

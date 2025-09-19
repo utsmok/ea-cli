@@ -12,9 +12,10 @@ this module has functions to:
     - update v2 items with useful data from v1 items
 
 """
+
 import contextlib
-import os
 import logging
+import os
 import warnings
 from collections import defaultdict
 from pathlib import Path
@@ -31,7 +32,9 @@ from easy_access.db.enums import (
     Status,
     WorkflowStatus,
 )
-from easy_access.db.models import CopyrightItem, v1_CopyrightItem
+from easy_access.db.models import v1_CopyrightItem
+from easy_access.pdf.download import download_pdfs_for_items
+from easy_access.pdf.parse import parse_pdfs
 from easy_access.settings import Settings
 
 # Constants
@@ -63,6 +66,7 @@ V1_FIELD_TYPES = {
 #        Excel file reading and parsing functions
 #
 
+
 def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
     """
     Reads an Excel file quietly, suppressing dtype inference messages.
@@ -90,6 +94,7 @@ def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
     finally:
         for name, level in prev_levels.items():
             logging.getLogger(name).setLevel(level)
+
 
 def import_v1_sheets(
     path: Path,
@@ -176,7 +181,6 @@ def clean_and_cast_cols(
             {"classification." + c.name.lower(): c.value for c in Classification}
         )
         TRANSLATIONS.update(ALLOWED_VALUES)
-
 
         # first strip excess whitespace and lowercase
         df = df.with_columns(
@@ -307,7 +311,11 @@ def clean_and_cast_cols(
     return df
 
 
-def process_v1_sheet(filename: str, dfs: dict[str, pl.DataFrame], existing_item_ids: set[int] | None = None) -> pl.DataFrame:
+def process_v1_sheet(
+    filename: str,
+    dfs: dict[str, pl.DataFrame],
+    existing_item_ids: set[int] | None = None,
+) -> pl.DataFrame:
     """
     input: two dataframes from a signle v1-style sheet:
         - complete_df: dataframe from the 'Complete data' sheet
@@ -340,7 +348,9 @@ def process_v1_sheet(filename: str, dfs: dict[str, pl.DataFrame], existing_item_
 
     if existing_item_ids is not None:
         combined_df = combined_df.with_columns(pl.col("material_id").cast(pl.Int64))
-        combined_df = combined_df.filter(~pl.col("material_id").is_in(existing_item_ids))
+        combined_df = combined_df.filter(
+            ~pl.col("material_id").is_in(existing_item_ids)
+        )
         if combined_df.is_empty():
             return combined_df
     # Col selection
@@ -397,7 +407,6 @@ def process_v1_sheets(
     returns a dict with the processed dataframes, keyed by filename.
     """
 
-
     results = {
         filename: process_v1_sheet(filename, dfs, existing_item_ids)
         for filename, dfs in extracted_sheets.items()
@@ -445,7 +454,7 @@ def merge_all_sheets(
 
 
 #
-#   Database related functions [async]
+#   async functions; e.g. to interact with the database
 #
 
 
@@ -461,104 +470,15 @@ async def ingest_v1_items(df: pl.DataFrame) -> None:
         await v1_CopyrightItem.update_or_create(**row)
 
 
-async def match_v1_to_copyright_items_old(
-    settings: Settings,
-) -> list[tuple[v1_CopyrightItem, CopyrightItem]]:
-    """
-    matches v1_CopyrightItems to CopyrightItems
-    returns a list of tuples with the matched items and the tier of the match (see compare_fields in function for details)
-    """
-
-    await ensure_db_inited(settings)
-    v1_items = list(await v1_CopyrightItem.filter(matching_copyright_item=None).all())
-    current_items = list(await CopyrightItem.filter(workflow_status__not="Done").all())
-
-    # use the compare_fields to see which fields to compare for matching
-    # start with tier 1 fields, then tier 2, etc
-    # if a match is found, add to the list and remove from the current_items list to avoid duplicate matches
-    # and continue to the next v1_item
-    # matches for tier3 and tier4 fields are dubious and should be checked manually and maybe skipped altogether
-
-    # todo: make this more performany by using polars df operations
-    compare_fields = {
-        "tier1": ["filehash"],
-        "tier2": [
-            "filename",
-            "pagecount",
-            "wordcount",
-            "picturecount",
-        ],
-        "tier3": ["publisher", "author", "title", "isbn", "doi"],
-        "tier4": ["faculty", "ml_prediction", "department", "classification"],
-    }
-
-    matched_items: list[tuple[v1_CopyrightItem, CopyrightItem, str]] = []
-    unmatched_v1_items: list[v1_CopyrightItem] = []
-    unmatched_current_items = set([i.material_id for i in current_items])
-    print(
-        f"Starting matching {len(v1_items)} v1 items to {len(current_items)} current items."
-    )
-    for v1_item in v1_items:
-        match_found = False
-        for tier, fields in compare_fields.items():
-            if match_found:
-                break
-
-            for current_item in current_items:
-                if all(
-                    getattr(v1_item, field) is not None
-                    and getattr(current_item, field) is not None
-                    and getattr(v1_item, field) == getattr(current_item, field)
-                    for field in fields
-                ):
-                    matched_items.append((v1_item, current_item, tier))
-                    if current_item.material_id in unmatched_current_items:
-                        unmatched_current_items.remove(current_item.material_id)
-                    match_found = True
-        if not match_found:
-            unmatched_v1_items.append(v1_item)
-
-    print(
-        f"Matched {len(matched_items)} matches. {len(unmatched_v1_items)} v1 items have no corresponding match. {len(unmatched_current_items)} current items have no corresponding v1 item."
-    )
-    print(
-        f"So {(1 - (len(unmatched_current_items) / (len(current_items) or 1))) * 100:.2f} % of current items have a corresponding v1 item."
-    )
-    updated_manual_classifications = 0
-    updated_remarks = 0
-
-    for v1_item, current_item, tier in matched_items:
-        v1_item.matching_copyright_item = current_item
-        await v1_item.save()
-        if (
-            current_item.manual_classification.lower() in [None, "", "in onderzoek", "onbekend"]
-            and v1_item.manual_classification != current_item.manual_classification
-        ):
-            current_item.manual_classification = v1_item.manual_classification
-            updated_manual_classifications += 1
-            await current_item.save(update_fields=["manual_classification"])
-        if current_item.remarks != v1_item.remarks and current_item.remarks in [
-            None,
-            "",
-        ]:
-            current_item.remarks = v1_item.remarks
-            updated_remarks += 1
-            await current_item.save(update_fields=["remarks"])
-
-    print(
-        f"Matches by tier: {dict((tier, sum(1 for _, _, t in matched_items if t == tier)) for tier in compare_fields)}"
-    )
-    print(f"Updated {updated_manual_classifications} manual classifications.")
-
-
 async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
     """
     given a base directory with subdirectories for each faculty containing v1 sheets,
     ingest all data into the database.
     """
     await ensure_db_inited(settings)
-    existing_v1_item_ids = await v1_CopyrightItem.all().values_list("material_id", flat=True)
-
+    existing_v1_item_ids = await v1_CopyrightItem.all().values_list(
+        "material_id", flat=True
+    )
 
     individual_results = {}
     processed_results = {}
@@ -577,9 +497,27 @@ async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
             main = merge_all_sheets(final)
             final_results[subdir.name] = main
 
-
     for faculty, df in final_results.items():
         await ingest_v1_items(df)
+    await close_connections()
+
+
+async def add_v1_hashes(settings: Settings) -> None:
+    """
+    for each v1_CopyrightItem that has no filehash, download the pdf if possible and calculate the hash
+    then save the hash to the item
+    """
+
+    await ensure_db_inited(settings)
+    v1_items = await v1_CopyrightItem.filter(filehash=None).all()
+    print(f"Found {len(v1_items)} v1 items without a filehash.")
+    items_as_dicts = [
+        {"material_id": item.material_id, "url": item.url, "filename": item.filename}
+        for item in v1_items
+        if item.url
+    ]
+    await download_pdfs_for_items(settings, items_as_dicts)
+    await parse_pdfs(filter_ids = [item.material_id for item in v1_items], parse_text=False)
     await close_connections()
 
 
