@@ -1,18 +1,17 @@
 """
 Easy Access Sheet Toolkit
-Apr 2025
+Sept 2025
 Samuel Mok / s.mok@utwente.nl / cip@utwente.nl
 homepage: https://github.com/utsmok/ea-cli
 Note: only tested on windows systems
 
 This script runs the Easy Access tool for you.
-All code can be found in folder 'easy_access', with easy_access_cli.py containing the main functionality.
+All code can be found in folder 'easy_access'
 See readme.md for more info, and the settings.yaml example file for specific parameters.
 
 quickstart:
 1. install uv (https://docs.astral.sh/uv/getting-started/installation/)
-2. > uv run run.py --help
-3. you'll probably see a lot of error messages, try to fix them and run again! :)
+2. run the command `uv run run.py --help`
 """
 
 import asyncio
