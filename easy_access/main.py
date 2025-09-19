@@ -103,6 +103,10 @@ class EasyAccessTool:
         """
         self.pipeline.download_pdfs()
 
+    def process_db_changes(self) -> None:
+        """Synchronous wrapper for processing DB changes."""
+        self.pipeline.process_db_changes()
+
     def run_parse_pdfs(self) -> None:
         """
         Executes only the PDF parsing stage.

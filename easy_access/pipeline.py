@@ -88,6 +88,10 @@ class DataPipeline:
 
         return _run_sync(self.parse_pdfs_async())
 
+    def process_db_changes(self) -> None:
+        """Synchronous wrapper for processing DB changes."""
+        return _run_sync(self.process_db_changes_async())
+
     # Asynchronous interface
     async def run_async(self) -> None:
         """Runs the full data processing pipeline asynchronously."""
@@ -255,4 +259,16 @@ class DataPipeline:
         logger.info("PDF parsing completed.")
 
     async def process_db_changes_async(self) -> None:
-        """Go through the DB and ensure all fields are updated based on current status; e.g. set workflow status to Done if a file has a proper classification and no action is needed, etc"""
+        """
+        Processes database changes to ensure all fields are up to date.
+        First map entered V1 classifications to V2,
+        then go through the DB and ensure all fields are updated based on current status.
+        e.g. set workflow status to Done if a file has a proper classification and no action is needed, etc"""
+        from easy_access.db.update import (
+            map_v1_to_v2_classifications,
+            update_workflow_status_from_db,
+        )
+
+        await map_v1_to_v2_classifications(self.settings)
+
+        await update_workflow_status_from_db(self.settings)

@@ -1,0 +1,9 @@
+- PDFs:
+    - implement OCR
+    - do something with the new metadata, extracted text, etc.
+- Classification:
+    - finalize initial implementation
+    - test the code
+    - integrate into the workflow
+    - decide what to do with this info
+    - think about how to present this data to users

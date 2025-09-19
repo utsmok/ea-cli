@@ -8,100 +8,15 @@ Tests cover:
 - Error handling and edge cases
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from easy_access.db.relations import (
     link_courses,
-    update_duplicates,
     update_relations_async,
 )
 from easy_access.settings import Settings
-from tests.helpers import QuerySetMock
-
-
-class TestUpdateDuplicates:
-    """Test duplicate status update functionality."""
-
-    @pytest.mark.asyncio
-    async def test_update_duplicates_no_replacements(self):
-        """Test when no PDFs have replacements."""
-        settings = Settings()
-
-        with patch("easy_access.db.relations.PDF.filter") as mock_filter:
-            # Mock empty query result - need to return a queryset that supports prefetch_related
-            mock_queryset = AsyncMock()
-            mock_queryset.prefetch_related.return_value = []
-            mock_filter.return_value = mock_queryset
-
-            await update_duplicates(settings)
-
-            mock_filter.assert_called_once_with(replace_with_id__not_isnull=True)
-
-    @pytest.mark.asyncio
-    async def test_update_duplicates_with_replacements(self):
-        """Test updating duplicates when replacements exist."""
-        settings = Settings()
-
-        # Mock PDF with replacement
-        mock_pdf = MagicMock()
-        mock_pdf.material_id = 1001
-        mock_pdf.replace_with.material_id = 2001
-
-        # Mock copyright item to update
-        mock_item = MagicMock()
-        mock_item.material_id = 1001
-
-        with (
-            patch("easy_access.db.relations.PDF.filter") as mock_filter,
-            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
-            patch(
-                "easy_access.db.relations.CopyrightItem.bulk_update"
-            ) as mock_bulk_update,
-        ):
-            # Mock queryset for PDFs with prefetch_related capability
-            mock_queryset = QuerySetMock([mock_pdf])
-            mock_filter.return_value = mock_queryset
-
-            mock_item_filter.return_value = [mock_item]
-
-            await update_duplicates(settings)
-
-            # Verify bulk update was called
-            mock_bulk_update.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_update_duplicates_no_items_to_update(self):
-        """Test when no copyright items need updating."""
-        settings = Settings()
-
-        # Mock PDF with replacement
-        mock_pdf = MagicMock()
-        mock_pdf.material_id = 1001
-        mock_pdf.replace_with.material_id = 2001
-
-        with (
-            patch("easy_access.db.relations.PDF.filter") as mock_filter,
-            patch("easy_access.db.relations.CopyrightItem.filter") as mock_item_filter,
-        ):
-            # Mock queryset for PDFs
-            mock_queryset = QuerySetMock([mock_pdf])
-            mock_filter.return_value = mock_queryset
-
-            mock_item_filter.return_value = []  # No matching items
-
-            await update_duplicates(settings)
-
-            # Should not fail, just log that no items were updated
-            # Reset the mock call count to ensure the next invocation is measured
-            mock_item_filter.reset_mock()
-            mock_item_filter.return_value = []  # No items to update
-
-            await update_duplicates(settings)
-
-            # Should have been called once during the second run
-            mock_item_filter.assert_called_once()
 
 
 class TestLinkCourses:
@@ -282,20 +197,3 @@ class TestRelationsBatchOperations:
             mock_course_filter.assert_called_once()
             call_args = mock_course_filter.call_args
             assert "code__in" in str(call_args)
-
-    @pytest.mark.asyncio
-    async def test_prefetch_related_usage(self):
-        """Test that prefetch_related is used to avoid N+1 queries."""
-        settings = Settings()
-
-        with patch("easy_access.db.relations.PDF.filter") as mock_filter:
-            mock_filter.return_value = []
-
-            await update_duplicates(settings)
-
-            # Verify prefetch_related was used
-            mock_filter.assert_called_once()
-            call_args = mock_filter.call_args
-            assert "prefetch_related" in str(call_args) or "replace_with" in str(
-                call_args
-            )

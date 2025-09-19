@@ -232,6 +232,8 @@ def process_data(
     run_file_exists = file_exists_only or not any(stage_options)
     run_pdf_download = pdf_download_only or not any(stage_options)
     run_parse = parse_only or not any(stage_options)
+    run_db_changes = not any(stage_options)
+
     # Import project modules here to avoid import-time side-effects when showing --help
     from easy_access.main import EasyAccessTool
     from easy_access.settings import SETTINGS, EasyAccessSettings
@@ -274,6 +276,9 @@ def process_data(
     if run_parse and not no_pdf_parse:
         logger.info("Running PDF parsing stage...")
         tool.run_parse_pdfs()
+    if run_db_changes:
+        logger.info("Processing DB changes...")
+        tool.process_db_changes()
     if run_export:
         logger.info("Running export stage...")
         tool.run_export()
