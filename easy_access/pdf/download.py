@@ -7,7 +7,7 @@ from loguru import logger
 from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import ensure_db_inited
-from easy_access.db.models import PDF, CopyrightItem, PDFCanvasMetadata
+from easy_access.db.models import PDF, CopyrightItem, PDFCanvasMetadata, v1_CopyrightItem
 from easy_access.settings import DirSetting, Settings
 from easy_access.utils import File
 
@@ -101,6 +101,70 @@ async def download_pdf_from_canvas(
     except Exception as e:
         logger.error(f"Error downloading from {url}: {e}")
         return None
+
+
+async def download_pdfs_for_items(
+    settings: Settings, items: list[dict], download_dir: Path | None = None) -> None:
+    """
+    Downloads PDFs from the given list of items and stores them in the specified download directory.
+    each item is a dict with at least 'url','filename','material_id' keys.
+    If download_dir is None, uses the default pdf_download_dir from settings.
+    """
+    await ensure_db_inited(settings)
+    if download_dir is None:
+        download_dir = settings.dirs[DirSetting.PDF_DOWNLOADS].full
+
+    api_token = getattr(settings.university_settings, "canvas_api_token", None)
+    if not api_token:
+        logger.error("Canvas API token not found in settings, cannot download PDFs.")
+        logger.debug(settings.university_settings.__dict__)
+        return
+
+    semaphore = asyncio.Semaphore(value=5)
+
+    async def download_single(item: dict[str,str], session: httpx.AsyncClient):
+        try:
+            async with semaphore:
+                filename = item.get("filename") or f"{item.get('material_id')}.pdf"
+                safe_filename = "".join(
+                    c for c in filename if c.isalnum() or c in "._- "
+                ).strip()
+                if not safe_filename:
+                    safe_filename = f"{item.get('material_id')}.pdf"
+                filepath = download_dir / f"{item.get('material_id')}_{safe_filename}.pdf"
+                result = await download_pdf_from_canvas(item.get("url",""), filepath, session)
+                if result:
+                    file, pdf_metadata_obj = result
+                    pdf_dict = {
+                        "current_file_name": file.name,
+                        "filename": pdf_metadata_obj.filename,
+                        "url": item.get("url",""),
+                        "file_size": filepath.stat().st_size,
+                        "retrieved_on": datetime.datetime.now(datetime.UTC),
+                        "canvas_metadata": pdf_metadata_obj,
+                    }
+                    v1_copyright_item = await v1_CopyrightItem.get_or_none(material_id=item.get("material_id")),
+                    copyright_item = await CopyrightItem.get_or_none(material_id=item.get("material_id"))
+                    if v1_copyright_item:
+                        pdf_dict["v1_copyright_item"] = v1_copyright_item
+                    elif copyright_item:
+                        pdf_dict["copyright_item"] = copyright_item
+                    else:
+                        logger.warning(f"No matching CopyrightItem or v1_CopyrightItem found for material_id {item.get('material_id')}")
+                    await PDF.create(**pdf_dict)
+                else:
+                    logger.error(f"Failed to download {item.get('material_id')}")
+        except Exception as e:
+            logger.error(f"Error processing item {item.get('material_id')}: {e}")
+            return
+
+    headers = {"Authorization": f"Bearer {api_token}"}
+    async with httpx.AsyncClient(
+        headers=headers, follow_redirects=True, timeout=20.0
+    ) as session:
+        tasks = [download_single(item, session) for item in items]
+        await tqdm_asyncio.gather(*tasks)
+    logger.info("Download complete")
 
 
 async def download_pdfs(settings: Settings, limit: int = 0) -> None:

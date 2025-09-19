@@ -96,6 +96,7 @@ class v1_CopyrightItem(Model, TimestampMixin):
         max_length=2048, null=True
     )  # probably single course code(?)
 
+    pdf: fields.ReverseRelation["PDF"]
 
 class CopyrightItem(Model, TimestampMixin):
     """
@@ -408,13 +409,16 @@ class Programme(Model, TimestampMixin):
 class PDF(Model, TimestampMixin):
     """
     data for a PDF file
-    Each file should be directly related to a single CopyrightItem
+    Each file should be directly related to a single CopyrightItem OR
+    a single v1_CopyrightItem (if the PDF was downloaded based on the v1 sheet).
     """
 
     id = fields.IntField(primary_key=True)
 
-    # one-to-one relation with CopyrightItem
-    copyright_item = fields.OneToOneField("models.CopyrightItem", related_name="pdf")
+    # one-to-one relation with parent item
+    # exactly one of these should be non-null
+    copyright_item = fields.OneToOneField("models.CopyrightItem", related_name="pdf", null=True)
+    v1_copyright_item = fields.OneToOneField("models.v1_CopyrightItem", related_name="pdf", null=True)
 
     # one-to-one relation with Canvas metadata
     # should always exist, as it is used to retrieve the PDF in the first place
