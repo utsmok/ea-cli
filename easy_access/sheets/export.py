@@ -17,10 +17,11 @@ import polars as pl
 from loguru import logger
 
 from easy_access.db.retrieve import retrieve_full_data
-from easy_access.settings import DirSetting, Settings
+from easy_access.settings import DirSetting, OverrideSettings, Settings
 from easy_access.sheets.analysis import create_faculty_overviews
 from easy_access.sheets.backup import backup_existing_file
 from easy_access.sheets.sheet import (
+    _read_excel_quiet,
     finalize_sheet,
     protect_workbook,
     store_complete_data,
@@ -108,7 +109,7 @@ async def export_faculty_sheets(
                 continue
             try:
                 # read the Complete Data sheet from existing file
-                existing_df = pl.read_excel(
+                existing_df = _read_excel_quiet(
                     file.path, sheet_name=settings.data_settings.complete_data_name
                 )
                 if "material_id" in existing_df.columns:
@@ -132,6 +133,12 @@ async def export_faculty_sheets(
         logger.info(
             f"Creating faculty sheet: {output_file_path.name} ({new_data.shape[0]} new items)"
         )
+
+        # see if there is a .yaml override file in the faculty directory
+        for file in Directory(faculty_dir.full / faculty).files:
+            if file.extension in [".yml", ".yaml"] and "settings" in file.name:
+                logger.info(f"Applying override settings from {file.name}")
+                settings = OverrideSettings(override_input_file_path=file.path)
 
         # Store complete data (only new items)
         store_complete_data(settings=settings, file=output_file_path, data=new_data)
@@ -168,6 +175,10 @@ async def export_faculty_workflow_files(
 
         faculty_dir = Directory(settings.dirs[DirSetting.FACULTIES_DIR].full / faculty)
         faculty_dir.full.mkdir(parents=True, exist_ok=True)
+        for file in faculty_dir.files:
+            if file.extension in [".yml", ".yaml"] and "settings" in file.name:
+                logger.info(f"Applying override settings from {file.name}")
+                settings = OverrideSettings(override_input_file_path=file.path)
 
         # small backups dir inside faculty dir
         backups_dir_base = (
@@ -209,9 +220,9 @@ async def export_faculty_workflow_files(
             # backup existing
             if target_path.exists():
                 try:
-                    update_stats[bucket_name]["old"] = pl.read_excel(target_path).shape[
-                        0
-                    ]
+                    update_stats[bucket_name]["old"] = _read_excel_quiet(
+                        target_path
+                    ).shape[0]
                     moved = backup_existing_file(
                         target_path=target_path,
                         backups_dir=backups_dir,

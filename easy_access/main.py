@@ -112,3 +112,9 @@ class EasyAccessTool:
         Executes only the PDF parsing stage.
         """
         self.pipeline.parse_pdfs()
+
+    def close_connections(self) -> None:
+        """
+        Closes any open connections, such as database connections.
+        """
+        self.pipeline.close_connections()

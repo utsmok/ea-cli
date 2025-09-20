@@ -92,6 +92,16 @@ class DataPipeline:
         """Synchronous wrapper for processing DB changes."""
         return _run_sync(self.process_db_changes_async())
 
+    def close_connections(self) -> None:
+        """
+        Closes any open connections, such as database connections.
+        """
+        from easy_access.db.base import close_connections
+
+        logger.info("Closing database connections...")
+        return _run_sync(close_connections())
+        logger.info("Database connections closed.")
+
     # Asynchronous interface
     async def run_async(self) -> None:
         """Runs the full data processing pipeline asynchronously."""

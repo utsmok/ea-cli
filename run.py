@@ -278,6 +278,7 @@ def process_data(
         tool.run_export()
 
     logger.success("Processing done!")
+    tool.close_connections()
     typer.Exit()
 
 
@@ -294,7 +295,7 @@ def update_from_v1(
         map_v1_to_v2_classifications,
         update_workflow_status_from_db,
     )
-    from easy_access.maintenance.v1_items import ingest_v1_data, add_v1_hashes
+    from easy_access.maintenance.v1_items import add_v1_hashes, ingest_v1_data
 
     async def run_ingest_pipeline(settings: Settings, path: Path):
         await ingest_v1_data(settings, path)

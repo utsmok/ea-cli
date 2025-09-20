@@ -27,6 +27,7 @@ throughout the application.
 def configure_logger() -> None:
     """Configures the Loguru logger for console and file output."""
     log_dir = Directory(path="logs")
+    logger.remove()
 
     def console_formatter(record) -> str:
         """Formats log messages for console output.
@@ -42,23 +43,12 @@ def configure_logger() -> None:
     logger.add(
         sink=sys.stderr,
         colorize=True,
-        format=console_formatter,
         level="TRACE",
         enqueue=True,
+        backtrace=True,
+        diagnose=True,
     )
 
-    logger.add(
-        # Add a file sink. Wrap in try/except to avoid breaking import-time setup
-        # if the environment lacks permissions or an unexpected Path type is used.
-        **{
-            "sink": log_dir.full / "app_{time}.log",
-            "rotation": "1 month",
-            "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-            "level": "TRACE",
-            "enqueue": True,
-            "colorize": False,
-        }
-    )
     try:
         # Re-add file sink inside try to catch path-related errors
         logger.add(
@@ -514,12 +504,10 @@ class Settings:
     raw_settings: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     dirs: dict[DirSetting, Directory] = field(default_factory=dict, init=False)
     files: dict[FileSetting, File] = field(default_factory=dict, init=False)
-    fine_amount: float = field(default=0.3, init=False, repr=False)
     data_settings: DataSettings = field(default_factory=DataSettings, init=False)
     university_settings: UniversitySettings = field(
         default_factory=UniversitySettings, init=False
     )
-    backup_settings: BackupSettings = field(default_factory=BackupSettings, init=False)
     enrichment_settings: EnrichmentSettings = field(
         default_factory=EnrichmentSettings, init=False
     )
@@ -729,55 +717,6 @@ class Settings:
                     logger.warning(
                         f"Unrecognized data setting {key_str} (with value: {value_data}). Skipping."
                     )
-
-    def parse_backup(self, backup_settings_yaml: dict[str, Any]) -> None:
-        """Parses the 'backup' section of settings.yaml.
-
-        Args:
-            backup_settings_yaml: The dictionary representing the 'backup' settings.
-        """
-        for key_str, value_data in backup_settings_yaml.items():
-            try:
-                key_enum = BackupSetting(value=key_str)
-            except ValueError:
-                logger.error(
-                    f"Unrecognized backup setting {key_str} (with value: {value_data}). Skipping."
-                )
-                continue
-            match key_enum:
-                case BackupSetting.BACKUP_ALL:
-                    self.backup_settings.backup_all = bool(value_data)
-                case BackupSetting.BACKUP_DIRS:
-                    backup_dirs_list: list[Directory] = []
-                    if isinstance(value_data, list):
-                        for v_item in value_data:
-                            if isinstance(v_item, str):
-                                try:
-                                    dir_setting_val = DirSetting(value=v_item)
-                                    if dir_setting_val in self.dirs:
-                                        backup_dirs_list.append(
-                                            self.dirs[dir_setting_val]
-                                        )
-                                except ValueError:
-                                    logger.warning(
-                                        f"Invalid DirSetting value '{v_item}' in backup_dirs. Skipping."
-                                    )
-                    self.backup_settings.backup_dirs = backup_dirs_list
-
-                case BackupSetting.MAX_BACKUPS:
-                    try:
-                        self.backup_settings.max_backups = int(value_data)
-                    except (ValueError, TypeError):
-                        logger.warning(
-                            f"Invalid value for MAX_BACKUPS: {value_data}. Using default {self.backup_settings.max_backups}"
-                        )
-                case BackupSetting.BACKUP_OVERVIEWS:
-                    self.backup_settings.backup_overviews = bool(value_data)
-                case _:
-                    logger.warning(
-                        f"Unrecognized backup setting {key_str} (with value: {value_data}). Skipping."
-                    )
-        self.backup_settings.backup_location = self.dirs.get(DirSetting.FULL_BACKUPS)
 
     def parse_enrichment(self, enrichment_settings_yaml: dict[str, Any]) -> None:
         """Parses the 'enrichment' section of settings.yaml.
@@ -1070,7 +1009,6 @@ class Settings:
             "directories": self.parse_directories,
             "files": self.parse_files,
             "unsorted": self.parse_unsorted,
-            "backup": self.parse_backup,
             "enrichment": self.parse_enrichment,
             "database_path": self.parse_database_settings,
         }
@@ -1137,14 +1075,6 @@ class Settings:
                 logger.warning(
                     f"Unrecognized setting key: '{key}'. It will be ignored unless handled by 'unsorted'."
                 )
-
-        # Parse 'backup' settings last, ensuring dependencies like 'directories' are parsed
-        if "backup" in self.raw_settings:
-            try:
-                self.parse_backup(backup_settings_yaml=self.raw_settings["backup"])
-            except Exception as e:
-                logger.error(f"Error parsing 'backup' settings: {e}")
-                logger.debug(self.raw_settings["backup"])
 
 
 @dataclass
@@ -1303,6 +1233,147 @@ class SampleSettings:
                     logger.warning(
                         f"Sample settings 'output.{key}' expected type {expected_type}, got {type(val)}. Using default."
                     )
+
+
+@dataclass
+class OverrideSettings(Settings):
+    """Dataclass to override settings, inherits from the main Settings class.
+
+    Attributes:
+        input_file_path: Path to the override settings file (YAML)
+        The settings file only required the settings to override.
+        Not all settings can be overridden.
+        Main focus is on the data_settings section, to allow for quick changes to column mappings, order, new fields, and sheet names.
+    """
+
+    override_input_file_path: Path | str | None = (
+        None  # No default, must be provided for overrides
+    )
+    backup_data_settings: DataSettings | None = field(default=None, init=False)
+    override_settings: dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        """Initializes override settings after dataclass creation."""
+        super().__post_init__()  # Call parent post-init to load and parse settings
+        if self.override_input_file_path:
+            self.override_default_settings()
+
+    def override_default_settings(self) -> None:
+        """
+        Figures out if the override settings file is a .yaml or .xlsx file and calls the appropriate method to override settings.
+        """
+
+        if not self.override_input_file_path:
+            logger.info(
+                "No override settings file path provided. Using default settings."
+            )
+            return
+
+        file_path = (
+            Path(self.override_input_file_path)
+            if not isinstance(self.override_input_file_path, Path)
+            else self.override_input_file_path
+        )
+        if not file_path.exists():
+            logger.error(f"Override settings file does not exist: {file_path}")
+            return
+
+        if file_path.suffix.lower() in [".yaml", ".yml"]:
+            self._override_from_yaml(file_path)
+        else:
+            try:
+                self._override_from_yaml(file_path)
+            except Exception as e:
+                logger.error(
+                    f"Error overriding settings from file {file_path}: {e}. Using default settings."
+                )
+                return
+
+        if self.override_settings:
+            self.parse_override()
+
+    def _override_from_yaml(self, file_path: Path) -> None:
+        try:
+            with open(file=file_path, encoding="utf-8") as f:
+                loaded_yaml = yaml.load(stream=f, Loader=yaml.FullLoader)
+                if isinstance(loaded_yaml, dict):
+                    self.override_settings = loaded_yaml
+        except Exception as e:
+            logger.error(f"Error loading override settings from {file_path}: {e}")
+            return
+
+    def parse_override(self) -> None:
+        """
+        Based on the loaded override settings in self.override_settings, override the relevant settings in self.
+        Currently only supports overriding specific fields in data_settings.
+        """
+        self.backup_data_settings = self.data_settings
+        if not self.override_settings:
+            logger.info("No override settings to apply.")
+            return
+
+        data_settings_override = self.override_settings.get("data_settings")
+        if not isinstance(data_settings_override, dict):
+            logger.error("No valid 'data_settings' section in override settings.")
+            return
+        new_col_settings = data_settings_override.get("data_entry_cols")
+
+        # this should be a list of dicts
+        # containing the cols the include in the data entry sheet
+        # IN order of appearance
+        # grab the initialized data entry cols from self.data_settings to grab existing settings
+        # the iterate over the new list, creating a new self.data_settings object that copies over the existing settings but overrides order/name/inclusion based on the override
+        if not isinstance(new_col_settings, list):
+            logger.error(
+                "'data_entry_cols' in override settings is not a list. Cannot override."
+            )
+            return
+        existing_cols = {col.name: col for col in self.data_settings.data_entry_cols}
+        overridden_cols: list[ColInfo] = []
+        found_url_col = False
+        found_material_id_col = False
+        for col_dict in new_col_settings:
+            if not isinstance(col_dict, dict) and not isinstance(col_dict, str):
+                logger.warning(
+                    f"Expected dict or str for column override, got {type(col_dict)}. Skipping."
+                )
+                continue
+            col_name = col_dict.get("name") if isinstance(col_dict, dict) else col_dict
+
+            if not isinstance(col_name, str):
+                logger.warning(
+                    f"Column override missing 'name' or 'name' is not a string: {col_dict}. Skipping."
+                )
+                continue
+
+            if col_name in existing_cols:
+                if col_name == "url":
+                    found_url_col = True
+                if col_name == "material_id":
+                    found_material_id_col = True
+                try:
+                    overridden_col = existing_cols[col_name]
+                    overridden_cols.append(overridden_col)
+                except TypeError as e:
+                    logger.error(
+                        f"Error creating ColInfo for overridden column '{col_name}': {e}. Skipping."
+                    )
+            else:
+                logger.warning(
+                    f"Column '{col_name}' in override settings not found in existing data entry columns. Skipping."
+                )
+
+        if overridden_cols:
+            if not found_url_col:
+                overridden_cols.append(existing_cols["url"])
+            if not found_material_id_col:
+                overridden_cols.insert(0, existing_cols["material_id"])
+            self.data_settings.data_entry_cols = overridden_cols
+            logger.info(
+                f"Overridden data entry columns with {len(overridden_cols)} columns from override settings."
+            )
 
 
 def load_osiris_data() -> dict[str, Any] | None:

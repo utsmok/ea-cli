@@ -4,7 +4,6 @@
 
 unsorted:
 # values that don't (yet) fit anywhere else
-  fine_amount: 0.3 # fine amount per page per item per student
   dashboard_reload: true # Auto-reload dashboard on code changes (dev setting)
   classification_options:
     - open access
@@ -16,17 +15,6 @@ unsorted:
     - korte overname
     - middellange overname
     - onbekend
-backup:
-  # backup all sheets in selected directories before starting? (bool)
-  backup_all: true
-  # directories to backup, use keys from the 'directories' section
-  backup_dirs:
-    - faculties_dir
-  # maximum number of backups to keep (int)
-  max_backups: 40
-  # backup overview files (move them to overview_backup instead of deleting)? (bool)
-  # note that this settings is separate from backup_all!
-  backup_overviews: true
 
 
 directories:
@@ -41,21 +29,17 @@ directories:
   script_data: script_data # Data directly used by the script, such as 'full_data.csv' and 'ea-cli.log'
   pdf_downloads: pdf_downloads # Directory for pdf downloads
 
-# additional specific file paths. Will be stored in script_data directory defined above.
-files:
-  # folder where all these files will be stored/retrieved from. If blank/null, use working dir
-  folder: script_data
-  subfolders:
-    classifications: classifications # json files with classifications
-  files:
-    # Enrichment related files
-    full_data_csv: full_data.csv
-    full_data_parquet: full_data.parquet
-    osiris_data: osiris_data.json
-    osiris_data_w_contacts: osiris_data_w_contacts.json
-    person_data: person_data.json
 
-# settings for data input/output/processing
+# ------------------------------------------------------
+#       Sheet column settings
+# ------------------------------------------------------
+#   In this section, you can configure the contents of the `Data entry` sheets in all the Excel sheets.
+#   These settings will apply to all sheets created in this directory.
+#   Under the `data_entry_cols` setting, you can specify which columns should be included in the `Data entry` sheet by including them in the list below.
+#   The columns will be included in the order they are listed here: reorder the list to change the order in the sheet.
+#
+
+
 data_settings:
   # sheet details for the complete data sheet & data entry sheet present in each output excel file.
   # parameters: sheet name; cols to be included
@@ -84,12 +68,12 @@ data_settings:
     - name: "v2_manual_classification"
       is_editable: true
       dropdown_options: 'ENUM:ClassificationV2'
-    - name: "v2_lengte"
-      is_editable: true
-      dropdown_options: 'ENUM:Lengte'
     - name: "v2_overnamestatus"
       is_editable: true
       dropdown_options: 'ENUM:OvernameStatus'
+    - name: "v2_lengte"
+      is_editable: true
+      dropdown_options: 'ENUM:Lengte'
     - name: "remarks"
       is_editable: true
     - name: "ml_prediction"
@@ -154,8 +138,6 @@ data_settings:
 
   final_data_col_order: !!seq [
     material_id,
-    is_duplicate,
-    replacement_id,
     period,
     department,
     course_code,
@@ -191,8 +173,6 @@ data_settings:
     count_students_registered,
     retrieved_from_copyright_on,
     workflow_status,
-    possible_fine,
-    infringement,
     faculty,
     course_contacts_faculties,
     course_contacts_names,
@@ -205,8 +185,6 @@ data_settings:
     filehash,
     last_scan_date_university,
     last_scan_date_course,
-
-
   ]
 
 
