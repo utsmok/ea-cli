@@ -141,7 +141,7 @@ def clean_and_cast_cols(
     if "manual_classification_entry" in df.columns:
         man_class_cols.append("manual_classification_entry")
     if not man_class_cols:
-        print(f"No manual_classification columns found in df.")
+        print("No manual_classification columns found in df.")
     for col in man_class_cols:
         # all values in these cols should be a valid value in the Classification enum.
         # all lowercased strings.
@@ -476,7 +476,7 @@ async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
     ingest all data into the database.
     """
     await ensure_db_inited(settings)
-    existing_v1_item_ids = await v1_CopyrightItem.all().values_list(
+    existing_v1_item_ids: list[int] = await v1_CopyrightItem.all().values_list(
         "material_id", flat=True
     )
 
@@ -497,7 +497,7 @@ async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
             main = merge_all_sheets(final)
             final_results[subdir.name] = main
 
-    for faculty, df in final_results.items():
+    for _faculty, df in final_results.items():
         await ingest_v1_items(df)
     await close_connections()
 
@@ -517,7 +517,9 @@ async def add_v1_hashes(settings: Settings) -> None:
         if item.url
     ]
     await download_pdfs_for_items(settings, items_as_dicts)
-    await parse_pdfs(filter_ids = [item.material_id for item in v1_items], parse_text=False)
+    await parse_pdfs(
+        filter_ids=[item.material_id for item in v1_items], parse_text=False
+    )
     await close_connections()
 
 

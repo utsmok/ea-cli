@@ -1,4 +1,4 @@
-from collections import defaultdict
+import asyncio
 from datetime import datetime
 
 import polars as pl
@@ -11,106 +11,6 @@ from easy_access.db.update import update_copyright_items
 from easy_access.settings import DirSetting, Settings  # Keep for type hinting
 from easy_access.sheets.sheet import finalize_sheet, store_complete_data
 from easy_access.utils import Directory, File
-
-
-def create_programme_overviews(
-    settings: Settings,  # Added settings
-    all_faculty_data: pl.DataFrame,
-    faculty: str,
-    style_iter: int,
-):
-    """
-    create an overview sheet for each programme of the given faculty, using the data in df.
-    """
-    logger.warning("Programme sheet export disabled.")
-    return style_iter
-    course_to_group: dict[str, str] = settings.university_settings.course_mapping[
-        faculty
-    ]
-    data: dict[str, pl.DataFrame] = defaultdict(pl.DataFrame)
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    for course, group in course_to_group.items():
-        programme_data = all_faculty_data.filter(pl.col("department") == course)
-        if programme_data.is_empty():
-            continue
-        else:
-            if "possible_fine" in programme_data.columns:
-                programme_data = programme_data.with_columns(
-                    pl.when(
-                        pl.col("possible_fine").is_null()
-                        | (pl.col("possible_fine") == "")
-                    )
-                    .then(
-                        pl.col("pages_x_students")
-                        .cast(pl.Int32)
-                        .mul(settings.fine_amount)
-                        .alias("possible_fine")
-                    )
-                    .otherwise(pl.col("possible_fine"))
-                )
-            else:
-                programme_data = programme_data.with_columns(
-                    possible_fine=pl.col("pages_x_students")
-                    .cast(pl.Int32)
-                    .mul(settings.fine_amount)
-                )
-            programme_data = programme_data.with_columns(
-                infringement=pl.when(
-                    pl.col("manual_classification").is_null()
-                    | (pl.col("manual_classification") == "")
-                    | (pl.col("manual_classification") == "-")
-                )
-                .then(pl.lit("undetermined"))
-                .when(
-                    pl.col("manual_classification")
-                    .str.to_lowercase()
-                    .str.contains("open|eigen|overig|deleted")
-                )
-                .then(pl.lit("no"))
-                .when(
-                    pl.col("manual_classification")
-                    .str.to_lowercase()
-                    .str.contains("lange")
-                )
-                .then(pl.lit("yes"))
-                .otherwise(pl.lit("maybe"))
-            )
-            data[group] = pl.concat(
-                [data[group], programme_data], how="diagonal_relaxed"
-            )
-
-    for group, item in data.items():
-        logger.info(f"group: {group}: {item.shape[0]} items")
-
-    overview_fac_programme_dir = Directory(
-        settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / faculty / "per_programme"
-    )
-    for groupname, df in data.items():
-        for file in Directory(
-            settings.dirs[DirSetting.FACULTIES_DIR].full / faculty / "per_programme"
-        ).files:
-            if file.extension not in [".xls", ".xlsx"]:
-                continue
-            if "overview" in file.name and groupname in file.name:
-                file.move(overview_fac_programme_dir.full / file.name)
-                continue
-        logger.info(f"{groupname} has {df.shape[0]} items")
-        programme_file = File(
-            settings.dirs[DirSetting.FACULTIES_DIR].full
-            / faculty
-            / "per_programme"
-            / f"{groupname}_total_overview_updated_{today}.xlsx"
-        )
-        logger.info(f"saving file with {df.shape[0]} rows to {programme_file.path}")
-        store_complete_data(
-            settings=settings, file=programme_file, data=df
-        )  # Pass settings
-        style_iter = finalize_sheet(
-            settings=settings, file=programme_file, data=df, style_iter=style_iter
-        )  # Pass settings
-
-    return style_iter
 
 
 async def create_faculty_overviews(
@@ -135,17 +35,6 @@ async def create_faculty_overviews(
             "write operations disabled, skipping creation of faculty and programme overviews"
         )
     for faculty, all_faculty_data in faculty_data.items():
-        if (
-            faculty in settings.university_settings.course_mapping
-            and not disable_writes
-        ):
-            style_iter = create_programme_overviews(
-                settings=settings,
-                all_faculty_data=all_faculty_data,
-                faculty=faculty,
-                style_iter=style_iter,
-            )
-
         if all_faculty_data.is_empty():
             continue
 

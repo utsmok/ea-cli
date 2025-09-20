@@ -20,10 +20,8 @@ import pytest
 from easy_access.settings import Settings
 from easy_access.sheets.export import (
     _get_unique_filepath,
-    export_all_items_sheet,
     export_faculty_overviews,
     export_faculty_sheets,
-    export_programme_sheets,
     export_reports_async,
     gather_faculty_data,
 )
@@ -127,145 +125,6 @@ class TestExportFacultySheets:
 
         with patch("easy_access.sheets.export.store_complete_data") as mock_store:
             result = await export_faculty_sheets(settings, faculty_data, 9)
-
-            assert result == 9
-            mock_store.assert_not_called()
-
-
-class TestExportProgrammeSheets:
-    """Test programme sheet export functionality."""
-
-    @pytest.mark.asyncio
-    async def test_export_programme_sheets_success(self):
-        """Test successful export of programme sheets."""
-        settings = Settings()
-        faculty_data = {
-            "Faculty A": pl.DataFrame(
-                {
-                    "title": ["Item 1", "Item 2"],
-                    "faculty": ["Faculty A", "Faculty A"],
-                    "department": ["Course 1", "Course 1"],
-                }
-            )
-        }
-
-        # Mock course mapping
-        mock_course_mapping = MagicMock()
-        mock_course_mapping.get.return_value = {"Course 1": "Programme 1"}
-        with (
-            patch.object(
-                settings,
-                "university_settings",
-                MagicMock(course_mapping=mock_course_mapping),
-            ),
-            patch("easy_access.sheets.export.store_complete_data") as mock_store,
-            patch("easy_access.sheets.export.finalize_sheet") as mock_finalize,
-            patch("easy_access.sheets.export._get_unique_filepath") as mock_get_path,
-        ):
-            mock_get_path.return_value = Path("/tmp/test.xlsx")
-            mock_finalize.return_value = 10
-
-            result = await export_programme_sheets(settings, faculty_data, 9)
-
-            assert result == 10
-            mock_store.assert_called_once()
-            mock_finalize.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_export_programme_sheets_no_mapping(self):
-        """Test export when no course mapping exists."""
-        settings = Settings()
-        faculty_data = {
-            "Faculty A": pl.DataFrame(
-                {
-                    "title": ["Item 1"],
-                    "faculty": ["Faculty A"],
-                    "department": ["Course 1"],
-                }
-            )
-        }
-
-        # No course mapping
-        mock_course_mapping = MagicMock()
-        mock_course_mapping.get.return_value = None
-        with (
-            patch.object(
-                settings,
-                "university_settings",
-                MagicMock(course_mapping=mock_course_mapping),
-            ),
-            patch("easy_access.sheets.export.store_complete_data") as mock_store,
-        ):
-            result = await export_programme_sheets(settings, faculty_data, 9)
-
-            assert result == 9
-            mock_store.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_export_programme_sheets_no_department_column(self):
-        """Test export when department column is missing."""
-        settings = Settings()
-        faculty_data = {
-            "Faculty A": pl.DataFrame({"title": ["Item 1"], "faculty": ["Faculty A"]})
-        }
-
-        mock_course_mapping = MagicMock()
-        mock_course_mapping.get.return_value = {"Course 1": "Programme 1"}
-        with (
-            patch.object(
-                settings,
-                "university_settings",
-                MagicMock(course_mapping=mock_course_mapping),
-            ),
-            patch("easy_access.sheets.export.store_complete_data") as mock_store,
-        ):
-            result = await export_programme_sheets(settings, faculty_data, 9)
-
-            assert result == 9
-            mock_store.assert_not_called()
-
-
-class TestExportAllItemsSheet:
-    """Test all items sheet export functionality."""
-
-    @pytest.mark.asyncio
-    async def test_export_all_items_sheet_success(self):
-        """Test successful export of all items sheet."""
-        settings = Settings()
-        mock_data = pl.DataFrame(
-            {"title": ["Item 1", "Item 2"], "faculty": ["Faculty A", "Faculty B"]}
-        )
-
-        with (
-            patch(
-                "easy_access.sheets.export.retrieve_full_data", return_value=mock_data
-            ),
-            patch("easy_access.sheets.export.store_complete_data") as mock_store,
-            patch("easy_access.sheets.export.finalize_sheet") as mock_finalize,
-            patch("easy_access.sheets.export._get_unique_filepath") as mock_get_path,
-        ):
-            mock_get_path.return_value = Path("/tmp/test.xlsx")
-            mock_finalize.return_value = 10
-
-            result = await export_all_items_sheet(settings, 9)
-
-            assert result == 10
-            mock_store.assert_called_once()
-            mock_finalize.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_export_all_items_sheet_empty_data(self):
-        """Test export when no data exists."""
-        settings = Settings()
-        mock_data = pl.DataFrame()
-
-        with (
-            patch(
-                "easy_access.sheets.export.retrieve_full_data", return_value=mock_data
-            ),
-            patch("easy_access.sheets.export.store_complete_data") as mock_store,
-        ):
-            result = await export_all_items_sheet(settings, 9)
 
             assert result == 9
             mock_store.assert_not_called()

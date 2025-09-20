@@ -98,6 +98,7 @@ class v1_CopyrightItem(Model, TimestampMixin):
 
     pdf: fields.ReverseRelation["PDF"]
 
+
 class CopyrightItem(Model, TimestampMixin):
     """
     Core item in the dataset. Contains all the data for one item on Canvas.
@@ -417,8 +418,12 @@ class PDF(Model, TimestampMixin):
 
     # one-to-one relation with parent item
     # exactly one of these should be non-null
-    copyright_item = fields.OneToOneField("models.CopyrightItem", related_name="pdf", null=True)
-    v1_copyright_item = fields.OneToOneField("models.v1_CopyrightItem", related_name="pdf", null=True)
+    copyright_item = fields.OneToOneField(
+        "models.CopyrightItem", related_name="pdf", null=True
+    )
+    v1_copyright_item = fields.OneToOneField(
+        "models.v1_CopyrightItem", related_name="pdf", null=True
+    )
 
     # one-to-one relation with Canvas metadata
     # should always exist, as it is used to retrieve the PDF in the first place

@@ -79,7 +79,7 @@ async def download_pdf_from_canvas(
                 }
             )
 
-        pdf_metadata_obj,_ = await PDFCanvasMetadata.update_or_create(**pdf_metadata)
+        pdf_metadata_obj, _ = await PDFCanvasMetadata.update_or_create(**pdf_metadata)
 
         download_link = metadata.get("url")
         if not download_link:
@@ -101,10 +101,9 @@ async def download_pdf_from_canvas(
                     f.write(chunk)
         return File(filepath), pdf_metadata_obj
 
-
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            return None # file not found, return None
+            return None  # file not found, return None
         logger.error(f"HTTP error downloading from {url}: {e.response.status_code}")
         return None
     except Exception as e:
@@ -161,10 +160,8 @@ async def download_pdfs_for_items(
                         "retrieved_on": datetime.datetime.now(datetime.UTC),
                         "canvas_metadata": pdf_metadata_obj,
                     }
-                    v1_copyright_item = (
-                        await v1_CopyrightItem.get_or_none(
-                            material_id=item.get("material_id")
-                        )
+                    v1_copyright_item = await v1_CopyrightItem.get_or_none(
+                        material_id=item.get("material_id")
                     )
 
                     copyright_item = await CopyrightItem.get_or_none(

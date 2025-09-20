@@ -4,14 +4,14 @@ from pathlib import Path
 from kreuzberg import ExtractionConfig, ExtractionResult, extract_file
 from loguru import logger
 from tortoise.expressions import Q
-
-# from textacy import preprocessing
 from xxhash import xxh3_64_hexdigest
 
 from easy_access.db.models import PDF, PDFText
 
 
-async def parse_pdfs(filter_ids: list[int] | None = None, parse_text:bool = False) -> None:
+async def parse_pdfs(
+    filter_ids: list[int] | None = None, parse_text: bool = False
+) -> None:
     """Parses all PDFs that have not yet been attempted for text extraction."""
 
     pdfs = PDF.filter(extraction_successful=False)
@@ -23,7 +23,10 @@ async def parse_pdfs(filter_ids: list[int] | None = None, parse_text:bool = Fals
 
     logger.info(f"Found {len(pdfs)} PDFs to process")
     if not parse_text:
-        logger.warning("Skipping text extraction as parse_text is False -- only hashing PDFs")
+        logger.warning(
+            "Skipping text extraction as parse_text is False -- only hashing PDFs"
+        )
+
     async def process_pdf(pdf: PDF):
         try:
             if hash := hash_pdf(pdf.path):
@@ -128,12 +131,8 @@ def get_pdf_metadata(result: ExtractionResult) -> dict:
             else:
                 pdf["author"] = ", ".join(metadata["authors"])
 
-    if "creator" in metadata and metadata["creator"]:
-        pdf["creator"] = metadata["creator"]
     if "created_by" in metadata and metadata["created_by"]:
         pdf["created_by"] = metadata["created_by"]
-    if "producer" in metadata and metadata["producer"]:
-        pdf["producer"] = metadata["producer"]
     if "created_at" in metadata and metadata["created_at"]:
         try:
             pdf["creation_date"] = datetime.datetime.fromisoformat(

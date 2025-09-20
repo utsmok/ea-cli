@@ -10,6 +10,7 @@ Optimized to reduce N+1 query patterns using batch operations.
 
 import inspect
 
+import polars as pl
 from loguru import logger
 from tortoise.transactions import in_transaction
 
@@ -19,11 +20,11 @@ from easy_access.db.models import (
     Course,
     CourseEmployee,
     Person,
-    v1_CopyrightItem
+    v1_CopyrightItem,
 )
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
-import polars as pl
+
 
 async def _resolve_queryset_candidate(candidate, *prefetch_args):
     """Resolve a queryset-like candidate to a concrete iterable.
@@ -481,14 +482,19 @@ async def match_v1_to_copyright_items(
     v1_items_qs = v1_CopyrightItem.filter()
     current_items_qs = CopyrightItem.filter()
 
-
     if not v1_items_qs or not current_items_qs:
         print("No items to match.")
         return
     v1_item_retrieved_dict = await v1_items_qs.values()
     current_items_retrieved_dict = await current_items_qs.values()
-    schema_v1 = {col: (type(val) if val else pl.String) for col, val in v1_item_retrieved_dict[0].items()}
-    schema_current = {col: (type(val) if val else pl.String) for col, val in current_items_retrieved_dict[0].items()}
+    schema_v1 = {
+        col: (type(val) if val else pl.String)
+        for col, val in v1_item_retrieved_dict[0].items()
+    }
+    schema_current = {
+        col: (type(val) if val else pl.String)
+        for col, val in current_items_retrieved_dict[0].items()
+    }
     v1_df = pl.DataFrame(v1_item_retrieved_dict, schema=schema_v1)
     current_df = pl.DataFrame(current_items_retrieved_dict, schema=schema_current)
 
@@ -500,7 +506,6 @@ async def match_v1_to_copyright_items(
     # Add a unique identifier to each row to be able to retrieve the original objects
     v1_df = v1_df.with_row_index("v1_index")
     current_df = current_df.with_row_index("current_index")
-
 
     compare_fields = {
         "tier1": ["filehash"],
@@ -565,8 +570,9 @@ async def match_v1_to_copyright_items(
         await v1_item.save()
 
         if (
-            current_item.manual_classification is None or
-            current_item.manual_classification.lower() in ["", "in onderzoek", "onbekend"]
+            current_item.manual_classification is None
+            or current_item.manual_classification.lower()
+            in ["", "in onderzoek", "onbekend"]
         ):
             current_item.manual_classification = v1_item.manual_classification
             updated_manual_classifications += 1
@@ -579,7 +585,6 @@ async def match_v1_to_copyright_items(
             current_item.remarks = v1_item.remarks
             updated_remarks += 1
             await current_item.save(update_fields=["remarks"])
-
 
     print(f"Updated {updated_manual_classifications} manual classifications.")
     print(f"Updated {updated_remarks} remarks.")
