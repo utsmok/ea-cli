@@ -30,20 +30,8 @@ directories:
   pdf_downloads: pdf_downloads # Directory for pdf downloads
 
 
-# ------------------------------------------------------
-#       Sheet column settings
-# ------------------------------------------------------
-#   In this section, you can configure the contents of the `Data entry` sheets in all the Excel sheets.
-#   These settings will apply to all sheets created in this directory.
-#   Under the `data_entry_cols` setting, you can specify which columns should be included in the `Data entry` sheet by including them in the list below.
-#   The columns will be included in the order they are listed here: reorder the list to change the order in the sheet.
-#
-
 
 data_settings:
-  # sheet details for the complete data sheet & data entry sheet present in each output excel file.
-  # parameters: sheet name; cols to be included
-  # if cols is not specified, all cols will be added to this sheet..
   complete_data_name: Complete data
   complete_data_cols: null
   data_entry_name: Data entry
@@ -54,6 +42,11 @@ data_settings:
     - name: "url"
       is_url: true
     - name: "file_exists"
+      style:
+        activate_on: ['"No"']
+        text_color: "olive"
+        bg_color: "palevioletred"
+        border_color: "orange"
     - name: "last_canvas_check"
       new_name: "latest_filecheck_date"
     - name: "workflow_status"
@@ -61,6 +54,12 @@ data_settings:
       is_editable: true
       dropdown_options: '"ToDo,Done,InProgress"'
       default_val: "ToDo"
+      style:
+        activate_on: ['"ToDo"']
+        text_color: "darkkhaki"
+        bg_color: "palegoldenrod"
+        bold: true
+        border_color: "oldlace"
     - name: "manual_classification"
       new_name: "v1_manual_classification"
       is_editable: true
@@ -74,6 +73,12 @@ data_settings:
     - name: "v2_lengte"
       is_editable: true
       dropdown_options: 'ENUM:Lengte'
+      style:
+        activate_on: ['"Lang"']
+        text_color: "blueviolet"
+        bg_color: "darksalmon"
+        bold: true
+        border_color: "darkslategrey"
     - name: "remarks"
       is_editable: true
     - name: "ml_prediction"
@@ -96,7 +101,7 @@ data_settings:
     - name: "programmes"
       new_name: "programmes_osiris"
 
-  raw_data_col_order: !!seq [
+  raw_data_col_order: !!seq [         # do not change this
         material_id,
         is_duplicate,
         replacement_id,
@@ -136,7 +141,7 @@ data_settings:
         faculty,
     ]
 
-  final_data_col_order: !!seq [
+  final_data_col_order: !!seq [       # do not change this; this is the order of columns in the 'Complete data' sheet
     material_id,
     period,
     department,
@@ -192,12 +197,7 @@ data_settings:
 
 
 
-  new_fields:
-  # fields not present in raw data (so added by this script) that need configuration should be added here
-  # the key will be used as the field name.
-  # possible parameters:
-  # - values: list of possible values for this field
-  # - default: default value for this field
+  new_fields:                          # do not change this!
     workflow_status:
       values:
       # NOTE! Order is important here:
@@ -212,9 +212,31 @@ data_settings:
       default:
         - Unmapped
 
+  # Unused URL-base settings:
   url_truncation_marker: "..." # Marker used for a truncated URL in the data entry sheet.
   url_default_base: "https://utwente.instructure.com/files" # Default base for file urls in the sheets
 
+
+#     'aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure', 'beige', 'bisque', 'black',
+#     'blanchedalmond', 'blue', 'blueviolet', 'brown', 'burlywood', 'cadetblue', 'chartreuse',
+#     'chocolate', 'coral', 'cornflowerblue', 'cornsilk', 'crimson', 'cyan', 'darkblue', 'darkcyan',
+#     'darkgoldenrod', 'darkgray', 'darkgreen', 'darkgrey', 'darkkhaki', 'darkmagenta', 'darkolivegreen',
+#     'darkorange', 'darkorchid', 'darkred', 'darksalmon', 'darkseagreen', 'darkslateblue',
+#     'darkslategray', 'darkslategrey', 'darkturquoise', 'darkviolet', 'deeppink', 'deepskyblue',
+#     'dimgray', 'dimgrey', 'dodgerblue', 'firebrick', 'floralwhite', 'forestgreen', 'fuchsia', 'gainsboro',
+#     'ghostwhite', 'gold', 'goldenrod', 'gray', 'green', 'greenyellow', 'grey', 'honeydew', 'hotpink',
+#     'indianred', 'indigo', 'ivory', 'khaki', 'lavender', 'lavenderblush', 'lawngreen', 'lemonchiffon',
+#     'lightblue', 'lightcoral', 'lightcyan', 'lightgoldenrodyellow', 'lightgray', 'lightgreen',
+#     'lightgrey', 'lightpink', 'lightsalmon', 'lightseagreen', 'lightskyblue', 'lightslategray',
+#     'lightslategrey', 'lightsteelblue', 'lightyellow', 'lime', 'limegreen', 'linen', 'magenta', 'maroon',
+#     'mediumaquamarine', 'mediumblue', 'mediumorchid', 'mediumpurple', 'mediumseagreen', 'mediumslateblue',
+#     'mediumspringgreen', 'mediumturquoise', 'mediumvioletred', 'midnightblue', 'mintcream', 'mistyrose',
+#     'moccasin', 'navajowhite', 'navy', 'oldlace', 'olive', 'olivedrab', 'orange', 'orangered', 'orchid',
+#     'palegoldenrod', 'palegreen', 'paleturquoise', 'palevioletred', 'papayawhip', 'peachpuff', 'peru',
+#     'pink', 'plum', 'powderblue', 'purple', 'red', 'rosybrown', 'royalblue', 'saddlebrown', 'salmon',
+#     'sandybrown', 'seagreen', 'seashell', 'sienna', 'silver', 'skyblue', 'slateblue', 'slategray',
+#     'slategrey', 'snow', 'springgreen', 'steelblue', 'tan', 'teal', 'thistle', 'tomato', 'turquoise',
+#     'violet', 'wheat', 'white', 'whitesmoke', 'yellow', 'yellowgreen'
 
 # University settings
 # Set all the data for your university. This data is essential for the script to separate data into faculties and programmes;

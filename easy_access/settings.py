@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
+import webcolors
 import yaml
 from loguru import logger
 from rich.traceback import install
@@ -15,7 +16,7 @@ from rich.traceback import install
 # sys is already imported above
 from easy_access.utils import Directory, File, safe_float
 
-"""Manages application settings, loaded from YAML configuration files.
+"""Manages application settings, loaded from YAML configuration files."
 
 This module defines dataclasses for structuring settings and provides
 functionality to load and parse them from 'settings.yaml' and 'sample.yaml'.
@@ -65,6 +66,130 @@ def configure_logger() -> None:
 
 
 @dataclass
+class StyleInfo:
+    """
+    Contains style information for a column in a DataEntrySheet.
+    Currently used for conditional formatting.
+
+    For colors, use hex color codes without the leading '#', e.g. 'FF0000' for red;
+    alternatively, common color names like 'red', 'blue', 'green' are also supported, they will be converted to hex codes.
+    """
+
+    from openpyxl.formatting.rule import Rule
+
+    bg_color: str = ""
+    text_color: str = ""
+    border_color: str = ""
+    bold: bool = False
+    activate_on: list[str] = field(
+        default_factory=list
+    )  # values that trigger the style, if this is a conditional style
+    _cf_rule: Rule | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        """Initializes the conditional formatting rule if conditional formatting rules are specified."""
+        self._parse_colors()
+
+        if self.activate_on:
+            self._create_conditional_formatting_rule()
+
+    def _parse_colors(self) -> None:
+        """
+        Parses the input color str to ensure hex format without leading '#'.
+        """
+        colors = {
+            "bg_color": self.bg_color,
+            "text_color": self.text_color,
+            "border_color": self.border_color,
+        }
+        for attr, color in colors.items():
+            if not color:
+                continue
+            hex_color = color
+            with contextlib.suppress(ValueError):
+                hex_color = webcolors.name_to_hex(color).lstrip("#")
+
+            with contextlib.suppress(ValueError):
+                hex_color = webcolors.normalize_hex(hex_color)
+
+            try:
+                if hex_color.startswith("#"):
+                    hex_color = hex_color.lstrip("#")
+                hex_color = hex_color.lower()
+            except Exception:
+                ...
+            try:
+                setattr(self, attr, hex_color)
+            except Exception as e:
+                logger.warning(
+                    f"Could not set color attribute {attr} to hex {hex_color}: {e}"
+                )
+
+    def _create_conditional_formatting_rule(self) -> Rule | None:
+        try:
+            from openpyxl.formatting.rule import CellIsRule
+            from openpyxl.styles import Border, Font, PatternFill, Side
+
+            fill = PatternFill(
+                start_color=self.bg_color if self.bg_color else "FFFFFF",
+                end_color=self.bg_color if self.bg_color else "FFFFFF",
+                fill_type="solid" if self.bg_color else None,
+            )
+
+            side = Side(
+                style="thin", color=self.border_color if self.border_color else "000000"
+            )
+            border = (
+                Border(left=side, right=side, top=side, bottom=side)
+                if self.border_color
+                else None
+            )
+            font = Font(
+                color=self.text_color if self.text_color else "000000", bold=self.bold
+            )
+
+            self._cf_rule = CellIsRule(
+                operator="equal",
+                formula=self.activate_on,
+                fill=fill,
+                border=border,
+                font=font,
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"Could not add conditional formatting: {e}. Input colors: {self.bg_color}, {self.text_color}, {self.border_color}"
+            )
+
+    def modify_activate_on(self, new_activate_on: list[str]) -> None:
+        """Modifies the activate_on list and updates the conditional formatting rule."""
+        self.activate_on = new_activate_on
+        self._create_conditional_formatting_rule()
+
+    @property
+    def cf_rule(self) -> Rule | None:
+        """Returns the conditional formatting rule, if any."""
+        self._create_conditional_formatting_rule()
+        return self._cf_rule
+
+
+DEFAULT_STYLES = {
+    "warning": StyleInfo(
+        bg_color="FFF8DC",
+        text_color="DAA520",
+        border_color="CC6600",
+        bold=True,
+    ),
+    "notify": StyleInfo(
+        bg_color="CCFFFF",
+        text_color="0000FF",
+        border_color="0000FF",
+        bold=True,
+    ),
+}
+
+
+@dataclass
 class ColInfo:
     """Contains the info for a single column used in a DataEntrySheet.
 
@@ -91,6 +216,7 @@ class ColInfo:
     default_val: str = ""
     max_width: int = 8
     count_max_width_over_40: int = 0
+    style: StyleInfo = field(default_factory=lambda: StyleInfo())
 
     def __post_init__(self) -> None:
         if "ENUM" in self.dropdown_options:
@@ -639,6 +765,53 @@ class Settings:
                                 col_info_dict: dict[str, Any] = {
                                     str(k): v for k, v in col_info_dict_any.items()
                                 }
+
+                                # StyleInfo parsing
+                                # use a `style` key with a dict value to specify StyleInfo attributes
+                                # ensure to include a `activate_on` key with a list of values to trigger the style, otherwise the style will not be applied
+                                # include key `default_style` with value as one of the keys in DEFAULT_STYLES to start from a default style
+                                if "style" in col_info_dict and isinstance(
+                                    col_info_dict["style"], dict
+                                ):
+                                    style_dict = col_info_dict.pop("style")
+                                    if "use_default" in style_dict:
+                                        use_default = style_dict.pop(
+                                            "use_default", False
+                                        )
+                                        if (
+                                            use_default
+                                            and "default_style" in style_dict
+                                        ):
+                                            default_style_name = style_dict.pop(
+                                                "default_style"
+                                            )
+                                            if default_style_name in DEFAULT_STYLES:
+                                                col_info_dict["style"] = DEFAULT_STYLES[
+                                                    default_style_name
+                                                ]
+                                                col_info_dict[
+                                                    "style"
+                                                ].modify_activate_on(
+                                                    style_dict.get("activate_on", [])
+                                                )
+                                            else:
+                                                col_info_dict["style"] = StyleInfo()
+                                        else:
+                                            col_info_dict["style"] = StyleInfo()
+                                    else:
+                                        try:
+                                            col_info_dict["style"] = StyleInfo(
+                                                **{
+                                                    str(k): v
+                                                    for k, v in style_dict.items()
+                                                }
+                                            )
+                                        except TypeError as e:
+                                            logger.error(
+                                                f"Error parsing StyleInfo from {style_dict}: {e}"
+                                            )
+                                            col_info_dict["style"] = StyleInfo()
+
                                 try:
                                     parsed_cols.append(ColInfo(**col_info_dict))
                                 except TypeError as e:
@@ -1309,6 +1482,15 @@ class OverrideSettings(Settings):
         Based on the loaded override settings in self.override_settings, override the relevant settings in self.
         Currently only supports overriding specific fields in data_settings.
         """
+        required_cols = {
+            "material_id": False,
+            "url": False,
+            "workflow_status": False,
+            "manual_classification": False,
+            "v2_manual_classification": False,
+            "v2_lengte": False,
+            "v2_overnamestatus": False,
+        }
         self.backup_data_settings = self.data_settings
         if not self.override_settings:
             logger.info("No override settings to apply.")
@@ -1332,15 +1514,13 @@ class OverrideSettings(Settings):
             return
         existing_cols = {col.name: col for col in self.data_settings.data_entry_cols}
         overridden_cols: list[ColInfo] = []
-        found_url_col = False
-        found_material_id_col = False
         for col_dict in new_col_settings:
-            if not isinstance(col_dict, dict) and not isinstance(col_dict, str):
+            if not isinstance(col_dict, dict):
                 logger.warning(
                     f"Expected dict or str for column override, got {type(col_dict)}. Skipping."
                 )
                 continue
-            col_name = col_dict.get("name") if isinstance(col_dict, dict) else col_dict
+            col_name = col_dict.get("name")
 
             if not isinstance(col_name, str):
                 logger.warning(
@@ -1349,27 +1529,31 @@ class OverrideSettings(Settings):
                 continue
 
             if col_name in existing_cols:
-                if col_name == "url":
-                    found_url_col = True
-                if col_name == "material_id":
-                    found_material_id_col = True
+                if col_name in required_cols:
+                    required_cols[col_name] = True
+
                 try:
                     overridden_col = existing_cols[col_name]
+                    if "style" in col_dict and isinstance(col_dict["style"], dict):
+                        overridden_col.style = StyleInfo(**col_dict["style"])
                     overridden_cols.append(overridden_col)
                 except TypeError as e:
                     logger.error(
                         f"Error creating ColInfo for overridden column '{col_name}': {e}. Skipping."
                     )
+                if col_name == "v2_lengte":
+                    logger.debug(f'Input override for "v2_lengte": {col_dict}')
+                    logger.debug(f'Parsed colinfo for "v2_lengte": {overridden_col}')
             else:
                 logger.warning(
                     f"Column '{col_name}' in override settings not found in existing data entry columns. Skipping."
                 )
 
         if overridden_cols:
-            if not found_url_col:
-                overridden_cols.append(existing_cols["url"])
-            if not found_material_id_col:
-                overridden_cols.insert(0, existing_cols["material_id"])
+            for req_col, found in required_cols.items():
+                if not found:
+                    overridden_cols.append(existing_cols[req_col])
+
             self.data_settings.data_entry_cols = overridden_cols
             logger.info(
                 f"Overridden data entry columns with {len(overridden_cols)} columns from override settings."

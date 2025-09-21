@@ -28,13 +28,15 @@ async def parse_pdfs(
         )
 
     async def process_pdf(pdf: PDF):
+        updatefields = []
         try:
             if hash := hash_pdf(pdf.path):
                 pdf.filehash = hash
+                updatefields.append("filehash")
         except Exception as e:
             logger.error(f"Error hashing PDF id={pdf.id}, path={pdf.path}: {e}")
         if not parse_text:
-            return pdf
+            return pdf, updatefields
         try:
             pdf.extraction_attempted = True
             result = await extract_text(pdf.path)
@@ -44,9 +46,12 @@ async def parse_pdfs(
             )
             result = None
 
+        updatefields.extend(["extraction_attempted", "extraction_successful"])
+
         if not result or len(result.content or "") < 1:
             pdf.extraction_successful = False
-            return pdf
+
+            return pdf, updatefields
 
         pdf.extraction_successful = True
         extracted_text = result.content
@@ -80,12 +85,17 @@ async def parse_pdfs(
             logger.error(
                 f"Error adding metadata to PDF id={pdf.id}, path={pdf.path}: {e}"
             )
-        return pdf
+
+        updatefields.extend(parsed_metadata.keys())
+        updatefields.append("extracted_text")
+        updatefields.append("num_pages")
+        return pdf, updatefields
 
     for pdf in pdfs:
-        pdf = await process_pdf(pdf)
+        pdf, updatefields = await process_pdf(pdf)
+
         try:
-            await pdf.save()
+            await pdf.save(update_fields=updatefields)
         except Exception as e:
             logger.error(f"Error saving PDF id={pdf.id}, path={pdf.path}: {e}")
     print("Done extracting text from PDFs")

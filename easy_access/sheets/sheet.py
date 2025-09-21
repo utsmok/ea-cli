@@ -376,8 +376,20 @@ class DataEntrySheet:
                 # Acceptable width, don't enable word wrap but fit width to contents
                 self.sheet.column_dimensions[target_col_letter].width = col.max_width
 
-        # Add conditional formatting to highlight "onbekend" values
-        self._add_conditional_formatting()
+            if col.style and (
+                isinstance(col.style.activate_on, list)
+                and len(col.style.activate_on) > 0
+            ):
+                try:
+                    rule = col.style.cf_rule
+                    self.sheet.conditional_formatting.add(
+                        f"{target_col_letter}2:{target_col_letter}{self.max_row + 1}",
+                        rule,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Could not add conditional formatting to col {col.name} ({target_col_letter}): {e}"
+                    )
 
         self.create_table()
         self.save()
@@ -401,88 +413,6 @@ class DataEntrySheet:
         self.sheet.sheet_view.tabSelected = True
         self.workbook["Complete data"].sheet_view.tabSelected = False
         self.workbook.save(filename=self.file_path)
-
-    def _add_conditional_formatting(self) -> None:
-        """Add conditional formatting to highlight cells containing 'onbekend'."""
-        try:
-            from openpyxl.formatting.rule import CellIsRule
-            from openpyxl.styles import Border, Font, PatternFill, Side
-
-            #          'ERROR' style
-            # yello color setting:
-            # subtle yellow fill,  dark yellow text, thin dark orange border
-
-            subtle_yellow_fill = PatternFill(
-                start_color="FFF8DC", end_color="FFF8DC", fill_type="solid"
-            )
-
-            dark_orange_side = Side(style="thin", color="CC6600")
-
-            dark_orange_border = Border(
-                left=dark_orange_side,
-                right=dark_orange_side,
-                top=dark_orange_side,
-                bottom=dark_orange_side,
-            )
-
-            dark_yellow_font = Font(color="DAA520", bold=True)
-
-            #          'file deleted style'
-            # blue color setting:
-            # light blue fill, dark blue text, thin dark blue border
-            light_blue_fill = PatternFill(
-                start_color="CCFFFF", end_color="CCFFFF", fill_type="solid"
-            )
-            dark_blue_side = Side(style="thin", color="0000FF")
-            dark_blue_border = Border(
-                left=dark_blue_side,
-                right=dark_blue_side,
-                top=dark_blue_side,
-                bottom=dark_blue_side,
-            )
-            dark_blue_font = Font(color="0000FF", bold=True)
-
-            # Create the conditional formatting rule
-            rule_onbekend = CellIsRule(
-                operator="equal",
-                formula=['"onbekend"'],
-                fill=subtle_yellow_fill,
-                border=dark_orange_border,
-                font=dark_yellow_font,
-            )
-            rule_todo = CellIsRule(
-                operator="equal",
-                formula=['"ToDo"'],
-                fill=subtle_yellow_fill,
-                border=dark_orange_border,
-                font=dark_yellow_font,
-            )
-            rule_file_deleted = CellIsRule(
-                operator="equal",
-                formula=['"No"'],
-                fill=light_blue_fill,
-                border=dark_blue_border,
-                font=dark_blue_font,
-            )
-            # Apply to all data columns (from column A to the last column with data)
-            max_col_letter = get_column_letter(len(self.cols))
-            data_range = f"A2:{max_col_letter}{self.max_row + 1}"
-
-            # Add the conditional formatting rule to the worksheet
-            self.sheet.conditional_formatting.add(data_range, rule_onbekend)
-            self.sheet.conditional_formatting.add(data_range, rule_todo)
-
-            # find column named "file_deleted", if it exists, add conditional formatting to it
-            for idx, col in enumerate(self.cols):
-                if col.name == "file_exists":
-                    self.sheet.conditional_formatting.add(
-                        f"{get_column_letter(idx + 1)}2:{get_column_letter(idx + 1)}{self.max_row + 1}",
-                        rule_file_deleted,
-                    )
-
-        except Exception as e:
-            logger.warning(f"Could not add conditional formatting: {e}")
-            # Continue without conditional formatting if it fails
 
 
 def finalize_sheet(
