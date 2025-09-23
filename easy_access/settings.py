@@ -1,5 +1,4 @@
 import contextlib
-import json
 import os
 import sys
 from collections.abc import Callable
@@ -63,6 +62,35 @@ def configure_logger() -> None:
     except Exception as e:  # pragma: no cover - defensive
         # If adding the file sink fails, ensure at least console output is available
         logger.warning(f"Failed to add file log sink ({log_dir.full}): {e}")
+
+
+# DEFINED DIRECTORIES
+
+
+class DirSetting(Enum):
+    """Enum for directory settings keys used in settings.yaml."""
+
+    RAW_COPYRIGHT_DATA = "raw_copyright_data"
+    RAW_COPYRIGHT_DATA_FULL = "full_data"
+    FACULTIES_DIR = "faculties_dir"
+    OVERVIEWS_BACKUP = "overviews_backup"
+    SCRIPT_DATA = "script_data"
+    PDF_DOWNLOADS = "pdf_downloads"
+
+
+# SETTINGS FOR EXPORTED SHEETS
+
+
+class SheetSetting(Enum):
+    """Enum for sheet-related settings keys used in settings.yaml."""
+
+    RAW_DATA_COL_ORDER = "raw_data_col_order"
+    FINAL_DATA_COL_ORDER = "final_data_col_order"
+    COMPLETE_DATA_NAME = "complete_data_name"
+    COMPLETE_DATA_COLS = "complete_data_cols"
+    DATA_ENTRY_NAME = "data_entry_name"
+    DATA_ENTRY_COLS = "data_entry_cols"
+    NEW_FIELDS = "new_fields"
 
 
 @dataclass
@@ -173,22 +201,6 @@ class StyleInfo:
         return self._cf_rule
 
 
-DEFAULT_STYLES = {
-    "warning": StyleInfo(
-        bg_color="FFF8DC",
-        text_color="DAA520",
-        border_color="CC6600",
-        bold=True,
-    ),
-    "notify": StyleInfo(
-        bg_color="CCFFFF",
-        text_color="0000FF",
-        border_color="0000FF",
-        bold=True,
-    ),
-}
-
-
 @dataclass
 class ColInfo:
     """Contains the info for a single column used in a DataEntrySheet.
@@ -243,68 +255,39 @@ class ColInfo:
         return len(self.dropdown_options) > 0
 
 
-class DirSetting(Enum):
-    """Enum for directory settings keys used in settings.yaml."""
+@dataclass
+class DataSettings:
+    """Holds settings related to data structure, column definitions, and naming.
 
-    RAW_COPYRIGHT_DATA = "raw_copyright_data"
-    RAW_COPYRIGHT_DATA_FULL = "full_data"
-    EXPORT_TO_SURF = "export_to_surf"
-    FACULTIES_DIR = "faculties_dir"
-    ALL_ITEMS_DIR = "all_items_dir"
-    OVERVIEWS_BACKUP = "overviews_backup"
-    SCRIPT_DATA = "script_data"
-    FULL_BACKUPS = "full_backups"
-    PDF_DOWNLOADS = "pdf_downloads"
-    CLASSIFICATIONS = "classifications"
-
-
-class FileSetting(Enum):
-    """Enum for file settings keys used in settings.yaml."""
-
-    FULL_DATA_CSV = "full_data_csv"
-    FULL_DATA_PARQUET = "full_data_parquet"
-    OSIRIS_DATA = "osiris_data"
-    OSIRIS_DATA_W_CONTACTS = "osiris_data_w_contacts"
-    PERSON_DATA = "person_data"
-
-
-class BackupSetting(Enum):
-    """Enum for backup settings keys used in settings.yaml."""
-
-    BACKUP_ALL = "backup_all"
-    BACKUP_DIRS = "backup_dirs"
-    MAX_BACKUPS = "max_backups"
-    BACKUP_OVERVIEWS = "backup_overviews"
-
-
-class EnrichmentSetting(Enum):
-    """Enum for enrichment settings keys used in settings.yaml."""
-
-    COURSE_TTL_DAYS = "course_ttl_days"
-    PERSON_TTL_DAYS = "person_ttl_days"
-
-
-class SheetSetting(Enum):
-    """Enum for sheet-related settings keys used in settings.yaml."""
-
-    RAW_DATA_COL_ORDER = "raw_data_col_order"
-    FINAL_DATA_COL_ORDER = "final_data_col_order"
-    COMPLETE_DATA_NAME = "complete_data_name"
-    COMPLETE_DATA_COLS = "complete_data_cols"
-    DATA_ENTRY_NAME = "data_entry_name"
-    DATA_ENTRY_COLS = "data_entry_cols"
-    NEW_FIELDS = "new_fields"
-
-
-class Functions(str, Enum):
-    """CLI option for picking which functions to run.
-
-    Used in `easy_access_cli.cli()`.
+    Attributes:
+        data_entry_cols: Configuration for columns in the data entry sheet.
+        complete_data_cols: Configuration for columns in the complete data sheet.
+        complete_data_name: Name for the complete data sheet.
+        data_entry_name: Name for the data entry sheet.
+        raw_data_col_order: Order of columns in the raw data.
+        final_data_col_order: Order of columns in the final processed data.
+        new_fields: Definitions for new fields to be added during processing,
+                    mapping column names to their settings (e.g., 'values', 'default').
+        url_truncation_marker: Marker to indicate a truncated URL.
+        url_default_base: Default base URL for constructing full URLs.
     """
 
-    both = "both"
-    read = "read"
-    export = "export"
+    data_entry_cols: list[ColInfo] = field(default_factory=list, init=False)
+    complete_data_cols: list[ColInfo] = field(default_factory=list, init=False)
+    complete_data_name: str = field(default="Complete Data", init=False)
+    data_entry_name: str = field(default="Data Entry", init=False)
+    raw_data_col_order: list[str] = field(default_factory=list, init=False)
+    final_data_col_order: list[str] = field(default_factory=list, init=False)
+    new_fields: dict[str, dict[str, str | list[str]]] = field(
+        default_factory=dict, init=False
+    )
+    url_truncation_marker: str = field(default="...", init=False)
+    url_default_base: str = field(
+        default="https://utwente.instructure.com/files", init=False
+    )
+
+
+# SCRIPT PIPELINE SETTINGS
 
 
 @dataclass
@@ -346,55 +329,35 @@ class EasyAccessSettings:
         return cls(dirs=dirs, **kwargs)
 
 
-@dataclass
-class DataSettings:
-    """Holds settings related to data structure, column definitions, and naming.
+class EnrichmentSetting(Enum):
+    """Enum for enrichment settings keys used in settings.yaml."""
 
-    Attributes:
-        data_entry_cols: Configuration for columns in the data entry sheet.
-        complete_data_cols: Configuration for columns in the complete data sheet.
-        complete_data_name: Name for the complete data sheet.
-        data_entry_name: Name for the data entry sheet.
-        raw_data_col_order: Order of columns in the raw data.
-        final_data_col_order: Order of columns in the final processed data.
-        new_fields: Definitions for new fields to be added during processing,
-                    mapping column names to their settings (e.g., 'values', 'default').
-        url_truncation_marker: Marker to indicate a truncated URL.
-        url_default_base: Default base URL for constructing full URLs.
-    """
-
-    data_entry_cols: list[ColInfo] = field(default_factory=list, init=False)
-    complete_data_cols: list[ColInfo] = field(default_factory=list, init=False)
-    complete_data_name: str = field(default="Complete Data", init=False)
-    data_entry_name: str = field(default="Data Entry", init=False)
-    raw_data_col_order: list[str] = field(default_factory=list, init=False)
-    final_data_col_order: list[str] = field(default_factory=list, init=False)
-    new_fields: dict[str, dict[str, str | list[str]]] = field(
-        default_factory=dict, init=False
-    )
-    url_truncation_marker: str = field(default="...", init=False)
-    url_default_base: str = field(
-        default="https://utwente.instructure.com/files", init=False
-    )
+    COURSE_TTL_DAYS = "course_ttl_days"
+    PERSON_TTL_DAYS = "person_ttl_days"
 
 
 @dataclass
-class BackupSettings:
-    """Holds settings related to data backup procedures.
+class EnrichmentSettings:
+    """Holds settings related to OSIRIS data enrichment.
 
     Attributes:
-        backup_all: Whether to back up all relevant data.
-        backup_dirs: A set of specific directories to include in the backup.
-        max_backups: The maximum number of backups to retain.
-        backup_overviews: Whether to back up overview files.
-        backup_location: The directory where backups will be stored.
+        course_ttl_days: Time-to-live in days for course data freshness.
+                         Courses older than this will be refetched.
+        person_ttl_days: Time-to-live in days for person data freshness.
+                         Persons older than this will be refetched.
+        file_exists_ttl_days: Time-to-live in days for file existence checks.
+                             Files older than this will be rechecked.
+        file_exists_rate_limit_delay: Delay in seconds between file existence API calls.
+                                     Helps avoid rate limiting from Canvas API.
     """
 
-    backup_all: bool = True
-    backup_dirs: list[Directory] = field(default_factory=list)
-    max_backups: int = 3
-    backup_overviews: bool = True
-    backup_location: Directory | None = field(default=None)
+    course_ttl_days: int | None = 90
+    person_ttl_days: int | None = 90
+    file_exists_ttl_days: int | None = 7
+    file_exists_rate_limit_delay: float = 0.01
+
+
+# UNIVERSITY DATA
 
 
 @dataclass(frozen=True)
@@ -583,25 +546,7 @@ class UniversitySettings:
         return course_mapping_dict
 
 
-@dataclass
-class EnrichmentSettings:
-    """Holds settings related to OSIRIS data enrichment.
-
-    Attributes:
-        course_ttl_days: Time-to-live in days for course data freshness.
-                         Courses older than this will be refetched.
-        person_ttl_days: Time-to-live in days for person data freshness.
-                         Persons older than this will be refetched.
-        file_exists_ttl_days: Time-to-live in days for file existence checks.
-                             Files older than this will be rechecked.
-        file_exists_rate_limit_delay: Delay in seconds between file existence API calls.
-                                     Helps avoid rate limiting from Canvas API.
-    """
-
-    course_ttl_days: int | None = 90
-    person_ttl_days: int | None = 90
-    file_exists_ttl_days: int | None = 7
-    file_exists_rate_limit_delay: float = 0.01
+# MAIN SETTINGS OBJECT
 
 
 @dataclass
@@ -613,11 +558,9 @@ class Settings:
         settings_file: File object representing the settings file.
         raw_settings: Raw dictionary loaded from the YAML file.
         dirs: Dictionary mapping directory setting keys (DirSetting) to Directory objects.
-        files: Dictionary mapping file setting keys (FileSetting) to File objects.
         fine_amount: Default fine amount for certain calculations.
         data_settings: Nested DataSettings object.
         university_settings: Nested UniversitySettings object.
-        backup_settings: Nested BackupSettings object.
         enrichment_settings: Nested EnrichmentSettings object.
         classification_options: List of available classification options.
         dashboard_reload: Boolean indicating if the dashboard should auto-reload.
@@ -629,7 +572,6 @@ class Settings:
     settings_file: File = field(init=False)
     raw_settings: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     dirs: dict[DirSetting, Directory] = field(default_factory=dict, init=False)
-    files: dict[FileSetting, File] = field(default_factory=dict, init=False)
     data_settings: DataSettings = field(default_factory=DataSettings, init=False)
     university_settings: UniversitySettings = field(
         default_factory=UniversitySettings, init=False
@@ -769,48 +711,20 @@ class Settings:
                                 # StyleInfo parsing
                                 # use a `style` key with a dict value to specify StyleInfo attributes
                                 # ensure to include a `activate_on` key with a list of values to trigger the style, otherwise the style will not be applied
-                                # include key `default_style` with value as one of the keys in DEFAULT_STYLES to start from a default style
+
                                 if "style" in col_info_dict and isinstance(
                                     col_info_dict["style"], dict
                                 ):
                                     style_dict = col_info_dict.pop("style")
-                                    if "use_default" in style_dict:
-                                        use_default = style_dict.pop(
-                                            "use_default", False
+                                    try:
+                                        col_info_dict["style"] = StyleInfo(
+                                            **{str(k): v for k, v in style_dict.items()}
                                         )
-                                        if (
-                                            use_default
-                                            and "default_style" in style_dict
-                                        ):
-                                            default_style_name = style_dict.pop(
-                                                "default_style"
-                                            )
-                                            if default_style_name in DEFAULT_STYLES:
-                                                col_info_dict["style"] = DEFAULT_STYLES[
-                                                    default_style_name
-                                                ]
-                                                col_info_dict[
-                                                    "style"
-                                                ].modify_activate_on(
-                                                    style_dict.get("activate_on", [])
-                                                )
-                                            else:
-                                                col_info_dict["style"] = StyleInfo()
-                                        else:
-                                            col_info_dict["style"] = StyleInfo()
-                                    else:
-                                        try:
-                                            col_info_dict["style"] = StyleInfo(
-                                                **{
-                                                    str(k): v
-                                                    for k, v in style_dict.items()
-                                                }
-                                            )
-                                        except TypeError as e:
-                                            logger.error(
-                                                f"Error parsing StyleInfo from {style_dict}: {e}"
-                                            )
-                                            col_info_dict["style"] = StyleInfo()
+                                    except TypeError as e:
+                                        logger.error(
+                                            f"Error parsing StyleInfo from {style_dict}: {e}"
+                                        )
+                                        col_info_dict["style"] = StyleInfo()
 
                                 try:
                                     parsed_cols.append(ColInfo(**col_info_dict))
@@ -1000,25 +914,6 @@ class Settings:
             logger.info(
                 f"'folder' not specified in 'files' settings, using CWD: {script_data_dir_path}"
             )
-
-        files_section = raw_file_strs.get("files")
-        if isinstance(files_section, dict):
-            for file_key_str, file_name_str_any in files_section.items():
-                if not isinstance(file_name_str_any, str):
-                    logger.warning(
-                        f"Expected string for file name, got {type(file_name_str_any)} for key '{file_key_str}'. Skipping."
-                    )
-                    continue
-                file_name_str: str = file_name_str_any
-                try:
-                    file_key_enum = FileSetting(value=file_key_str)
-                    self.files[file_key_enum] = File(
-                        path=script_data_dir_path / file_name_str
-                    )
-                except ValueError:
-                    logger.error(f"Unrecognized file type '{file_key_str}'. Skipping.")
-                except Exception as e:
-                    logger.error(f"Error while adding file '{file_key_str}': {e}")
 
         subfolders_section = raw_file_strs.get("subfolders")
         if isinstance(subfolders_section, dict):
@@ -1231,11 +1126,7 @@ class Settings:
             logger.warning("Cannot parse settings: raw_settings is empty.")
             return
 
-        # Parse all keys except 'backup' first
         for key, value in self.raw_settings.items():
-            if key == "backup":
-                continue  # Defer backup parsing
-
             parser = self.KEY_TO_PARSER_MAPPING.get(key)
             if parser:
                 try:
@@ -1248,164 +1139,6 @@ class Settings:
                 logger.warning(
                     f"Unrecognized setting key: '{key}'. It will be ignored unless handled by 'unsorted'."
                 )
-
-
-@dataclass
-class SampleSettings:
-    """Dataclass holding sample generation settings, loaded from a YAML file.
-
-    Attributes:
-        input_file_path: Path to the sample settings YAML file (default: "sample.yaml").
-        settings_file: File object representing the sample settings file.
-        raw_settings: Raw dictionary loaded from the YAML file.
-        input: Parsed settings for input data generation.
-        output: Parsed settings for output data generation.
-        KEY_TO_PARSER_MAPPING: Internal mapping of setting keys to parser methods.
-    """
-
-    input_file_path: str = "sample.yaml"
-    settings_file: File = field(init=False)
-    raw_settings: dict[str, Any] | None = None  # Can be None if loading fails
-    input: dict[str, Any] = field(default_factory=dict, init=False)
-    output: dict[str, Any] = field(default_factory=dict, init=False)
-    KEY_TO_PARSER_MAPPING: dict[str, Callable[[dict[str, Any]], None]] = field(
-        init=False, repr=False
-    )
-
-    def __post_init__(self) -> None:
-        """Initializes sample settings after dataclass creation."""
-        self.settings_file = File(path=self.input_file_path)
-        self.load()
-
-        self.KEY_TO_PARSER_MAPPING = {
-            "input": self.parse_input,
-            "output": self.parse_output,
-        }
-
-        if self.raw_settings:
-            self.parse_settings()
-        else:
-            logger.warning(
-                f"Sample settings raw_settings is None for {self.input_file_path}. Skipping parsing."
-            )
-
-    def load(self) -> None:
-        """Loads sample settings from the YAML file.
-
-        Populates `self.raw_settings`. If loading fails, `self.raw_settings` is set to None.
-        """
-        try:
-            with open(file=self.settings_file.path, encoding="utf-8") as f:
-                loaded_yaml = yaml.load(stream=f, Loader=yaml.FullLoader)
-                if isinstance(loaded_yaml, dict):
-                    self.raw_settings = loaded_yaml
-                else:
-                    logger.error(
-                        f"Sample settings file {self.settings_file.path} did not load as a dictionary."
-                    )
-                    self.raw_settings = None  # Explicitly None on failure
-        except FileNotFoundError:
-            logger.error(f"Sample settings file not found: {self.settings_file.path}")
-            self.raw_settings = None
-        except yaml.YAMLError as e:
-            logger.error(
-                f"Error parsing YAML from sample settings file {self.settings_file.path}: {e}"
-            )
-            self.raw_settings = None
-        except Exception as e:
-            logger.error(
-                f"Unexpected error loading sample settings from {self.settings_file.path}: {e}"
-            )
-            self.raw_settings = None
-
-    def parse_settings(self) -> None:
-        """Parses all sample settings from `self.raw_settings`."""
-        if not self.raw_settings:
-            logger.warning(
-                "Cannot parse sample settings: raw_settings is empty or None."
-            )
-            return
-
-        for key, value in self.raw_settings.items():
-            parser = self.KEY_TO_PARSER_MAPPING.get(key)
-            if parser:
-                if isinstance(value, dict):
-                    try:
-                        parser(value)  # Call the bound method with the value dict
-                    except Exception as e:
-                        logger.error(f"Error parsing sample setting key '{key}': {e}")
-                else:
-                    logger.warning(
-                        f"Expected dictionary for sample setting key '{key}', got {type(value)}. Skipping."
-                    )
-            else:
-                logger.warning(
-                    f"[SampleSettings] Unrecognized key: '{key}'. Setting as attribute (if new)."
-                )
-                if not hasattr(
-                    self, key
-                ):  # Avoid overwriting existing attributes like 'input', 'output'
-                    setattr(self, key, value)
-                else:
-                    logger.warning(
-                        f"[SampleSettings] Key '{key}' conflicts with existing attribute. Not set from top level."
-                    )
-
-    def parse_input(self, data_dict: dict[str, Any]) -> None:
-        """Parses the 'input' section of sample.yaml.
-
-        Args:
-            data_dict: The dictionary representing the 'input' settings.
-        """
-        self.input = {"file": "", "filters": []}  # Initialize with defaults
-
-        file_val = data_dict.get("file")
-        if isinstance(file_val, str):
-            self.input["file"] = file_val
-        elif file_val is not None:
-            logger.warning(
-                f"Sample settings 'input.file' expected a string, got {type(file_val)}."
-            )
-
-        filters_val = data_dict.get("filters")
-        if isinstance(filters_val, list):
-            self.input["filters"] = (
-                filters_val  # Assuming filters are correctly structured
-            )
-        elif filters_val is not None:
-            logger.warning(
-                f"Sample settings 'input.filters' expected a list, got {type(filters_val)}."
-            )
-
-    def parse_output(self, data_dict: dict[str, Any]) -> None:
-        """Parses the 'output' section of sample.yaml.
-
-        Args:
-            data_dict: The dictionary representing the 'output' settings.
-        """
-        self.output = {  # Default structure
-            "file": "",
-            "filters": [],
-            "selection": [],
-            "columns": [],
-            "max_rows": 0,
-            "remove_duplicates": True,
-        }
-
-        for key, default_value in self.output.items():
-            if key in data_dict:
-                val = data_dict[key]
-                expected_type = type(default_value)
-                if isinstance(val, expected_type):
-                    self.output[key] = val
-                elif key == "max_rows" and isinstance(val, int | float):
-                    self.output[key] = int(val)
-                elif key == "remove_duplicates" and isinstance(val, bool | int):
-                    self.output[key] = bool(val)
-                else:
-                    logger.warning(
-                        f"Sample settings 'output.{key}' expected type {expected_type}, got {type(val)}. Using default."
-                    )
 
 
 @dataclass
@@ -1560,61 +1293,10 @@ class OverrideSettings(Settings):
             )
 
 
-def load_osiris_data() -> dict[str, Any] | None:
-    """Loads Osiris data from the JSON file specified in settings.
+# GLOBALS
+# (deprecate? dev only?)
 
-    Returns:
-        A dictionary containing Osiris data if successful, otherwise None.
-        The dictionary structure is expected to be `dict[str, Any]`.
-    """
-    osiris_file_path_obj = SETTINGS.files.get(FileSetting.OSIRIS_DATA_W_CONTACTS)
-    if not osiris_file_path_obj:
-        logger.error(
-            f"Osiris data file path not found in settings ('{FileSetting.OSIRIS_DATA_W_CONTACTS.value}'). "
-            "OSIRIS data enrichment will not be possible."
-        )
-        return None
-
-    osiris_file_path = osiris_file_path_obj.path
-
-    try:
-        with open(file=osiris_file_path, encoding="utf-8") as f:
-            data: Any = json.load(f)
-        if not isinstance(data, dict):
-            logger.error(
-                f"Osiris data file ({osiris_file_path}) does not contain a valid JSON object (expected dict). "
-                "OSIRIS data enrichment will not be possible."
-            )
-            return None
-        return {str(k): v for k, v in data.items()}
-    except FileNotFoundError:
-        logger.error(
-            f"Osiris data file ({osiris_file_path}) not found. "
-            "OSIRIS data enrichment will not be possible.\n"
-            "Please run the CLI again with the refresh_osiris_data flag set to True to retrieve the required data."
-        )
-        return None
-    except json.JSONDecodeError:
-        logger.error(
-            f"Error decoding JSON from Osiris data file ({osiris_file_path}). "
-            "OSIRIS data enrichment will not be possible."
-        )
-        return None
-    except Exception as e:
-        logger.error(
-            f"An unexpected error occurred while loading Osiris data from {osiris_file_path}: {e}. "
-            "OSIRIS data enrichment will not be possible."
-        )
-        return None
-
-
-# Global settings
-
-# Set up logging configuration
-# configure loggers (console + file)
 configure_logger()
-# install rich traceback as default
 install(show_locals=True)
 
-# initialize settings from (default: read from 'settings.yaml')
-SETTINGS: Settings = Settings()
+SETTINGS: Settings = Settings()  # deprecate this?

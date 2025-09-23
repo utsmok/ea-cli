@@ -3,7 +3,6 @@
 # Note that missing settings will at best result in warnings or errors, at worst silently making errors in the output.
 
 unsorted:
-# values that don't (yet) fit anywhere else
   dashboard_reload: true # Auto-reload dashboard on code changes (dev setting)
   classification_options:
     - open access
@@ -19,13 +18,9 @@ unsorted:
 
 directories:
 # The directories to retrieve / store files. The directories should be folder names in the same directory as the script.
-  raw_copyright_data: raw_copyright_data # Directory where the raw copyright data is downloaded to (output from qlik)
-  full_data: full_data # subdir of raw_copyright_data containing exports that are not filtered by classification status
-  export_to_surf: copyright_data_for_SURF_import # The script will export files here to be sent to SURF for importing data.
+  raw_copyright_data: raw_copyright_data # Directory where the raw copyright data is downloaded to (output from CRC/qlik)
   faculties_dir: faculty_sheets # Here the sheets per faculty will be stored -- the most important output of the script.
-  all_items_dir: cip_sheets # Sheets with all items here, for quick reference and overview for the CIP.
   overviews_backup: overviews_backup # Backup folder for 'overview' sheets, which are replaced each time the script runs.
-  full_backups: full_backups # Backup folder for entire faculty dir backups, see 'backup' section
   script_data: script_data # Data directly used by the script, such as 'full_data.csv' and 'ea-cli.log'
   pdf_downloads: pdf_downloads # Directory for pdf downloads
 
@@ -161,6 +156,9 @@ data_settings:
     manual_identifier,
     scope,
     remarks,
+    v2_manual_classification,
+    v2_overnamestatus,
+    v2_lengte,
     auditor,
     last_change,
     status,
@@ -217,29 +215,8 @@ data_settings:
   url_default_base: "https://utwente.instructure.com/files" # Default base for file urls in the sheets
 
 
-#     'aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure', 'beige', 'bisque', 'black',
-#     'blanchedalmond', 'blue', 'blueviolet', 'brown', 'burlywood', 'cadetblue', 'chartreuse',
-#     'chocolate', 'coral', 'cornflowerblue', 'cornsilk', 'crimson', 'cyan', 'darkblue', 'darkcyan',
-#     'darkgoldenrod', 'darkgray', 'darkgreen', 'darkgrey', 'darkkhaki', 'darkmagenta', 'darkolivegreen',
-#     'darkorange', 'darkorchid', 'darkred', 'darksalmon', 'darkseagreen', 'darkslateblue',
-#     'darkslategray', 'darkslategrey', 'darkturquoise', 'darkviolet', 'deeppink', 'deepskyblue',
-#     'dimgray', 'dimgrey', 'dodgerblue', 'firebrick', 'floralwhite', 'forestgreen', 'fuchsia', 'gainsboro',
-#     'ghostwhite', 'gold', 'goldenrod', 'gray', 'green', 'greenyellow', 'grey', 'honeydew', 'hotpink',
-#     'indianred', 'indigo', 'ivory', 'khaki', 'lavender', 'lavenderblush', 'lawngreen', 'lemonchiffon',
-#     'lightblue', 'lightcoral', 'lightcyan', 'lightgoldenrodyellow', 'lightgray', 'lightgreen',
-#     'lightgrey', 'lightpink', 'lightsalmon', 'lightseagreen', 'lightskyblue', 'lightslategray',
-#     'lightslategrey', 'lightsteelblue', 'lightyellow', 'lime', 'limegreen', 'linen', 'magenta', 'maroon',
-#     'mediumaquamarine', 'mediumblue', 'mediumorchid', 'mediumpurple', 'mediumseagreen', 'mediumslateblue',
-#     'mediumspringgreen', 'mediumturquoise', 'mediumvioletred', 'midnightblue', 'mintcream', 'mistyrose',
-#     'moccasin', 'navajowhite', 'navy', 'oldlace', 'olive', 'olivedrab', 'orange', 'orangered', 'orchid',
-#     'palegoldenrod', 'palegreen', 'paleturquoise', 'palevioletred', 'papayawhip', 'peachpuff', 'peru',
-#     'pink', 'plum', 'powderblue', 'purple', 'red', 'rosybrown', 'royalblue', 'saddlebrown', 'salmon',
-#     'sandybrown', 'seagreen', 'seashell', 'sienna', 'silver', 'skyblue', 'slateblue', 'slategray',
-#     'slategrey', 'snow', 'springgreen', 'steelblue', 'tan', 'teal', 'thistle', 'tomato', 'turquoise',
-#     'violet', 'wheat', 'white', 'whitesmoke', 'yellow', 'yellowgreen'
-
 # University settings
-# Set all the data for your university. This data is essential for the script to separate data into faculties and programmes;
+# Set all the data for the university. This data is essential for the script to separate data into faculties and programmes;
 # and also to enrich the copyright data with additional information.
 
 university:
@@ -262,7 +239,7 @@ university:
     "BMS: Behavioural, Management and Social Sciences": "BMS"
     "EEMCS: Electrical Engineering, Mathematics and Computer Science": "EEMCS"
     "ET: Engineering Technology": "ET"
-  faculties: # this is a hierarchical structure of faculties and programmes. This is used to split the copyright data per faculty (and optionally per programme).
+  faculties: # this is a hierarchical structure of faculties and programmes. This is used to split the copyright data per faculty.
     - name: Faculty of Behavioural, Management and Social Sciences
       abbreviation: BMS
       programmes:
@@ -412,51 +389,39 @@ university:
       programmes:
         - name: Chemical Engineering
           abbreviation: B-CSE
-          cluster: CSE
           programme_type: b
         - name: Chemical Science & Engineering
           abbreviation: M-CSE
-          cluster: CSE
           programme_type: m
         - name: Applied Physics
           abbreviation: M-AP
-          cluster: TN_AP
           programme_type: m
         - name: Technische Natuurkunde
           abbreviation: B-TN
-          cluster: TN_AP
           programme_type: b
         - name: Advanced Technology
           abbreviation: B-AT
-          cluster: AT_NANO
           programme_type: b
         - name: Nanotechnology
           abbreviation: M-NT
-          cluster: AT_NANO
           programme_type: m
         - name: Biomedische Technologie
           abbreviation: B-BMT
-          cluster: BMT_BME
           programme_type: b
         - name: Biomedical Engineering
           abbreviation: M-BME
-          cluster: BMT_BME
           programme_type: m
         - name: Gezondheidswetenschappen
           abbreviation: B-GZW
-          cluster: HS_GZW
           programme_type: b
         - name: Health Sciences
           abbreviation: M-HS
-          cluster: HS_GZW
           programme_type: m
         - name: Technische Geneeskunde
           abbreviation: B-TG
-          cluster: TG_TM
           programme_type: b
         - name: Technical Medicine
           abbreviation: M-TM
-          cluster: TG_TM
           programme_type: m
     - name: Faculty of Geo-Information Science and Earth Observation
       abbreviation: ITC

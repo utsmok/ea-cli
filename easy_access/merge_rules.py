@@ -5,7 +5,14 @@ This module contains the field definitions and comparison logic for merging copy
 Extracted from legacy update_copyright_items logic.
 """
 
-from easy_access.db.models import Classification, Infringement, WorkflowStatus
+from easy_access.db.models import (
+    Classification,
+    ClassificationV2,
+    Infringement,
+    Lengte,
+    OvernameStatus,
+    WorkflowStatus,
+)
 from easy_access.settings import Settings
 
 # Fields that can be added/updated with priorities (list for ordered preferences, None for no priority)
@@ -27,20 +34,49 @@ added_fields = {
 
 # Fields changeable by checkers with priorities
 changeable_fields = {
+    "v2_manual_classification": [
+        ClassificationV2.JA_OPEN_LICENTIE.value,
+        ClassificationV2.JA_PUBLIEK_DOMEIN.value,
+        ClassificationV2.JA_DIRECTE_TOESTEMMING.value,
+        ClassificationV2.JA_EASY_ACCESS.value,
+        ClassificationV2.JA_EIGEN_WERK.value,
+        ClassificationV2.JA_STUDENTWERK.value,
+        ClassificationV2.JA_BIBLIOTHEEK_LICENTIE.value,
+        ClassificationV2.JA_ANDERS.value,
+        ClassificationV2.JA_DIRECTE_TOESTEMMING_TIJDELIJK.value,
+        ClassificationV2.JA_BIBLIOTHEEK_LICENTIE_TIJDELIJK.value,
+        ClassificationV2.JA_ANDERS_TIJDELIJK.value,
+        ClassificationV2.NEE_LINK_BESCHIKBAAR.value,
+        ClassificationV2.NEE_STUDENTWERK.value,
+        ClassificationV2.NEE.value,
+        ClassificationV2.ONBEKEND.value,
+    ],
+    "v2_lengte": [
+        Lengte.LANG.value,
+        Lengte.MIDDELLANG.value,
+        Lengte.KORT.value,
+        Lengte.ONBEKEND.value,
+    ],
+    "v2_overnamestatus": [
+        OvernameStatus.OVERNAME_INBREUKMAKENDE.value,
+        OvernameStatus.OVERNAME_ANDERE.value,
+        OvernameStatus.GEEN_OVERNAME.value,
+        OvernameStatus.ONBEKEND.value,
+    ],
     "manual_classification": [
         Classification.OPEN_ACCESS.value,
-        Classification.KORTE_OVERNAME.value,
-        Classification.MIDDELLANGE_OVERNAME.value,
-        Classification.LANGE_OVERNAME.value,
         Classification.EIGEN_MATERIAAL_POWERPOINT.value,
         Classification.EIGEN_MATERIAAL_TITELINDICATIE.value,
         Classification.EIGEN_MATERIAAL_OVERIG.value,
         Classification.EIGEN_MATERIAAL.value,
-        Classification.ONBEKEND.value,
         Classification.LICENTIE_BESCHIKBAAR.value,
-        Classification.NIET_GEANALYSEERD.value,
-        Classification.IN_ONDERZOEK.value,
+        Classification.LANGE_OVERNAME.value,
+        Classification.MIDDELLANGE_OVERNAME.value,
+        Classification.KORTE_OVERNAME.value,
         Classification.VERWIJDERVERZOEK_VERSTUURD.value,
+        Classification.IN_ONDERZOEK.value,
+        Classification.NIET_GEANALYSEERD.value,
+        Classification.ONBEKEND.value,
     ],
     "manual_identifier": None,
     "remarks": None,

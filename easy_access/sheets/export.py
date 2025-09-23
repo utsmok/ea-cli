@@ -182,7 +182,7 @@ async def export_faculty_workflow_files(
 
         # small backups dir inside faculty dir
         backups_dir_base = (
-            settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / "v2_style_backups"
+            settings.dirs[DirSetting.OVERVIEWS_BACKUP].full
         )
         if not backups_dir_base.exists():
             backups_dir_base.mkdir(parents=True, exist_ok=True)

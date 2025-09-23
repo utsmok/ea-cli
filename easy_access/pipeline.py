@@ -2,35 +2,12 @@
 This module contains the main data processing pipeline for the Easy Access tool.
 """
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+
 
 from loguru import logger
 
 from easy_access.settings import EasyAccessSettings, Settings
-
-
-def _run_sync(coro: Any):
-    """Run coroutine in a sync-friendly way.
-
-    If there's no running loop, use asyncio.run(). If a loop is running in the
-    current thread, run the coroutine in a background thread using asyncio.run()
-    there so callers don't encounter "event loop already running" errors.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop — run directly
-        return asyncio.run(coro)
-
-    # Running loop present — execute in background thread
-    def target():
-        return asyncio.run(coro)
-
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(target)
-        return fut.result()
+from easy_access.utils import run_sync
 
 
 class DataPipeline:
@@ -49,48 +26,48 @@ class DataPipeline:
     # Synchronous wrappers (loop-aware)
     def run(self) -> None:
         """Run full pipeline synchronously."""
-        return _run_sync(self.run_async())
+        return run_sync(self.run_async())
 
     def ingest_raw_data(self, file_path: str | None = None) -> None:
         """Synchronous wrapper for ingesting raw data."""
-        return _run_sync(self.ingest_raw_data_async(file_path))
+        return run_sync(self.ingest_raw_data_async(file_path))
 
     def ingest_faculty_updates(self) -> None:
         """Synchronous wrapper for ingesting faculty updates."""
-        return _run_sync(self.ingest_faculty_updates_async())
+        return run_sync(self.ingest_faculty_updates_async())
 
     def process_data(self) -> None:
         """Synchronous wrapper for processing staged data."""
-        return _run_sync(self.process_data_async())
+        return run_sync(self.process_data_async())
 
     def update_relations(self) -> None:
         """Synchronous wrapper for updating relations."""
-        return _run_sync(self.update_relations_async())
+        return run_sync(self.update_relations_async())
 
     def export_reports(self) -> None:
         """Synchronous wrapper for exporting reports."""
-        return _run_sync(self.export_reports_async())
+        return run_sync(self.export_reports_async())
 
     def enrich_data(self) -> None:
         """Synchronous wrapper for enriching data with OSIRIS information."""
-        return _run_sync(self.enrich_data_async())
+        return run_sync(self.enrich_data_async())
 
     def verify_file_existence(self) -> None:
         """Synchronous wrapper for verifying file existence."""
-        return _run_sync(self.verify_file_existence_async())
+        return run_sync(self.verify_file_existence_async())
 
     def download_pdfs(self) -> None:
         """Synchronous wrapper for downloading PDFs."""
-        return _run_sync(self.download_pdfs_async())
+        return run_sync(self.download_pdfs_async())
 
     def parse_pdfs(self) -> None:
         """Synchronous wrapper for parsing PDFs."""
 
-        return _run_sync(self.parse_pdfs_async())
+        return run_sync(self.parse_pdfs_async())
 
     def process_db_changes(self) -> None:
         """Synchronous wrapper for processing DB changes."""
-        return _run_sync(self.process_db_changes_async())
+        return run_sync(self.process_db_changes_async())
 
     def close_connections(self) -> None:
         """
@@ -99,7 +76,7 @@ class DataPipeline:
         from easy_access.db.base import close_connections
 
         logger.info("Closing database connections...")
-        return _run_sync(close_connections())
+        return run_sync(close_connections())
         logger.info("Database connections closed.")
 
     # Asynchronous interface
