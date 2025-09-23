@@ -435,6 +435,10 @@ class UniversitySettings:
             self.canvas_api_token = self._load_env_file()
         if not self.canvas_api_token:
             self.canvas_api_token = self._load_api_keys_module()
+        if not self.canvas_api_token:
+            logger.error(
+                "No CANVAS_API_TOKEN found in environment, .env/.secret files, or api_keys.py module. Please provide one in order to use file existence checks and PDF download functionality."
+            )
 
     def _load_env_file(self) -> str | None:
         """Loads the API token from a .env or .secret file in
@@ -453,6 +457,7 @@ class UniversitySettings:
                         for line in f:
                             if line.startswith("CANVAS_API_TOKEN="):
                                 return line.split("=", 1)[1].strip()
+        logger.warning("No CANVAS_API_TOKEN found in .env or .secret files.")
         return None
 
     def _load_api_keys_module(self) -> str | None:
@@ -467,6 +472,7 @@ class UniversitySettings:
 
             found_token = CANVAS_API_TOKEN
             return found_token
+        logger.warning("No CANVAS_API_TOKEN found in api_keys.py.")
         return None
 
     def make_programme_set(self) -> None:

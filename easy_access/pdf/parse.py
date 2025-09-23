@@ -134,12 +134,15 @@ def get_pdf_metadata(result: ExtractionResult) -> dict:
     pdf = dict()
     if "title" in metadata and metadata["title"]:
         pdf["title"] = metadata["title"]
-    if "authors" in metadata and metadata["authors"]:
-        if isinstance(metadata["authors"], list):
-            if len(metadata["authors"]) == 1:
-                pdf["author"] = metadata["authors"][0]
-            else:
-                pdf["author"] = ", ".join(metadata["authors"])
+    if (
+        "authors" in metadata
+        and metadata.get("authors", "")
+        and isinstance(metadata.get("authors"), list)
+    ):
+        if len(metadata["authors"]) == 1:
+            pdf["author"] = metadata["authors"][0]
+        else:
+            pdf["author"] = ", ".join(metadata["authors"])
 
     if "created_by" in metadata and metadata["created_by"]:
         pdf["created_by"] = metadata["created_by"]

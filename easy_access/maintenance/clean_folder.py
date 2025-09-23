@@ -10,4 +10,3 @@ methods to clean the copyright files in this folder:
 - scan for sync errors
 
 """
-

@@ -57,7 +57,8 @@ async def visualize_entities_on_pdf(settings: Settings, lookup: dict[str, Any]):
             filename = input_value
             lookup_filter = {"filename": filename}
         case (_, CopyrightItem() as ci):
-            lookup_filter = {"parent": input_value}
+            ci = input_value
+            lookup_filter = {"parent": ci}
         case ("url" | "link", str() as url):
             url = input_value
             lookup_filter = {"url": url}

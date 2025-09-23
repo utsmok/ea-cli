@@ -337,19 +337,11 @@ class Directory:
                 f"Directory {self.full} does not exist. Cannot retrieve creation time."
             )
         try:
-            return datetime.fromtimestamp(self.full.stat().st_birthtime)
-        except AttributeError:
-            # st_birthtime might not be available, try st_ctime as a fallback
-            try:
-                return datetime.fromtimestamp(self.full.stat().st_ctime)
-            except Exception as e:
-                raise Exception(
-                    f"Failed to retrieve creation time for {self.full}. Error: {e}"
-                )
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"Directory {self.full} does not exist. Cannot retrieve creation time."
-            )
+            return datetime.fromtimestamp(self.full.stat().st_ctime)
+        except Exception as e:
+            raise Exception(
+                f"Failed to retrieve creation time for {self.full}. Error: {e}"
+            ) from e
 
     def dirs(self, r: bool = False) -> list[Directory]:
         """Gets subdirectories within this directory.
@@ -616,20 +608,11 @@ class File:
                 f"File {self._path} does not exist. Cannot retrieve creation time."
             )
         try:
-            return datetime.fromtimestamp(self._path.stat().st_birthtime)
-        except AttributeError:
-            # st_birthtime might not be available, try st_ctime as a fallback
-            try:
-                return datetime.fromtimestamp(self._path.stat().st_ctime)
-            except Exception as e:
-                raise Exception(
-                    f"Failed to retrieve creation time for {self._path}: {e}"
-                )
-
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"File {self._path} does not exist. Cannot retrieve creation time."
-            )
+            return datetime.fromtimestamp(self._path.stat().st_ctime)
+        except Exception as e:
+            raise Exception(
+                f"Failed to retrieve creation time for file {self._path}. Error: {e}"
+            ) from e
 
     @property
     def modified(self) -> datetime | None:

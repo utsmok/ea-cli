@@ -268,9 +268,8 @@ async def copyright_item_from_dict(
         # Passing explicit None for non-nullable fields causes model construction errors.
         # However, file_exists should always be included even if None (null=True in model)
         for key, val in item.items():
-            if key in copyright_item_keys:
-                if key == "file_exists" or val is not None:
-                    final_dict[key] = val
+            if key in copyright_item_keys and (key == "file_exists" or val is not None):
+                final_dict[key] = val
 
         final_item = CopyrightItem(**final_dict)
         return final_item

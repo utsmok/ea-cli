@@ -2,8 +2,6 @@
 This module contains the main data processing pipeline for the Easy Access tool.
 """
 
-
-
 from loguru import logger
 
 from easy_access.settings import EasyAccessSettings, Settings

@@ -181,9 +181,7 @@ async def export_faculty_workflow_files(
                 settings = OverrideSettings(override_input_file_path=file.path)
 
         # small backups dir inside faculty dir
-        backups_dir_base = (
-            settings.dirs[DirSetting.OVERVIEWS_BACKUP].full
-        )
+        backups_dir_base = settings.dirs[DirSetting.OVERVIEWS_BACKUP].full
         if not backups_dir_base.exists():
             backups_dir_base.mkdir(parents=True, exist_ok=True)
 
@@ -257,7 +255,8 @@ async def export_faculty_workflow_files(
             if bucket_name in ["done", "overview"]:
                 try:
                     protect_workbook(
-                        target_path,
+                        file_path=target_path,
+                        settings=settings,
                         protect_sheets=[
                             settings.data_settings.complete_data_name,
                             settings.data_settings.data_entry_name,

@@ -5,6 +5,7 @@ Centralizes move+timestamp logic used by overview export and the workflow-based 
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import shutil
 from datetime import datetime
@@ -18,7 +19,7 @@ def ensure_dir(path: Path) -> None:
 
 
 def timestamped_filename(original: Path, timestamp: datetime | None = None) -> str:
-    ts = (timestamp or datetime.utcnow()).strftime("%Y%m%d_%H%M%S")
+    ts = (timestamp or datetime.now(dt.UTC)).strftime("%Y%m%d_%H%M%S")
     return f"{original.stem}_backup_{ts}{original.suffix}"
 
 
