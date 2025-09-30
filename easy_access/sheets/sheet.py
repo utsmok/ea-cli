@@ -13,6 +13,7 @@ import openpyxl.worksheet.worksheet
 import polars as pl
 import typer
 from loguru import logger
+from openpyxl.cell import Cell
 from openpyxl.styles import Alignment, NamedStyle
 from openpyxl.utils import get_column_letter, quote_sheetname
 from openpyxl.workbook.defined_name import DefinedName
@@ -119,17 +120,17 @@ def read_copyright_export(
             f"{len(copyright_data)} items remaining from {file.name} after filtering out missing material_ids and specific filetypes."
         )
         return latest_file_date, copyright_data
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         logger.warning(
             f"No files found in {settings.dirs[DirSetting.RAW_COPYRIGHT_DATA]}"
         )
-        raise typer.Exit(code=1)
-    except PermissionError:
+        raise typer.Exit(code=1) from e
+    except PermissionError as e:
         logger.warning(f"Permission denied to read {file}")
-        raise typer.Exit(code=1)
-    except ValueError:
+        raise typer.Exit(code=1) from e
+    except ValueError as e:
         logger.warning("No file found.")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 def add_v2_classification(data: pl.DataFrame) -> pl.DataFrame:
@@ -199,6 +200,7 @@ class DataEntrySheet:
         colnum = 0
         for col in self.cols:
             colnum += 1
+
             col_name = col.new_name if col.new_name else col.name
             if col.is_new:
                 # Check if col is truly new first by retrieving the data from the dataframe
@@ -221,27 +223,29 @@ class DataEntrySheet:
                         if item == "" or not item:
                             col_data[item_num] = col.default_val
 
-            self.sheet.cell(1, colnum).value = col_name
+
+            curr_col: Cell = self.sheet.cell(1, colnum)  # type: ignore
+            curr_col.value = col_name
             for row, cell_data in enumerate(col_data, start=2):
+                cur_cell: Cell = self.sheet.cell(row, colnum)  # type: ignore
                 if not cell_data:
-                    self.sheet.cell(row, colnum).value = cell_data
+                    cur_cell.value = cell_data
                     continue
 
                 if col.is_url:
-                    if "/" not in cell_data:
-                        self.sheet.cell(row, colnum).value = cell_data
-                    else:
-                        self.sheet.cell(row, colnum).value = (
-                            ".../" + cell_data.split("/")[-1]
-                        )
-                    self.sheet.cell(row, colnum).hyperlink = cell_data
-                    if len(self.sheet.cell(row, colnum).value) > col.max_width:
-                        col.max_width = len(self.sheet.cell(row, colnum).value)
-                    if len(self.sheet.cell(row, colnum).value) > 40:
+                    #if "/" not in cell_data:
+                    #    cur_cell.value = cell_data
+                    #else:
+                    #    cur_cell.value = ".../" + cell_data.split("/")[-1]
+                    cur_cell.value = cell_data
+                    cur_cell.hyperlink = cell_data
+                    if len(str(cur_cell.value)) > col.max_width:
+                        col.max_width = len(str(cur_cell.value))
+                    if len(str(cur_cell.value)) > 40:
                         col.count_max_width_over_40 += 1
 
                 else:
-                    self.sheet.cell(row, colnum).value = cell_data
+                    cur_cell.value = cell_data
                     if len(str(cell_data)) > col.max_width:
                         col.max_width = len(str(cell_data))
                     if len(str(cell_data)) > 40:
@@ -253,6 +257,7 @@ class DataEntrySheet:
         ]
 
         for idx, col in enumerate(self.cols):
+
             # use column position (order in self.cols) to determine target column
             col_index_1based = idx + 1
             target_col_letter = header_col_letters[idx]
@@ -322,7 +327,8 @@ class DataEntrySheet:
                             col_idx += 1
 
                         for ridx, val in enumerate(items, start=1):
-                            list_ws.cell(row=ridx, column=col_idx).value = val
+                            cur_cell: Cell = list_ws.cell(row=ridx, column=col_idx)  # type: ignore
+                            cur_cell.value = val
 
                         list_col_letter = get_column_letter(col_idx)
                         # Use quote_sheetname to handle special chars and spaces
@@ -516,6 +522,7 @@ def store_complete_data(
 
 def protect_workbook(
     file_path: str | Path,
+    settings: Settings,
     protect_sheets: list[str] | None = None,
     active_sheet: str | None = None,
     password: str | None = None,
@@ -547,13 +554,10 @@ def protect_workbook(
             except Exception as e:
                 logger.debug(f"Could not set protection on sheet {name}: {e}")
 
-    if active_sheet and active_sheet in wb.sheetnames:
-        try:
-            wb.active = wb[active_sheet]
-        except Exception:
-            # best-effort: ignore if setting the active sheet fails
-            pass
-
+    if not active_sheet:
+        active_sheet = settings.data_settings.data_entry_name
+    with contextlib.suppress(Exception):
+        wb.active = wb[active_sheet]
     try:
         wb.save(filename=str(file_path))
     except Exception as e:

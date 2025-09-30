@@ -1,15 +1,43 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import pathlib
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from typing import Any
 
 import polars as pl
 from loguru import logger
+
+
+# Async <-> sync bridge
+def run_sync(coro: Any):
+    """Run coroutine in a sync-friendly way.
+
+    If there's no running loop, use asyncio.run(). If a loop is running in the
+    current thread, run the coroutine in a background thread using asyncio.run()
+    there so callers don't encounter "event loop already running" errors.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — run directly
+        return asyncio.run(coro)
+
+    # Running loop present — execute in background thread
+    def target():
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(target)
+        return fut.result()
+
+
+# safe conversion functions
 
 
 def safe_int(x: Any) -> int | None:
@@ -309,19 +337,11 @@ class Directory:
                 f"Directory {self.full} does not exist. Cannot retrieve creation time."
             )
         try:
-            return datetime.fromtimestamp(self.full.stat().st_birthtime)
-        except AttributeError:
-            # st_birthtime might not be available, try st_ctime as a fallback
-            try:
-                return datetime.fromtimestamp(self.full.stat().st_ctime)
-            except Exception as e:
-                raise Exception(
-                    f"Failed to retrieve creation time for {self.full}. Error: {e}"
-                )
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"Directory {self.full} does not exist. Cannot retrieve creation time."
-            )
+            return datetime.fromtimestamp(self.full.stat().st_ctime)
+        except Exception as e:
+            raise Exception(
+                f"Failed to retrieve creation time for {self.full}. Error: {e}"
+            ) from e
 
     def dirs(self, r: bool = False) -> list[Directory]:
         """Gets subdirectories within this directory.
@@ -588,20 +608,11 @@ class File:
                 f"File {self._path} does not exist. Cannot retrieve creation time."
             )
         try:
-            return datetime.fromtimestamp(self._path.stat().st_birthtime)
-        except AttributeError:
-            # st_birthtime might not be available, try st_ctime as a fallback
-            try:
-                return datetime.fromtimestamp(self._path.stat().st_ctime)
-            except Exception as e:
-                raise Exception(
-                    f"Failed to retrieve creation time for {self._path}: {e}"
-                )
-
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"File {self._path} does not exist. Cannot retrieve creation time."
-            )
+            return datetime.fromtimestamp(self._path.stat().st_ctime)
+        except Exception as e:
+            raise Exception(
+                f"Failed to retrieve creation time for file {self._path}. Error: {e}"
+            ) from e
 
     @property
     def modified(self) -> datetime | None:

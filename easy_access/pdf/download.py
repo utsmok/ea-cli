@@ -79,7 +79,7 @@ async def download_pdf_from_canvas(
                 }
             )
 
-        pdf_metadata_obj, _ = await PDFCanvasMetadata.update_or_create(**pdf_metadata)
+        pdf_metadata_obj, _ = await PDFCanvasMetadata.update_or_create(**pdf_metadata)  # type: ignore
 
         download_link = metadata.get("url")
         if not download_link:
@@ -168,14 +168,14 @@ async def download_pdfs_for_items(
                         material_id=item.get("material_id")
                     )
                     if v1_copyright_item:
-                        pdf_dict["v1_copyright_item"] = v1_copyright_item
+                        pdf_dict["v1_copyright_item"] = v1_copyright_item  # type: ignore
                     elif copyright_item:
-                        pdf_dict["copyright_item"] = copyright_item
+                        pdf_dict["copyright_item"] = copyright_item  # type: ignore
                     else:
                         logger.warning(
                             f"No matching CopyrightItem or v1_CopyrightItem found for material_id {item.get('material_id')}"
                         )
-                    await PDF.create(**pdf_dict)
+                    await PDF.create(**pdf_dict)  # type: ignore
                 else:
                     return
         except Exception as e:
@@ -247,7 +247,7 @@ async def download_pdfs(settings: Settings, limit: int = 0) -> None:
                         "retrieved_on": datetime.datetime.now(datetime.UTC),
                         "canvas_metadata": pdf_metadata_obj,
                     }
-                    await PDF.create(**pdf_dict)
+                    await PDF.create(**pdf_dict)  # type: ignore
                 else:
                     logger.error(f"Failed to download {item.material_id}")
         except Exception as e:

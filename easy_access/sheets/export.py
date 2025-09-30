@@ -54,6 +54,29 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
             .alias("file_exists")
         )
 
+    if 'canvas_course_id' in all_data.columns:
+        base_url = settings.university_settings.lms.url
+
+        all_data = all_data.with_columns(
+            pl.when(pl.col('canvas_course_id').is_not_null())
+            .then(
+                pl.concat_str(
+                    [
+                        pl.lit(f"{base_url}/courses/"),
+                        pl.col('canvas_course_id').cast(pl.Utf8),
+                        pl.lit("/files/search?search_term="),
+                        pl.col("filename").str.replace_all(" ", "%20"),
+                    ],
+                    separator="",
+                )
+            )
+            .otherwise(pl.lit(""))
+            .alias("course_link")
+        )
+        # debug: print first 5 unique course links
+        unique_links = all_data.select("course_link").unique().to_series().to_list()
+        logger.debug(f"Sample course links: {unique_links[:5]}")
+
     # Group by faculty
     faculty_data = {}
     faculties = all_data.select("faculty").unique().to_series().to_list()
@@ -181,9 +204,7 @@ async def export_faculty_workflow_files(
                 settings = OverrideSettings(override_input_file_path=file.path)
 
         # small backups dir inside faculty dir
-        backups_dir_base = (
-            settings.dirs[DirSetting.OVERVIEWS_BACKUP].full / "v2_style_backups"
-        )
+        backups_dir_base = settings.dirs[DirSetting.OVERVIEWS_BACKUP].full
         if not backups_dir_base.exists():
             backups_dir_base.mkdir(parents=True, exist_ok=True)
 
@@ -257,7 +278,8 @@ async def export_faculty_workflow_files(
             if bucket_name in ["done", "overview"]:
                 try:
                     protect_workbook(
-                        target_path,
+                        file_path=target_path,
+                        settings=settings,
                         protect_sheets=[
                             settings.data_settings.complete_data_name,
                             settings.data_settings.data_entry_name,

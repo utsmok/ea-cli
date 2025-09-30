@@ -45,7 +45,7 @@ try:
     if len(_params) >= 2 and _params[1].default is inspect._empty:
 
         def _make_metavar_compat(self, ctx=None):
-            return _orig_make_metavar(self, ctx)
+            return _orig_make_metavar(self, ctx) # type: ignore
 
         click.Parameter.make_metavar = _make_metavar_compat
 except Exception:

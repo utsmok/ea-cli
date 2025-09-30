@@ -270,7 +270,7 @@ def clean_and_cast_cols(
 
     df = df.with_columns(
         [
-            pl.col(col).cast(dtype)
+            pl.col(col).cast(dtype)  # type: ignore
             for col, dtype in V1_FIELD_TYPES.items()
             if (col in df.columns and dtype not in [pl.Date, pl.Datetime])
         ]
@@ -314,7 +314,7 @@ def clean_and_cast_cols(
 def process_v1_sheet(
     filename: str,
     dfs: dict[str, pl.DataFrame],
-    existing_item_ids: set[int] | None = None,
+    existing_item_ids: set[int] | list[int] | None = None,
 ) -> pl.DataFrame:
     """
     input: two dataframes from a signle v1-style sheet:
@@ -398,7 +398,7 @@ def process_v1_sheet(
 
 def process_v1_sheets(
     extracted_sheets: dict[str, dict[str, pl.DataFrame]],
-    existing_item_ids: set[int] | None = None,
+    existing_item_ids: set[int] | list[int] | None = None,
 ) -> dict[str, pl.DataFrame]:
     """
     input: dict of sheets as returned by import_v1_sheets()
@@ -478,7 +478,7 @@ async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
     await ensure_db_inited(settings)
     existing_v1_item_ids: list[int] = await v1_CopyrightItem.all().values_list(
         "material_id", flat=True
-    )
+    )  # type: ignore
 
     individual_results = {}
     processed_results = {}

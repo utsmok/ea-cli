@@ -188,6 +188,7 @@ class CopyrightItem(Model, TimestampMixin):
     last_canvas_check = fields.DatetimeField(
         null=True
     )  # when was the file existence last checked on Canvas
+    canvas_course_id = fields.IntField(null=True, db_index=True) # the course ID on canvas, to link to courses more easily
 
     # relations
 
@@ -227,6 +228,17 @@ class CopyrightItem(Model, TimestampMixin):
             "file_exists": self.file_exists,
             "last_canvas_check": self.last_canvas_check,
         }
+    
+    
+    # course_links can only be retrieved, not set here
+
+    @property
+    def course_link(self) -> str:
+        if not self.canvas_course_id or not self.filename:
+            return ""
+        base_url = SETTINGS.university_settings.lms.url
+        return f"{base_url}/courses/{self.canvas_course_id}/files?search_term={self.filename.replace(' ', '%20')}"
+
 
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"

@@ -13,16 +13,15 @@ from easy_access.db.base import (
 from easy_access.db.models import (
     PDF,
     CopyrightItem,
-    Course,
     Faculty,
     Organization,
     Programme,
     StagedCopyrightItem,
     StagedFacultyUpdate,
 )
-from easy_access.settings import (  # Keep DirSetting, FileSetting, SettingsFaculty for type hints
+from easy_access.settings import (
     DirSetting,
-    Settings,  # Add Settings for type hint
+    Settings,
     SettingsFaculty,
 )
 from easy_access.utils import File, standardize_dataframe
@@ -109,15 +108,6 @@ async def load_base_data(settings: Settings) -> None:
     await ensure_db_inited(settings)
     await create()
     try:
-        faculty_count = await Faculty.all().count()
-        programme_count = await Programme.all().count()
-        logger.info(
-            f"# of Faculties present in DB before load_org_data: {faculty_count}"
-        )
-        logger.info(
-            f"# of Programmes present in DB before load_org_data: {programme_count}"
-        )
-
         await load_org_data_from_settings(settings=settings)
 
         faculty_count = await Faculty.all().count()
@@ -127,11 +117,6 @@ async def load_base_data(settings: Settings) -> None:
         )
         logger.success(
             f"# of Programmes present in DB after load_org_data: {programme_count}"
-        )
-
-        course_count = await Course.all().count()
-        logger.info(
-            f"# of Courses present in DB before load_osiris_data: {course_count}"
         )
 
     except Exception as e:

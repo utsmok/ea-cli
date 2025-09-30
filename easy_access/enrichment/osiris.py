@@ -473,15 +473,16 @@ async def enrich_async(settings: Settings) -> None:
             # Add teachers, contacts, etc. from course data
             course_to_persons_entry = {}
             for field in ["teachers", "contacts", "docenten", "examinators", "tutors"]:
-                if field in course_data and course_data[field]:
-                    if isinstance(course_data[field], list) or isinstance(
-                        course_data[field], set
-                    ):
-                        clean_names = {
-                            name for name in course_data[field] if name and name.strip()
-                        }
-                        person_names.update(clean_names)
-                        course_to_persons_entry[field] = clean_names
+                if (
+                    field in course_data
+                    and course_data.get(field, "")
+                    and isinstance(course_data[field], (set, list))
+                ):
+                    clean_names = {
+                        name for name in course_data[field] if name and name.strip()
+                    }
+                    person_names.update(clean_names)
+                    course_to_persons_entry[field] = clean_names
 
             course_to_persons[course_data["cursuscode"]] = course_to_persons_entry
 
