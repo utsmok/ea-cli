@@ -54,6 +54,26 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
             .alias("file_exists")
         )
 
+    if 'canvas_course_id' in all_data.columns:
+        base_url = settings.university_settings.lms.url
+
+        all_data = all_data.with_columns(
+            pl.when(pl.col('canvas_course_id').is_not_null())
+            .then(
+                pl.concat_str(
+                    [
+                        pl.lit(f"{base_url}/courses/"),
+                        pl.col('canvas_course_id').cast(pl.Utf8),
+                        pl.lit("/files/search?search_term="),
+                        pl.col("filename").str.replace(" ", "%20"),
+                    ],
+                    separator="",
+                )
+            )
+            .otherwise(pl.lit(""))
+            .alias("course_link")
+        )
+                
     # Group by faculty
     faculty_data = {}
     faculties = all_data.select("faculty").unique().to_series().to_list()

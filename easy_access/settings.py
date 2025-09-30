@@ -15,7 +15,8 @@ from rich.traceback import install
 # sys is already imported above
 from easy_access.utils import Directory, File, safe_float
 
-"""Manages application settings, loaded from YAML configuration files."
+"""
+Manages application settings, loaded from YAML configuration files.
 
 This module defines dataclasses for structuring settings and provides
 functionality to load and parse them from 'settings.yaml' and 'sample.yaml'.
@@ -28,17 +29,6 @@ def configure_logger() -> None:
     """Configures the Loguru logger for console and file output."""
     log_dir = Directory(path="logs")
     logger.remove()
-
-    def console_formatter(record) -> str:
-        """Formats log messages for console output.
-
-        Args:
-            record: The Loguru log record.
-
-        Returns:
-            The formatted log string.
-        """
-        return f"<level>{record['level'].name} | </level>{{message}}\n"
 
     logger.add(
         sink=sys.stderr,
@@ -395,6 +385,15 @@ class SettingsFaculty:
     abbreviation: str = ""
     programmes: list[SettingsProgramme] = field(default_factory=list)
 
+@dataclass
+class WebResource:
+    """
+    Holds settings related to a web resource like an LMS, course catalogue, etc.
+    """
+    name: str = "" # name of the LMS
+    url: str = ""  # public base url, e.g. https://canvas.utwente.nl
+    api: str = ""  # API base URL, e.g. https://utwente.instructure.com/api/v1. Used for resources that have actual APIs.
+    query_url: str = ""  # URL template for queries, e.g. https://canvas.utwente.nl/courses/{course_id}. Used for resources without APIs but structured URLs (e.g. from a search system).
 
 @dataclass
 class UniversitySettings:
@@ -413,9 +412,9 @@ class UniversitySettings:
 
     name: str = field(default="", init=False)
     abbreviation: str = field(default="", init=False)
-    lms: dict[str, str] = field(default_factory=dict, init=False)
-    course_catalogue: dict[str, str] = field(default_factory=dict, init=False)
-    employee_catalogue: dict[str, str] = field(default_factory=dict, init=False)
+    lms: WebResource = field(default_factory=WebResource, init=False)
+    course_catalogue: WebResource = field(default_factory=WebResource, init=False)
+    employee_catalogue: WebResource = field(default_factory=WebResource, init=False)
     faculties: list[SettingsFaculty] = field(default_factory=list, init=False)
     programmes: set[SettingsProgramme] = field(default_factory=set, init=False)
     manual_department_mappings: dict[str, str] = field(default_factory=dict, init=False)
@@ -610,13 +609,14 @@ class Settings:
         """
         self.university_settings.name = str(value.get("name", ""))
         self.university_settings.abbreviation = str(value.get("abbreviation", ""))
-        self.university_settings.lms = self._parse_dict_safely(value, "lms")
-        self.university_settings.course_catalogue = self._parse_dict_safely(
-            value, "course_catalogue"
-        )
-        self.university_settings.employee_catalogue = self._parse_dict_safely(
-            value, "employee_catalogue"
-        )
+
+        lms = self._parse_dict_safely(value, "lms")
+        course_catalogue = self._parse_dict_safely(value, "course_catalogue")
+        employee_catalogue = self._parse_dict_safely(value, "employee_catalogue")
+
+        self.university_settings.lms = WebResource(**lms) if lms else WebResource()
+        self.university_settings.course_catalogue = WebResource(**course_catalogue) if course_catalogue else WebResource()
+        self.university_settings.employee_catalogue = WebResource(**employee_catalogue) if employee_catalogue else WebResource()
 
         manual_mappings = value.get("manual_department_mappings", {})
         if isinstance(manual_mappings, dict):
@@ -1268,6 +1268,7 @@ class OverrideSettings(Settings):
                 continue
 
             if col_name in existing_cols:
+                overridden_col = None
                 if col_name in required_cols:
                     required_cols[col_name] = True
 

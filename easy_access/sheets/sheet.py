@@ -231,10 +231,11 @@ class DataEntrySheet:
                     continue
 
                 if col.is_url:
-                    if "/" not in cell_data:
-                        cur_cell.value = cell_data
-                    else:
-                        cur_cell.value = ".../" + cell_data.split("/")[-1]
+                    #if "/" not in cell_data:
+                    #    cur_cell.value = cell_data
+                    #else:
+                    #    cur_cell.value = ".../" + cell_data.split("/")[-1]
+                    cur_cell.value = cell_data
                     cur_cell.hyperlink = cell_data
                     if len(str(cur_cell.value)) > col.max_width:
                         col.max_width = len(str(cur_cell.value))
