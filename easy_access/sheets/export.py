@@ -65,7 +65,7 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
                         pl.lit(f"{base_url}/courses/"),
                         pl.col('canvas_course_id').cast(pl.Utf8),
                         pl.lit("/files/search?search_term="),
-                        pl.col("filename").str.replace(" ", "%20"),
+                        pl.col("filename").str.replace_all(" ", "%20"),
                     ],
                     separator="",
                 )
@@ -73,7 +73,10 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
             .otherwise(pl.lit(""))
             .alias("course_link")
         )
-                
+        # debug: print first 5 unique course links
+        unique_links = all_data.select("course_link").unique().to_series().to_list()
+        logger.debug(f"Sample course links: {unique_links[:5]}")
+
     # Group by faculty
     faculty_data = {}
     faculties = all_data.select("faculty").unique().to_series().to_list()

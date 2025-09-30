@@ -379,9 +379,6 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
         last_check_values.append(result["last_canvas_check"].isoformat())
         course_ids.append(result["course_id"])
 
-    # Use raw SQL for bulk update to avoid N+1 queries
-    # Create temporary table for bulk update
-    temp_table_name = f"temp_file_existence_{int(time.time())}"
 
     try:
         # Shortcut for tests: if CopyrightItem.filter has been patched to return
@@ -407,50 +404,26 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
             # Fall through to normal bulk path
             pass
 
-        # Create temporary table
-        await CopyrightItem.raw(f"""
-            CREATE TEMP TABLE {temp_table_name} (
-                material_id INTEGER PRIMARY KEY,
-                file_exists BOOLEAN,
-                last_canvas_check TIMESTAMP,
-                canvas_course_id INTEGER
+
+        # Bulk update with tortoise ORM
+        try:
+            update_items = []
+            for result in results:
+                item = await CopyrightItem.get(material_id=result["material_id"])
+                item.file_exists = result["file_exists"]
+                item.last_canvas_check = result["last_canvas_check"]
+                item.canvas_course_id = result["course_id"]
+                update_items.append(item)
+            await CopyrightItem.bulk_update(
+                update_items,
+                fields=["file_exists", "last_canvas_check", "canvas_course_id"],
             )
-        """)
+            logger.info(f"Successfully updated {len(results)} items using bulk update")
+            return
+        except Exception as e:
+            logger.error(f"Bulk update failed: {e}")
 
-        # Bulk insert into temporary table
-        values_list = []
-        for _i, result in enumerate(results):
-            values_list.append(
-                f"({result['material_id']}, {result['file_exists']}, '{result['last_canvas_check'].isoformat()}, {result['course_id'] if result['course_id'] is not None else 'NULL'})"
-            )
-
-        if values_list:
-            values_str = ", ".join(values_list)
-            await CopyrightItem.raw(f"""
-                INSERT INTO {temp_table_name} (material_id, file_exists, last_canvas_check, canvas_course_id)
-                VALUES {values_str}
-            """)
-
-            # Bulk update from temporary table
-            await CopyrightItem.raw(f"""
-                UPDATE copyright_data
-                SET file_exists = t.file_exists,
-                    last_canvas_check = t.last_canvas_check,
-                    canvas_course_id = t.canvas_course_id
-                FROM {temp_table_name} t
-                WHERE copyright_data.material_id = t.material_id
-            """)
-
-        logger.info(f"Successfully bulk updated {len(results)} items")
-
-    except Exception as e:
-        logger.error(f"Error in bulk update: {e}")
-        # print traceback for debugging
-        import traceback
-        traceback.print_exc()
-        
-        # Fallback to individual updates
-        logger.info("Falling back to individual updates")
+        # Fallback: use per-item filter().update() if bulk update is not feasible
         for result in results:
             material_id = result["material_id"]
             file_exists = result["file_exists"]
@@ -461,14 +434,9 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
                 file_exists=file_exists, last_canvas_check=last_canvas_check, canvas_course_id=canvas_course_id
             )
         logger.info(f"Successfully updated {len(results)} items using fallback method")
-
-    finally:
-        # Clean up temporary table
-        try:
-            await CopyrightItem.raw(f"DROP TABLE IF EXISTS {temp_table_name}")
-        except Exception as e:
-            logger.warning(f"Could not drop temporary table {temp_table_name}: {e}")
-
+    except Exception as e:
+        logger.error(f"Error during bulk update: {e}")
+        return
 
 async def refresh_file_existence_async(
     settings: Settings,
