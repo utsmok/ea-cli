@@ -223,20 +223,13 @@ class DataEntrySheet:
                         if item == "" or not item:
                             col_data[item_num] = col.default_val
 
-            if col.name == "course_link":
-                logger.debug(f'Found canvas_course_id column at column {colnum}')
-                # example data
-                logger.debug(f'Sample data: {col_data[:5]}')
 
             curr_col: Cell = self.sheet.cell(1, colnum)  # type: ignore
             curr_col.value = col_name
-            empty_course_link_count = 0
             for row, cell_data in enumerate(col_data, start=2):
                 cur_cell: Cell = self.sheet.cell(row, colnum)  # type: ignore
                 if not cell_data:
                     cur_cell.value = cell_data
-                    if col.name == "course_link":
-                        empty_course_link_count += 1
                     continue
 
                 if col.is_url:
@@ -257,15 +250,6 @@ class DataEntrySheet:
                         col.max_width = len(str(cell_data))
                     if len(str(cell_data)) > 40:
                         col.count_max_width_over_40 += 1
-
-            if col.name == "course_link":
-                sum_nones = [x is None for x in col_data].count(True)
-                if empty_course_link_count > sum_nones:
-                    logger.debug(
-                        f"Warning: More empty course_link cells ({empty_course_link_count}) than null/empty entries in canvas_course_id column"
-                    )
-                    logger.debug(f"Empty course_link count for column {col.name}: {empty_course_link_count}")
-                    logger.debug(f"Null/empty canvas_course_id count: {sum_nones}")
 
         # Build a deterministic mapping from column index -> Excel column letter
         header_col_letters: list[str] = [
