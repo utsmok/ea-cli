@@ -32,7 +32,9 @@ tui = [
 
 dev = [
     {include-group="lint"},
-    {include-group="test"}
+    {include-group="test"},
+    "orjson>=3.11.3",
+    "viztracer>=1.0.4",
 ]
 
 lint = [
@@ -56,6 +58,10 @@ dashboard = [
     "starlette",
     "monsterui",
     "python-fasthtml",
+]
+llm = [
+    "dspy>=3.0.3",
+    "ollama>=0.5.4",
 ]
 
 [tool.uv.sources]
