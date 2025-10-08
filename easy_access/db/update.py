@@ -1714,7 +1714,13 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 item.v2_lengte = mapped.length
                 item.v2_overnamestatus = mapped.overname_status
 
-                await item.save()
+                await item.save(
+                    update_fields=[
+                        "v2_manual_classification",
+                        "v2_lengte",
+                        "v2_overnamestatus",
+                    ]
+                )
                 mapped_count += 1
             except Exception as exc:
                 logger.exception(

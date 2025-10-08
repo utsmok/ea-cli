@@ -495,8 +495,10 @@ async def match_v1_to_copyright_items(
         col: (type(val) if val else pl.String)
         for col, val in current_items_retrieved_dict[0].items()
     }
-    v1_df = pl.DataFrame(v1_item_retrieved_dict, schema=schema_v1)
-    current_df = pl.DataFrame(current_items_retrieved_dict, schema=schema_current)
+    v1_df = pl.DataFrame(v1_item_retrieved_dict, schema=schema_v1, strict=False)
+    current_df = pl.DataFrame(
+        current_items_retrieved_dict, schema=schema_current, strict=False
+    )
 
     v1_items = await v1_items_qs.all()
     v1_item_dict = {item.material_id: item for item in v1_items}
