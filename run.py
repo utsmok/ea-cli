@@ -318,7 +318,10 @@ def process_data(
     except Exception as e:
         logger.critical(f"Critical error in workflow: {e}")
     finally:
-        tool.close_connections()
+        try:
+            tool.close_connections()
+        except Exception as e:
+            logger.error(f"Error closing database connections: {e}")
         logger.success("Tool successfully closed.")
         typer.Exit(1)
 
