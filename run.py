@@ -45,7 +45,7 @@ try:
     if len(_params) >= 2 and _params[1].default is inspect._empty:
 
         def _make_metavar_compat(self, ctx=None):
-            return _orig_make_metavar(self, ctx) # type: ignore
+            return _orig_make_metavar(self, ctx)  # type: ignore
 
         click.Parameter.make_metavar = _make_metavar_compat
 except Exception:
@@ -63,49 +63,56 @@ app = typer.Typer(
 # Commands for main app
 @app.command(name="process")
 def process_data(
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            help="Enable verbose error logging.",
+            rich_help_panel="Options",
+        ),
+    ] = False,
     changes: Annotated[
         bool,
         typer.Option(
-            help="Only add items that have been changed to new faculty sheets.",
-            rich_help_panel="Processing Options",
+            help="[DEPRECATED?] Only add items that have been changed to new faculty sheets.",
+            rich_help_panel="Deprecated",
         ),
     ] = True,
     osiris_update: Annotated[
         bool,
         typer.Option(
             help="If enabled, will retrieve fresh osiris data for all course + people page data.",
-            rich_help_panel="Enrichment Options",
+            rich_help_panel="Enrichment",
         ),
-    ] = False,
+    ] = True,
     osiris_full_refresh: Annotated[
         bool,
         typer.Option(
             help="If osiris_update is enabled, this flag will toggle retrieval of fresh osiris data for either ALL data, or only data currently missing osiris info.",
-            rich_help_panel="Enrichment Options",
+            rich_help_panel="Enrichment",
         ),
-    ] = True,
-    other_sheet: Annotated[
+    ] = False,
+    input_sheet: Annotated[
         Path | None,
         typer.Option(
-            help="Path to a xlsx sheet to read instead of CopyRight Data.",
-            rich_help_panel="Input Options",
+            help="Path to a xlsx sheet with raw CopyRight Data to read in. If not provided, will use the most recent sheet in the raw_copyright_data/ folder.",
+            rich_help_panel="Processing",
             exists=True,
             file_okay=True,
             dir_okay=False,
         ),
     ] = None,
-    disable_writes: Annotated[
+    write_xlsx_files: Annotated[
         bool,
         typer.Option(
-            help="Disable all write operations.",
-            rich_help_panel="Processing Options",
+            help="Disable all xlsx write operations, only update the sql db.",
+            rich_help_panel="Options",
         ),
-    ] = False,
+    ] = True,
     single_faculty: Annotated[
         str | None,
         typer.Option(
             help="Only run the tool for a single faculty. use the faculty abbreviation as the parameter (e.g. 'BMS').",
-            rich_help_panel="Processing Options",
+            rich_help_panel="Processing",
         ),
     ] = None,
     # Stage selection options
@@ -113,95 +120,92 @@ def process_data(
         bool,
         typer.Option(
             help="Only run the data ingestion stages (raw data and faculty updates).",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
     process_only: Annotated[
         bool,
         typer.Option(
             help="Only run the data processing stage (update database from staged data).",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
     export_only: Annotated[
         bool,
         typer.Option(
             help="Only run the export stage (generate faculty sheets).",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
     enrich_only: Annotated[
         bool,
         typer.Option(
             help="Only run the enrichment stage (fetch OSIRIS data).",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
     file_exists_only: Annotated[
         bool,
         typer.Option(
             help="Only run the file existence verification stage.",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
     pdf_download_only: Annotated[
         bool,
         typer.Option(
             help="Only run the PDF downloading stage.",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
     parse_only: Annotated[
         bool,
         typer.Option(
             help="Only run the PDF parsing stage.",
-            rich_help_panel="Stage Selection",
+            rich_help_panel="Stage",
         ),
     ] = False,
-    no_file_exists: Annotated[
+    file_exists: Annotated[
         bool,
         typer.Option(
-            help="Skip file existence verification stage.",
-            rich_help_panel="Processing Options",
+            help="Enable file existence verification stage.",
+            rich_help_panel="Enrichment",
+        ),
+    ] = True,
+    pdf_download: Annotated[
+        bool,
+        typer.Option(
+            help="Enable PDF downloading stage.",
+            rich_help_panel="Enrichment",
         ),
     ] = False,
-    no_pdf_download: Annotated[
+    parse_pdf: Annotated[
         bool,
         typer.Option(
-            help="Skip PDF downloading stage.",
-            rich_help_panel="Processing Options",
+            help="Enable PDF parsing stage.",
+            rich_help_panel="Enrichment",
         ),
     ] = False,
-    no_pdf_parse: Annotated[
+    ingest: Annotated[
         bool,
         typer.Option(
-            help="Skip PDF parsing stage.",
-            rich_help_panel="Processing Options",
-        ),
-    ] = False,
-    no_ingest: Annotated[
-        bool,
-        typer.Option(
-            help="Skip ingestion of data from sheets (raw crc data / faculty sheets) when running the workflow.",
-            rich_help_panel="Processing Options",
-        ),
-    ] = False,
-    new_workflow: Annotated[
-        bool,
-        typer.Option(
-            help="Enable new workflow-based exporter (writes inbox/in_progress/done per faculty).",
-            rich_help_panel="Stage Selection",
+            help="Enable ingestion of data from sheets (raw crc data / faculty sheets) when running the workflow.",
+            rich_help_panel="Processing",
         ),
     ] = True,
 ) -> None:
-    """Runs the main Easy Access data processing workflow."""
-    if other_sheet:
+    """Runs the main Easy Access data processing workflow. See --help for all options. Use --verbose to enable verbose error logging."""
+
+    # Validate and parse input sheet path
+    if input_sheet:
         try:
-            other_sheet = Path(other_sheet)  # Ensure it's a Path object
-            logger.info(f"Reading in data from other sheet: {other_sheet.absolute()}")
+            input_sheet = Path(input_sheet)  # Ensure it's a Path object
+            logger.info(f"Reading in data from input sheet: {input_sheet.absolute()}")
         except Exception as e:
-            logger.warning(f"Failed to parse path to other sheet: {e}")
-            other_sheet = None
+            logger.warning(f"Failed to parse path to input sheet: {e}")
+            input_sheet = None
+
+    # STAGE SELECTION
 
     # Validate stage selection options
     stage_options = [
@@ -218,75 +222,112 @@ def process_data(
         )
         typer.Exit(1)
 
-    # Determine which stages to run
-    run_ingest = (ingest_only or not any(stage_options)) and not no_ingest
-    run_process = process_only or not any(stage_options)
-    run_export = export_only or not any(stage_options)
-    run_enrich = enrich_only or not any(stage_options)
-    run_file_exists = file_exists_only or not any(stage_options)
-    run_pdf_download = pdf_download_only or not any(stage_options)
-    run_parse = parse_only or not any(stage_options)
-    run_db_changes = not any(stage_options)
+    # INIT TOOL
 
-    # Import project modules here to avoid import-time side-effects when showing --help
     from easy_access.main import EasyAccessTool
     from easy_access.settings import SETTINGS, EasyAccessSettings
 
-    # Load settings from CLI params, using main SETTINGS for base dir config
+    # create settings object for this run
+    # TODO: this logic is getting messy and also duplicated here+main.py+pipeline.py
+    # clean / refactor this later to disentangle settings vs runtime options better
     ea_settings = EasyAccessSettings.create_for_runtime(
         main_settings=SETTINGS,
-        export=run_export,
+        export=export_only or not any(stage_options),
         only_changes=changes,
         refresh_osiris_data=osiris_update,
-        other_sheet=other_sheet,
+        other_sheet=input_sheet,
         only_retrieve_missing_osiris_data=not osiris_full_refresh,
-        disable_writes=disable_writes,
+        disable_writes=not write_xlsx_files,
         faculty=single_faculty,
-        no_file_exists=no_file_exists,
-        export_workflow=new_workflow,
-        no_pdf_download=no_pdf_download,
-        no_pdf_parse=no_pdf_parse,
+        no_file_exists=not file_exists,
+        export_workflow=True,
+        no_pdf_download=not pdf_download,
+        no_pdf_parse=parse_pdf,
     )
-
     tool = EasyAccessTool(settings_obj=SETTINGS, ea_settings=ea_settings)
 
-    # Run selected stages
-    if run_ingest:
-        logger.info("Running ingest stages...")
-        tool.run_ingest()
-    if run_process:
-        logger.info("Running process stage...")
-        tool.run_process()
-    if run_enrich:
-        logger.info("Running enrichment stage...")
-        tool.run_enrich()
-    tool.run_relations()
-    if run_file_exists and not no_file_exists:
-        logger.info("Running file existence verification stage...")
-        tool.run_verify_file_existence()
-    if run_pdf_download and not no_pdf_download:
-        logger.info("Running PDF downloading stage...")
-        tool.run_download_pdfs()
-    if run_parse and not no_pdf_parse:
-        logger.info("Running PDF parsing stage...")
-        tool.run_parse_pdfs()
-    if run_db_changes:
-        logger.info("Processing DB changes...")
-        tool.process_db_changes()
-    if run_export:
-        logger.info("Running export stage...")
-        tool.run_export()
+    # Determine which stages to run based on options
 
-    logger.success("Processing done!")
-    tool.close_connections()
-    typer.Exit()
+    stages = {
+        "ingest": {
+            "enabled": (ingest_only or not any(stage_options)) and ingest,
+            "func": tool.run_ingest,
+        },
+        "process": {
+            "enabled": process_only or not any(stage_options),
+            "func": tool.run_process,
+        },
+        "enrich": {
+            "enabled": enrich_only or not any(stage_options),
+            "func": tool.run_enrich,
+        },
+        "file_exists": {
+            "enabled": (file_exists_only or not any(stage_options)) and file_exists,
+            "func": tool.run_verify_file_existence,
+        },
+        "pdf_download": {
+            "enabled": (pdf_download_only or not any(stage_options)) and pdf_download,
+            "func": tool.run_download_pdfs,
+        },
+        "parse": {
+            "enabled": (parse_only or not any(stage_options)) and parse_pdf,
+            "func": tool.run_parse_pdfs,
+        },
+        "db_changes": {
+            "enabled": not any(stage_options),
+            "func": tool.process_db_changes,
+        },
+        "export": {
+            "enabled": (export_only or not any(stage_options)) and write_xlsx_files,
+            "func": tool.run_export,
+        },
+    }
+
+    # now we run the selected stages, wrapped in try/except to catch errors and log them nicely
+    # ending with a finally block to always close the async db connections to prevent hanging processes
+    # if verbose is enabled, we log full tracebacks, otherwise just the error message
+    # if a critical error occurs in ingest/process/db_changes, we abort the workflow
+    # otherwise we skip the failed stage and continue with the next one
+    try:
+        for stage_name, stage_info in stages.items():
+            if stage_info["enabled"]:
+                try:
+                    logger.info(f"Running {stage_name} stage...")
+                    stage_info["func"]()
+                    logger.success(f"{stage_name} stage complete.")
+                except Exception as e:
+                    logger.error(f"Error during {stage_name} stage: {e}")
+                    if not verbose:
+                        logger.info(
+                            "Non-verbose mode active. For more error details, rerun with the verbose flag enabled."
+                        )
+                    else:
+                        logger.exception(e)
+                    if stage_name in ["ingest", "process", "db_changes"]:
+                        logger.critical(
+                            "Critical error in core stage. Aborting further processing."
+                        )
+                        tool.close_connections()
+                        typer.Exit(1)
+                    else:
+                        logger.warning(
+                            f"Non-critical stage, skipping {stage_name} and moving on."
+                        )
+            else:
+                logger.warning(f"{stage_name} stage disabled. Skipping!")
+    except Exception as e:
+        logger.critical(f"Critical error in workflow: {e}")
+    finally:
+        tool.close_connections()
+        logger.success("Tool successfully closed.")
+        typer.Exit(1)
 
 
 @app.command(name="update-from-v1")
 def update_from_v1(
     path: Annotated[
         Path, typer.Option(help="Path to the dir containing the v1 faculty sheets.")
-    ] = Path("faculty_sheets/"),
+    ] = Path("faculty_sheets_old/"),
 ) -> None:
     """Updates the database from Easy Access V1 faculty sheets, focusing on ingesting the old manual classifications."""
 

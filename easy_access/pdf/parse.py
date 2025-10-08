@@ -1,7 +1,11 @@
 import datetime
 from pathlib import Path
 
-from kreuzberg import ExtractionConfig, ExtractionResult, extract_file
+from kreuzberg import (
+    ExtractionConfig,
+    ExtractionResult,
+    extract_file,
+)
 from loguru import logger
 from tortoise.expressions import Q
 from xxhash import xxh3_64_hexdigest
@@ -10,17 +14,20 @@ from easy_access.db.models import PDF, PDFText
 
 
 async def parse_pdfs(
-    filter_ids: list[int] | None = None, parse_text: bool = False
+    filter_ids: list[int] | None = None, parse_text: bool = True
 ) -> None:
     """Parses all PDFs that have not yet been attempted for text extraction."""
 
-    pdfs = PDF.filter(extraction_successful=False)
+    pdfs = PDF.filter(extraction_attempted=False)
     if filter_ids:
         pdfs = pdfs.filter(
             Q(copyright_item_id__in=filter_ids) | Q(v1_copyright_item_id__in=filter_ids)
         )
     pdfs = await pdfs.all()
 
+    if not pdfs:
+        logger.info("No PDFs found without extraction attempts.")
+        return
     logger.info(f"Found {len(pdfs)} PDFs to process")
     if not parse_text:
         logger.warning(
@@ -72,6 +79,7 @@ async def parse_pdfs(
                 extracted_text=extracted_text, num_pages=num_pages
             )
             pdf.extracted_text = pdf_text
+            await pdf.save()
         except Exception as e:
             logger.error(
                 f"Error saving extracted text to PDFText for PDF id={pdf.id}, path={pdf.path}: {e}"
@@ -95,7 +103,7 @@ async def parse_pdfs(
         pdf, updatefields = await process_pdf(pdf)
 
         try:
-            await pdf.save(update_fields=updatefields)
+            await pdf.save()
         except Exception as e:
             logger.error(f"Error saving PDF id={pdf.id}, path={pdf.path}: {e}")
     print("Done extracting text from PDFs")
@@ -112,7 +120,11 @@ def hash_pdf(file: Path) -> str | None:
 
 
 async def extract_text(path: Path) -> ExtractionResult:
-    result = await extract_file(
+    """
+    Extracts text from the PDF file using kreuzberg's extract_file function.
+    Currently just a wrapper around kreuzberg.extract_file with the most basic config for PDFs.
+    """
+    return await extract_file(
         file_path=path,
         mime_type="application/pdf",
         config=ExtractionConfig(
@@ -120,12 +132,11 @@ async def extract_text(path: Path) -> ExtractionResult:
         ),
     )
 
-    if not result.content:
-        # no text extracted, try with OCR
-        ...
-        # skipping for now
 
-    return result
+async def ocr_pdfs(max_pages: int = 5) -> None:
+    """Runs OCR on all PDFs that have been attempted for text extraction but were not successful."""
+    logger.debug("OCR is currently disabled.")
+    return
 
 
 def get_pdf_metadata(result: ExtractionResult) -> dict:
@@ -145,7 +156,7 @@ def get_pdf_metadata(result: ExtractionResult) -> dict:
             pdf["author"] = ", ".join(metadata["authors"])
 
     if "created_by" in metadata and metadata["created_by"]:
-        pdf["created_by"] = metadata["created_by"]
+        pdf["creator"] = metadata["created_by"]
     if "created_at" in metadata and metadata["created_at"]:
         try:
             pdf["creation_date"] = datetime.datetime.fromisoformat(

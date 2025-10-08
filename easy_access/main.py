@@ -64,7 +64,11 @@ class EasyAccessTool:
         """
         Executes only the data ingestion stages.
         """
-        self.pipeline.ingest_raw_data()
+        input_file = None
+        if self.ea_settings.other_sheet:
+            input_file = str(self.ea_settings.other_sheet.resolve())
+
+        self.pipeline.ingest_raw_data(input_file)
         self.pipeline.ingest_faculty_updates()
 
     def run_process(self) -> None:
@@ -77,6 +81,11 @@ class EasyAccessTool:
         """
         Executes only the export stage.
         """
+        if self.ea_settings.disable_writes:
+            logger.warning(
+                "Writes are disabled (self.ea_settings.disable_writes==True), skipping export stage."
+            )
+            return
         self.pipeline.export_reports()
 
     def run_relations(self) -> None:

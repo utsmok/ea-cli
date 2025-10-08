@@ -19,6 +19,8 @@ dependencies = [
     "tqdm",
     "fastexcel>=0.15.1",
     "webcolors>=24.11.1",
+    "xxhash",
+
 ]
 
 [tool.uv]
@@ -33,8 +35,6 @@ tui = [
 dev = [
     {include-group="lint"},
     {include-group="test"},
-    "orjson>=3.11.3",
-    "viztracer>=1.0.4",
 ]
 
 lint = [
@@ -47,10 +47,8 @@ test = [
 ]
 
 pdf = [
-    "xxhash",
     "kreuzberg[crypto]",
 ]
-
 
 dashboard = [
     "fastlite",
@@ -63,9 +61,30 @@ llm = [
     "dspy>=3.0.3",
     "ollama>=0.5.4",
 ]
+ocr = [
+    "torch",
+    "torchvision",
+    "pdf2image",
+    "paddleocr[all]>=3.2.0",
+    "gliner>=0.2.22",
+    "semchunk>=3.2.3",
+]
 
 [tool.uv.sources]
 ea-cli = { workspace = true }
+torch = [
+  { index = "pytorch-cu129"},
+]
+torchvision = [
+  { index = "pytorch-cu129" },
+]
+
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
 
 [tool.ruff]
 line-length = 88

@@ -54,16 +54,16 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
             .alias("file_exists")
         )
 
-    if 'canvas_course_id' in all_data.columns:
+    if "canvas_course_id" in all_data.columns:
         base_url = settings.university_settings.lms.url
 
         all_data = all_data.with_columns(
-            pl.when(pl.col('canvas_course_id').is_not_null())
+            pl.when(pl.col("canvas_course_id").is_not_null())
             .then(
                 pl.concat_str(
                     [
                         pl.lit(f"{base_url}/courses/"),
-                        pl.col('canvas_course_id').cast(pl.Utf8),
+                        pl.col("canvas_course_id").cast(pl.Utf8),
                         pl.lit("/files/search?search_term="),
                         pl.col("filename").str.replace_all(" ", "%20"),
                     ],
@@ -272,7 +272,6 @@ async def export_faculty_workflow_files(
             except Exception as e:
                 logger.error(f"Failed writing faculty workflow file {target_path}: {e}")
                 raise e
-                continue
 
             # protect done.xlsx and set active sheet to Data Entry
             if bucket_name in ["done", "overview"]:

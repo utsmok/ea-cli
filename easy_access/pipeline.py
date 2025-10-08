@@ -198,6 +198,8 @@ class DataPipeline:
 
         logger.info("Enriching data with OSIRIS information...")
         await enrich_async(self.settings)
+
+        await self.update_relations_async()
         logger.info("Data enrichment completed.")
 
     async def verify_file_existence_async(self) -> None:
@@ -208,7 +210,6 @@ class DataPipeline:
         ttl_days = getattr(self.settings, "file_exists_ttl_days", 7)
         # Get rate limit delay from settings or use default
         rate_limit_delay = getattr(self.settings, "file_exists_rate_limit_delay", 0.05)
-
         result = await refresh_file_existence_async(
             self.settings,
             ttl_days=ttl_days,
@@ -237,10 +238,11 @@ class DataPipeline:
 
     async def parse_pdfs_async(self) -> None:
         """Parses undparsed PDFs to extract text, filehashes, metadata..."""
-        from easy_access.pdf.parse import parse_pdfs
+        from easy_access.pdf.parse import ocr_pdfs, parse_pdfs
 
         logger.info("Parsing unparsed PDFs...")
         await parse_pdfs()
+        await ocr_pdfs()
         logger.info("PDF parsing completed.")
 
     async def process_db_changes_async(self) -> None:

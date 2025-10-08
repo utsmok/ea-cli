@@ -200,3 +200,20 @@ Period = Enum(
         for period in ["1A", "1B", "2A", "2B", "3", "SEM1", "SEM2", "JAAR"]
     },
 )
+
+
+class EntityTypes(Enum):
+    """
+    The types of entities we might recognize in text:
+    - employee: person who works for the university (e.g. author, professor, researcher, staff)
+    - author: person who wrote the work
+    - person: other persons mentioned in the work
+    - publisher: organization that published the work
+    - organization: other organizations (e.g. companies, institutions, but also universities, research groups, etc)
+    ....
+    """
+
+    EMPLOYEE = "employee"
+    AUTHOR = "author"
+    PUBLISHER = "publisher"
+    ORGANIZATION = "organization"

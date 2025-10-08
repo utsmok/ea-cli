@@ -1,6 +1,7 @@
 compare/
 compare/*.*
 dashboard/*.*
+.kreuzberg/
 
 # datafiles
 *.xls
