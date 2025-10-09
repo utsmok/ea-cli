@@ -64,7 +64,7 @@ async def gather_faculty_data(settings: Settings) -> dict[str, pl.DataFrame]:
                     [
                         pl.lit(f"{base_url}/courses/"),
                         pl.col("canvas_course_id").cast(pl.Utf8),
-                        pl.lit("/files?search_term="),
+                        pl.lit("/files/search?search_term="),
                         pl.col("filename").str.replace_all(" ", "%20"),
                     ],
                     separator="",
