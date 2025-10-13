@@ -160,3 +160,12 @@ These notes are reflected in the "Files inspected" and the utilities / schema / 
 - Platform: Primary development/run platform is Windows (manual runs). Keep Windows path semantics and file creation behavior in mind (but code mostly uses pathlib + wrappers so is cross-platform friendly).
 - Tests & migrations: Tests are low-priority; schema changes are performed manually and datasets can be rebuilt from Excel when necessary. Keep migrations simple and backwards-compatible where possible.
 - Typing & tooling: Continue using type hints where practical and run pyright/ruff/ty; avoid spending excessive time on tricky typing issues.
+
+## Recent migration preferences (recorded Oct 13, 2025)
+
+- Target DB: PostgreSQL (standardize; no SQLite fallback)
+- Postgres version: 18
+- Driver: asyncpg
+- Data migration tool: pgloader (user chose pgloader; a Docker wrapper script is recommended)
+- Alembic migrations location: `migrations/` in the repo root
+- Test scaffold for this migration: skip (user requested no test scaffold)
