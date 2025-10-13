@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from pathlib import Path
 
 from sqlalchemy import (
     JSON,
@@ -273,6 +274,13 @@ class PDF(Base):
     canvas_metadata = relationship("PDFCanvasMetadata", backref="pdf")
     extracted_text = relationship("PDFText", backref="pdf")
     entities = relationship("Entity", secondary="pdf_entity", backref="pdfs")
+
+    @property
+    def path(self) -> Path:
+        """Compute file path from current_file_name."""
+        from easy_access.settings import SETTINGS, DirSetting
+
+        return SETTINGS.dirs[DirSetting.PDF_DOWNLOADS].full / self.current_file_name
 
 
 class v1_CopyrightItem(Base):

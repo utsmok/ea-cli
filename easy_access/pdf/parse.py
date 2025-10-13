@@ -7,10 +7,13 @@ from kreuzberg import (
     extract_file,
 )
 from loguru import logger
-from tortoise.expressions import Q
+from sqlalchemy import or_, select
 from xxhash import xxh3_64_hexdigest
 
-from easy_access.db.models import PDF, PDFText
+from easy_access.db.compat import save_instance
+from easy_access.db.sa_models import PDF as SAPDF
+from easy_access.db.sa_models import PDFText as SAPDFText
+from easy_access.db.session import get_session
 
 
 async def parse_pdfs(
@@ -18,12 +21,17 @@ async def parse_pdfs(
 ) -> None:
     """Parses all PDFs that have not yet been attempted for text extraction."""
 
-    pdfs = PDF.filter(extraction_attempted=False)
-    if filter_ids:
-        pdfs = pdfs.filter(
-            Q(copyright_item_id__in=filter_ids) | Q(v1_copyright_item_id__in=filter_ids)
-        )
-    pdfs = await pdfs.all()
+    async for session in get_session():
+        stmt = select(SAPDF).where(SAPDF.extraction_attempted == False)
+        if filter_ids:
+            stmt = stmt.where(
+                or_(
+                    SAPDF.copyright_item_id.in_(filter_ids),
+                    SAPDF.v1_copyright_item_id.in_(filter_ids),
+                )
+            )
+        result = await session.execute(stmt)
+        pdfs = list(result.scalars().all())
 
     if not pdfs:
         logger.info("No PDFs found without extraction attempts.")
@@ -34,7 +42,7 @@ async def parse_pdfs(
             "Skipping text extraction as parse_text is False -- only hashing PDFs"
         )
 
-    async def process_pdf(pdf: PDF):
+    async def process_pdf(pdf: SAPDF):
         updatefields = []
         try:
             if hash := hash_pdf(pdf.path):
@@ -63,6 +71,7 @@ async def parse_pdfs(
         pdf.extraction_successful = True
         extracted_text = result.content
 
+        num_pages = 0
         summary = result.metadata.get("summary")
         if summary and "PDF document with" in summary:
             try:
@@ -75,11 +84,10 @@ async def parse_pdfs(
                     f"Error parsing number of pages from summary for PDF id={pdf.id}, path={pdf.path}: {e}"
                 )
         try:
-            pdf_text = await PDFText.create(
-                extracted_text=extracted_text, num_pages=num_pages
-            )
-            pdf.extracted_text = pdf_text
-            await pdf.save()
+            pdf_text = SAPDFText(extracted_text=extracted_text, num_pages=num_pages)
+            # Save PDFText first to get ID
+            await save_instance(pdf_text)
+            pdf.extracted_text_id = pdf_text.id
         except Exception as e:
             logger.error(
                 f"Error saving extracted text to PDFText for PDF id={pdf.id}, path={pdf.path}: {e}"
@@ -95,7 +103,7 @@ async def parse_pdfs(
             )
 
         updatefields.extend(parsed_metadata.keys())
-        updatefields.append("extracted_text")
+        updatefields.append("extracted_text_id")
         updatefields.append("num_pages")
         return pdf, updatefields
 
@@ -103,9 +111,10 @@ async def parse_pdfs(
         pdf, updatefields = await process_pdf(pdf)
 
         try:
-            await pdf.save()
+            await save_instance(pdf)
         except Exception as e:
             logger.error(f"Error saving PDF id={pdf.id}, path={pdf.path}: {e}")
+
     print("Done extracting text from PDFs")
 
 
