@@ -34,6 +34,7 @@ applyTo: '**'
 # Constraints & environment
 - Python pinned to 3.12.2 — keep CI and local dev interpreters aligned.
 - `uv` is used for environment management/running; follow existing scripts and README guidance.
+- NEVER run python or alembic or pip directly; always use `uv` to ensure the correct environment is used. use `uv run <command>` to run commands in the correct environment.
 - Heavy optional deps (OCR/LLM/PyTorch) are grouped; avoid installing unless working on related features.
 
 # Files inspected (representative)
