@@ -403,7 +403,7 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
             # Fall through to normal bulk path
             pass
 
-        # Bulk update with tortoise ORM
+        # Bulk update with SQLAlchemy
         try:
             update_items = []
             for result in results:
