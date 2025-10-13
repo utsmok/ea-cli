@@ -487,6 +487,10 @@ async def match_v1_to_copyright_items(
         return
     v1_item_retrieved_dict = await v1_items_qs.values()
     current_items_retrieved_dict = await current_items_qs.values()
+
+    if not v1_item_retrieved_dict or not current_items_retrieved_dict:
+        print("No items to match.")
+        return
     schema_v1 = {
         col: (type(val) if val else pl.String)
         for col, val in v1_item_retrieved_dict[0].items()
@@ -495,10 +499,25 @@ async def match_v1_to_copyright_items(
         col: (type(val) if val else pl.String)
         for col, val in current_items_retrieved_dict[0].items()
     }
-    v1_df = pl.DataFrame(v1_item_retrieved_dict, schema=schema_v1, strict=False)
-    current_df = pl.DataFrame(
-        current_items_retrieved_dict, schema=schema_current, strict=False
-    )
+    try:
+        v1_df = pl.DataFrame(v1_item_retrieved_dict, schema=schema_v1, strict=False)
+    except Exception as e:
+        logger.error(f"Error creating v1_df: {e}")
+        # compare schema v1 with retrieved dict keys:
+        # turn into two dicts with name + type, zip and compare
+        for col, val in v1_item_retrieved_dict[0].items():
+            logger.debug(f"v1 col: {col} type: {type(val)} schema type: {schema_v1.get(col, '[col missing in schema]')}")
+
+        return
+    try:
+        current_df = pl.DataFrame(
+            current_items_retrieved_dict, schema=schema_current, strict=False
+        )
+    except Exception as e:
+        logger.error(f"Error creating current_df: {e}")
+        for col, val in current_items_retrieved_dict[0].items():
+            logger.debug(f"current col: {col} type: {type(val)} schema type: {schema_current.get(col, '[col missing in schema]')}")
+        return
 
     v1_items = await v1_items_qs.all()
     v1_item_dict = {item.material_id: item for item in v1_items}

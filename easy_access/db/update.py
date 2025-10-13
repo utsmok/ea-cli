@@ -1723,7 +1723,7 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 )
                 mapped_count += 1
             except Exception as exc:
-                logger.exception(
+                logger.error(
                     f"Failed to map v1->v2 classification for material_id={getattr(item, 'material_id', None)}: {exc}"
                 )
                 failed_count += 1

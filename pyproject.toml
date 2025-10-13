@@ -20,7 +20,7 @@ dependencies = [
     "fastexcel>=0.15.1",
     "webcolors>=24.11.1",
     "xxhash",
-
+    "lxml>=6.0.2",
 ]
 
 [tool.uv]
