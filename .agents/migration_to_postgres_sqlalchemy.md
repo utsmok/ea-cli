@@ -157,10 +157,6 @@ Operational notes & best practices
 
 Questions for you (required decisions)
 
-1. Postgres version (recommended: 15) and whether the project needs to support specific cloud providers (AWS RDS, Azure, GCP).
-2. Do you want to keep a SQLite fallback for local quick runs, or fully standardize on Postgres?
-3. Which migration method do you prefer: pgloader (fast) or Python ETL (safer/more adjustable)?
-4. Any PII / data sensitivity rules we must follow during migration (encryption at rest, off-network data movement restrictions)?
 
 Files to be created or updated (suggested)
 
@@ -180,7 +176,6 @@ Next steps I'll take if you want me to proceed
 
 Completion checklist
 
-- [ ] Confirm Postgres version and migration method choice
 - [ ] Add dependencies to `pyproject.toml`
 - [ ] Add Docker Compose and environment samples
 - [ ] Scaffold `easy_access/db/session.py`, `models_base.py`, `compat.py`
@@ -191,5 +186,3 @@ Completion checklist
 - [ ] Run full tests and remove Tortoise
 
 ---
-
-Created by automated planning agent. Update `.agents/migration_to_postgres_sqlalchemy.md` or ask me to start implementing the scaffolding.

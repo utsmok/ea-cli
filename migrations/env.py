@@ -1,0 +1,53 @@
+import asyncio
+import os
+import sys
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# Import your project's Base metadata here
+try:
+    from easy_access.db.models_base import metadata as target_metadata
+except Exception:  # pragma: no cover - keep imports tolerant during scaffolding
+    target_metadata = None
+
+config = context.config
+
+# Interpret the config file for Python logging.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+
+def run_migrations_online() -> None:
+    cfg_section = config.get_section(config.config_ini_section) or {}
+    connectable = async_engine_from_config(
+        cfg_section, prefix="sqlalchemy.", poolclass=pool.NullPool
+    )
+
+    async def do_run() -> None:
+        async with connectable.connect() as connection:
+            await connection.run_sync(run_migrations)
+        await connectable.dispose()
+
+    asyncio.run(do_run())
+
+
+def run_migrations(connection) -> None:
+    context.configure(
+        connection=connection, target_metadata=target_metadata, compare_type=True
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+if context.is_offline_mode():
+    raise RuntimeError(
+        "Offline mode not supported in this template; run migrations online"
+    )
+else:
+    run_migrations_online()
