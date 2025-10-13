@@ -17,7 +17,7 @@ from tortoise import Tortoise
 from tortoise.expressions import Q
 
 from easy_access.db.base import ensure_db_inited, init_engine
-from easy_access.db.models import PDF, CopyrightItem, ItemUpdate
+from easy_access.db.models import PDF, CopyrightItem
 from easy_access.settings import Settings  # Import Settings for type hint
 
 engine: Engine | None = None
@@ -637,7 +637,7 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
 
 async def retrieve_item_history(
     material_ids: list[int], settings: Settings | None = None
-) -> list[ItemUpdate]:  # Added settings
+) -> list:  # Returns list of SAItemUpdate instances
     """
     Retrieves the history of changes for the given material IDs.
 
@@ -660,9 +660,20 @@ async def retrieve_item_history(
         material_ids = [material_ids]  # Convert to list if not already
 
     # get all ItemUpdate instances with material_id in material_ids
+    from sqlalchemy import select
 
-    items = await ItemUpdate().filter(material_id__in=material_ids).all()
-    await Tortoise.close_connections()
+    from easy_access.db.base import close_connections
+    from easy_access.db.sa_models import ItemUpdate as SAItemUpdate
+    from easy_access.db.session import get_session
+
+    async for session in get_session():
+        stmt = select(SAItemUpdate).where(
+            SAItemUpdate.material_id.in_([int(mid) for mid in material_ids])
+        )
+        result = await session.execute(stmt)
+        items = list(result.scalars().all())
+
+    await close_connections()
     return items
 
 
