@@ -677,7 +677,7 @@ async def retrieve_item_history(
     return items
 
 
-async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightItem]:
+async def retrieve_unmarked_deleted_items(settings: Settings) -> list:
     """
     for each PDF in the db that has been marked with 'download_succeeded'==False (NOTE: -not- is None!),
     retrieve the corresponding copyright item using `material_id` (pk for both).
@@ -685,28 +685,42 @@ async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightI
     Return all copyrightitems that DO NOT have the status `deleted` but failed to download.
     These are (probably) actually deleted, but aren't marked as such.
     """
+    from sqlalchemy import select
+
+    from easy_access.db.base import close_connections
+    from easy_access.db.sa_models import PDF as SAPDF
+    from easy_access.db.sa_models import CopyrightItem as SACopyrightItem
+    from easy_access.db.session import get_session
+
     global engine
     if not settings:
         raise ValueError("Settings must be provided to retrieve_failed_downloads")
-    # Ensure Tortoise ORM is initialized before using ORM models
+    # Ensure SQLAlchemy is initialized
     await ensure_db_inited(settings)
 
     if not engine:
         engine = init_engine(settings=settings)  # Pass settings
 
-    # Retrieve material_ids as a flat list of ints so it can be used in __in filters
-    deleted_pdfs_ids = await PDF.filter(download_succeeded=False).values_list(
-        "material_id", flat=True
-    )
-    logger.debug(deleted_pdfs_ids[0:5])
+    # Retrieve material_ids as a flat list of ints
+    async for session in get_session():
+        stmt = select(SAPDF.material_id).where(SAPDF.download_succeeded == False)
+        result = await session.execute(stmt)
+        deleted_pdfs_ids = [row[0] for row in result.fetchall() if row[0] is not None]
+
+    logger.debug(deleted_pdfs_ids[0:5] if deleted_pdfs_ids else [])
     logger.info(
         f'Retrieved {len(deleted_pdfs_ids)} PDFs with "download_succeeded" set to False'
     )
     logger.debug(deleted_pdfs_ids)
-    # Return CopyrightItem model instances (not dicts)
-    copyright_items = await CopyrightItem.filter(
-        Q(material_id__in=deleted_pdfs_ids)
-    ).all()
+
+    # Return CopyrightItem model instances
+    async for session in get_session():
+        stmt = select(SACopyrightItem).where(
+            SACopyrightItem.material_id.in_(deleted_pdfs_ids)
+        )
+        result = await session.execute(stmt)
+        copyright_items = list(result.scalars().all())
+
     # Log statuses if we can access them on model instances
     try:
         logger.debug([getattr(item, "status", None) for item in copyright_items])
@@ -715,7 +729,7 @@ async def retrieve_unmarked_deleted_items(settings: Settings) -> list[CopyrightI
     logger.info(
         f"Retrieved {len(copyright_items)} copyright items associated with non-downloadable PDFs"
     )
-    await Tortoise.close_connections()
+    await close_connections()
     return copyright_items
 
 
