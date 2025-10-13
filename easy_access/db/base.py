@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, select
 
-from easy_access.db.compat import get_or_create
+from easy_access.db.compat import get_or_none
 from easy_access.db.enums import Classification, Status
 from easy_access.db.sa_models import (
     CopyrightItem,
@@ -106,56 +106,55 @@ async def init_faculties(settings: Settings) -> None:
     Args:
         settings: Application settings containing university and faculty config
     """
-    # Create university entry in 'Organization' table
-    main_uni, success = await get_or_create(
-        Organization,
-        name=settings.university_settings.name,
-        defaults={
-            "abbreviation": settings.university_settings.abbreviation,
-            "full_abbreviation": settings.university_settings.abbreviation,
-            "hierarchy_level": 0,
-        },
-    )
+    async for session in get_session():
+        async with session.begin():
+            # Create university entry in 'Organization' table
+            main_uni = await session.get(Organization, 1)  # Try to get existing
+            if not main_uni:
+                main_uni = Organization(
+                    name=settings.university_settings.name,
+                    abbreviation=settings.university_settings.abbreviation,
+                    full_abbreviation=settings.university_settings.abbreviation,
+                    hierarchy_level=0,
+                )
+                session.add(main_uni)
+                await session.flush()  # Get the ID
 
-    # Retrieve faculties from settings
-    faculties = settings.university_settings.faculties
+            # Retrieve faculties from settings
+            faculties = settings.university_settings.faculties
 
-    for faculty in faculties:
-        faculty_obj, success = await get_or_create(
-            Faculty,
-            name=faculty.name,
-            defaults={
-                "abbreviation": faculty.abbreviation,
-                "full_abbreviation": faculty.abbreviation,
-                "hierarchy_level": 1,
-            },
-        )
+            for faculty in faculties:
+                # Check if faculty already exists
+                existing_faculty = await session.execute(
+                    select(Faculty).where(Faculty.abbreviation == faculty.abbreviation)
+                )
+                faculty_obj = existing_faculty.scalar_one_or_none()
 
-        # Set parent organization if not already set
-        if not faculty_obj.parent_organization:
-            faculty_obj.parent_organization = main_uni
-            async for session in get_session():
-                async with session.begin():
+                if not faculty_obj:
+                    faculty_obj = Faculty(
+                        name=faculty.name,
+                        abbreviation=faculty.abbreviation,
+                        full_abbreviation=faculty.abbreviation,
+                        hierarchy_level=1,
+                        parent_organization=main_uni,
+                    )
                     session.add(faculty_obj)
-                    await session.flush()
 
-    # Also create an "Unmapped" faculty to use as a fallback
-    unmapped, success = await get_or_create(
-        Faculty,
-        name="Unmapped",
-        defaults={
-            "abbreviation": "UNM",
-            "full_abbreviation": "UNM",
-            "hierarchy_level": 1,
-        },
-    )
+            # Also create an "Unmapped" faculty to use as a fallback
+            unmapped = await session.execute(
+                select(Faculty).where(Faculty.abbreviation == "UNM")
+            )
+            unmapped_obj = unmapped.scalar_one_or_none()
 
-    if not unmapped.parent_organization:
-        unmapped.parent_organization = main_uni
-        async for session in get_session():
-            async with session.begin():
-                session.add(unmapped)
-                await session.flush()
+            if not unmapped_obj:
+                unmapped_obj = Faculty(
+                    name="Unmapped",
+                    abbreviation="UNM",
+                    full_abbreviation="UNM",
+                    hierarchy_level=1,
+                    parent_organization=main_uni,
+                )
+                session.add(unmapped_obj)
 
 
 async def create() -> None:
@@ -223,14 +222,14 @@ async def copyright_item_from_dict(
             abbr = item.get("faculty")
             if not abbr:
                 abbr = "UNM"
-        faculty = await Faculty.get(abbreviation=abbr)
+        faculty = await get_or_none(Faculty, abbreviation=abbr)
     except Exception as e:
         logger.warning(f"Error getting faculty with {item.get('faculty')}: {e}")
         faculty = None  # Initialize faculty to None on error
 
     try:
         if not faculty:
-            faculty = await Faculty.get(abbreviation="UNM")
+            faculty = await get_or_none(Faculty, abbreviation="UNM")
 
         item["faculty"] = faculty
         # enforce sensible defaults for fields required by the model to avoid

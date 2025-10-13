@@ -75,10 +75,27 @@ async def bulk_create(
                 if on_conflict and update_fields:
                     # PostgreSQL upsert
                     stmt = pg_insert(model.__table__).values(batch)
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=on_conflict,
-                        set_={field: stmt.excluded[field] for field in update_fields},
-                    )
+
+                    # Only include fields that are actually present in the batch data
+                    available_fields = set()
+                    if isinstance(batch, list) and batch:
+                        available_fields = set(batch[0].keys()) if batch[0] else set()
+                    elif isinstance(batch, dict):
+                        available_fields = set(batch.keys())
+
+                    # Filter update_fields to only include fields present in the data
+                    valid_update_fields = [
+                        field for field in update_fields if field in available_fields
+                    ]
+
+                    if valid_update_fields:
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=on_conflict,
+                            set_={
+                                field: stmt.excluded[field]
+                                for field in valid_update_fields
+                            },
+                        )
                     await session.execute(stmt)
                 else:
                     # Simple insert

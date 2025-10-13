@@ -229,6 +229,13 @@ async def load_raw_copyright_data_to_staging(
         "workflow_status",
         "faculty",
         "file_exists",
+        "id_course",
+        "id_material",
+        "last_scan_date_university",
+        "filehash",
+        "manual_classification_report",
+        "count_downloads_material",
+        "last_scan_date_course",
     ]
 
     await bulk_create(

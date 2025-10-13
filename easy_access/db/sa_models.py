@@ -63,6 +63,11 @@ class Organization(Base):
         UniqueConstraint("name", "abbreviation", name="uq_organization_name_abbr"),
     )
 
+    # relationships
+    parent_organization = relationship(
+        "Organization", remote_side=[id], backref="child_organizations"
+    )
+
     def __str__(self) -> str:  # pragma: no cover - helper
         return f"{self.name} ({self.abbreviation})"
 
@@ -99,13 +104,11 @@ class Course(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(2048), nullable=False)
     short_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    faculty_abbreviation: Mapped[str | None] = mapped_column(
-        String(255), ForeignKey("organization_data.abbreviation"), nullable=True
-    )
     ec: Mapped[float | None] = mapped_column(Float, nullable=True)
     programme: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(10000), nullable=True)
     category: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     teachers = relationship(
         "Person", secondary="course_employee", back_populates="courses"
@@ -124,10 +127,8 @@ class Person(Base):
     match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     email: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    faculty_abbreviation: Mapped[str | None] = mapped_column(
-        String(255), ForeignKey("organization_data.abbreviation"), nullable=True
-    )
     people_page_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     courses = relationship(
         "Course", secondary="course_employee", back_populates="teachers"
@@ -143,12 +144,16 @@ class ItemUpdate(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     change_details: Mapped[dict] = mapped_column(JSON, nullable=False)
     material_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=True, default=datetime.utcnow
+    )
 
 
 class MissingCourse(Base):
     __tablename__ = "missing_courses"
 
     cursuscode: Mapped[int] = mapped_column(Integer, primary_key=True)
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Programme(Base):
@@ -157,13 +162,11 @@ class Programme(Base):
     id: Mapped[int] = mapped_column(
         Integer, primary_key=True
     )  # Assuming added, as not in Tortoise
-    faculty_abbreviation: Mapped[str | None] = mapped_column(
-        String(255), ForeignKey("organization_data.abbreviation"), nullable=True
-    )
     cluster: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     name: Mapped[str] = mapped_column(String(2048), index=True)
     abbreviation: Mapped[str] = mapped_column(String(255), index=True)
     programme_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("name", "abbreviation", name="uq_programme_name_abbr"),
@@ -327,13 +330,16 @@ class v1_CopyrightItem(Base):
     scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
     faculty: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ml_prediction: Mapped[Classification | None] = mapped_column(
-        SAEnum(Classification), nullable=True
+        SAEnum(Classification, values_callable=lambda x: [e.value for e in x]),
+        nullable=True,
     )
     filename: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     title: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     filehash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     owner: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    period: Mapped[Period | None] = mapped_column(SAEnum(Period), nullable=True)  # type: ignore
+    period: Mapped[Period | None] = mapped_column(
+        SAEnum(Period, values_callable=lambda x: [e.value for e in x]), nullable=True
+    )  # type: ignore
     department: Mapped[str | None] = mapped_column(
         String(2048), nullable=True, index=True
     )
@@ -344,16 +350,23 @@ class v1_CopyrightItem(Base):
         String(2048), nullable=True, index=True
     )
     filetype: Mapped[Filetype] = mapped_column(
-        SAEnum(Filetype), nullable=False, default=Filetype.UNKNOWN
+        SAEnum(Filetype, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Filetype.UNKNOWN,
     )
     classification: Mapped[Classification] = mapped_column(
-        SAEnum(Classification), nullable=False, default=Classification.LANGE_OVERNAME
+        SAEnum(Classification, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Classification.LANGE_OVERNAME,
     )
     manual_identifier: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     auditor: Mapped[str | None] = mapped_column(String(10000), nullable=True)
     last_change: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[Status] = mapped_column(
-        SAEnum(Status), nullable=False, default=Status.PUBLISHED, index=True
+        SAEnum(Status, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Status.PUBLISHED,
+        index=True,
     )
     isbn: Mapped[str | None] = mapped_column(String(255), nullable=True)
     doi: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -397,7 +410,9 @@ class CopyrightItem(Base):
     __tablename__ = "copyright_data"
 
     material_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    period: Mapped[Period] = mapped_column(SAEnum(Period), nullable=False)  # type: ignore
+    period: Mapped[Period] = mapped_column(
+        SAEnum(Period, values_callable=lambda x: [e.value for e in x]), nullable=False
+    )  # type: ignore
     department: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
     course_code: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     course_name: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
@@ -408,32 +423,41 @@ class CopyrightItem(Base):
     title: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     owner: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     filetype: Mapped[Filetype] = mapped_column(
-        SAEnum(Filetype), nullable=False, default=Filetype.UNKNOWN
+        SAEnum(Filetype, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Filetype.UNKNOWN,
     )
     classification: Mapped[Classification] = mapped_column(
-        SAEnum(Classification), nullable=False, default=Classification.LANGE_OVERNAME
+        SAEnum(Classification, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Classification.LANGE_OVERNAME,
     )
     ml_prediction: Mapped[Classification | None] = mapped_column(
-        SAEnum(Classification), nullable=True, index=True
+        SAEnum(Classification, values_callable=lambda x: [e.value for e in x]),
+        nullable=True,
+        index=True,
     )
     manual_classification: Mapped[str | None] = mapped_column(
         String(2048), nullable=True, index=True
     )
     manual_identifier: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     v2_manual_classification: Mapped[ClassificationV2 | None] = mapped_column(
-        SAEnum(ClassificationV2),
+        SAEnum(ClassificationV2, values_callable=lambda x: [e.value for e in x]),
         nullable=True,
         index=True,
         default=ClassificationV2.ONBEKEND,
     )
     v2_overnamestatus: Mapped[OvernameStatus | None] = mapped_column(
-        SAEnum(OvernameStatus),
+        SAEnum(OvernameStatus, values_callable=lambda x: [e.value for e in x]),
         nullable=True,
         index=True,
         default=OvernameStatus.ONBEKEND,
     )
     v2_lengte: Mapped[Lengte | None] = mapped_column(
-        SAEnum(Lengte), nullable=True, index=True, default=Lengte.ONBEKEND
+        SAEnum(Lengte, values_callable=lambda x: [e.value for e in x]),
+        nullable=True,
+        index=True,
+        default=Lengte.ONBEKEND,
     )
     scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remarks: Mapped[str | None] = mapped_column(
@@ -442,7 +466,10 @@ class CopyrightItem(Base):
     auditor: Mapped[str | None] = mapped_column(String(10000), nullable=True)
     last_change: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[Status] = mapped_column(
-        SAEnum(Status), nullable=False, default=Status.PUBLISHED, index=True
+        SAEnum(Status, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Status.PUBLISHED,
+        index=True,
     )
     isbn: Mapped[str | None] = mapped_column(String(255), nullable=True)
     doi: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -467,7 +494,9 @@ class CopyrightItem(Base):
     )
     possible_fine: Mapped[float | None] = mapped_column(Float, nullable=True)
     infringement: Mapped[Infringement] = mapped_column(
-        SAEnum(Infringement), nullable=False, default=Infringement.UNDETERMINED
+        SAEnum(Infringement, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=Infringement.UNDETERMINED,
     )
     file_exists: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_canvas_check: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -475,7 +504,7 @@ class CopyrightItem(Base):
         Integer, nullable=True, index=True
     )
 
-    faculty_abbreviation: Mapped[str] = mapped_column(
+    faculty_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("organization_data.abbreviation"), nullable=False
     )
     is_duplicate: Mapped[bool | None] = mapped_column(
@@ -484,7 +513,7 @@ class CopyrightItem(Base):
 
     # relationships
     courses = relationship("Course", secondary="copyright_item_course", backref="items")
-    faculty = relationship("Organization", backref="items")
+    faculty = relationship("Organization", foreign_keys=[faculty_id], backref="items")
     changes = relationship(
         "ItemUpdate", secondary="copyright_item_update", backref="items"
     )
@@ -569,6 +598,22 @@ class StagedCopyrightItem(Base):
     workflow_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
     faculty: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_exists: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Additional fields found in raw data
+    id_course: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    id_material: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_scan_date_university: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    filehash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manual_classification_report: Mapped[str | None] = mapped_column(
+        String(2048), nullable=True
+    )
+    count_downloads_material: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    last_scan_date_course: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
 
 
 class StagedFacultyUpdate(Base):

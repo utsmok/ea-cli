@@ -16,6 +16,7 @@ import httpx
 import Levenshtein
 from bs4 import Tag
 from loguru import logger
+from sqlalchemy import select
 from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import close_connections, ensure_db_inited
@@ -26,6 +27,7 @@ from easy_access.db.sa_models import (
     MissingCourse,
     Person,
 )
+from easy_access.db.session import get_session
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
@@ -40,7 +42,9 @@ async def gather_target_course_codes(settings: Settings) -> set[int]:
     logger.info("Gathering target course codes for enrichment...")
 
     # Query all unique course codes from copyright items
-    items = await CopyrightItem.all().distinct()
+    async for session in get_session():
+        result = await session.execute(select(CopyrightItem).distinct())
+        items = result.scalars().all()
     all_course_codes: set[str] = set()
 
     for item in items:
@@ -81,14 +85,22 @@ async def select_missing_or_stale_courses(
     from datetime import datetime
 
     # Existing courses
-    existing_courses = await Course.filter(cursuscode__in=course_codes)
+    async for session in get_session():
+        result = await session.execute(
+            select(Course).where(Course.cursuscode.in_(course_codes))
+        )
+        existing_courses = result.scalars().all()
     existing_codes = {c.cursuscode for c in existing_courses}
 
     # Determine missing (not in Course)
     missing_codes_all = course_codes - existing_codes
 
     # Which missing codes are already tracked as MissingCourse entries?
-    tracked_missing = await MissingCourse.filter(cursuscode__in=missing_codes_all)
+    async for session in get_session():
+        result = await session.execute(
+            select(MissingCourse).where(MissingCourse.cursuscode.in_(missing_codes_all))
+        )
+        tracked_missing = result.scalars().all()
     tracked_missing_codes = {m.cursuscode for m in tracked_missing}
     new_missing_codes = missing_codes_all - tracked_missing_codes
 
@@ -139,7 +151,9 @@ async def gather_target_person_names(settings: Settings) -> set[str]:
     logger.info("Gathering target person names for enrichment...")
 
     # Query all unique person names from copyright items
-    items = await CopyrightItem.all().distinct()
+    async for session in get_session():
+        result = await session.execute(select(CopyrightItem).distinct())
+        items = result.scalars().all()
     all_person_names: set[str] = set()
 
     for item in items:
@@ -173,7 +187,11 @@ async def select_missing_or_stale_persons(
     logger.info("Selecting persons that need enrichment...")
 
     # Get existing persons
-    existing_persons = await Person.filter(input_name__in=person_names)
+    async for session in get_session():
+        result = await session.execute(
+            select(Person).where(Person.input_name.in_(person_names))
+        )
+        existing_persons = result.scalars().all()
     existing_names = {person.input_name for person in existing_persons}
 
     # Persons not represented at all yet
@@ -241,8 +259,13 @@ async def fetch_and_parse_courses(
                     if course_data:
                         results[course_code] = course_data
                         # If it was tracked as missing, remove the entry
-                        with contextlib.suppress(Exception):
-                            await MissingCourse.filter(cursuscode=course_code).delete()
+                        async for session in get_session():
+                            await session.execute(
+                                delete(MissingCourse).where(
+                                    MissingCourse.cursuscode == course_code
+                                )
+                            )
+                            await session.commit()
                     else:
                         logger.warning(f"No data found for course {course_code}")
                         # Upsert MissingCourse record (touch modified_at)

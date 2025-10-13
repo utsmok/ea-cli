@@ -16,9 +16,11 @@ from unittest import mock as _mock
 
 import httpx
 from loguru import logger
+from sqlalchemy import text, update
 
 from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.sa_models import CopyrightItem
+from easy_access.db.session import get_session
 from easy_access.settings import Settings
 
 # --------------------------------
@@ -168,15 +170,19 @@ async def select_items_needing_file_check(
     async def retrieval(offset) -> list[Item]:
         res = []
         offset_clause = f"OFFSET {offset}" if offset > 0 else ""
-        items = await CopyrightItem.raw(
-            f"""
-            SELECT material_id, url
-            FROM copyright_data
-            WHERE {where_clause} AND url IS NOT NULL AND url != ''
-            ORDER BY last_canvas_check ASC NULLS FIRST
-            LIMIT {batch_size} {offset_clause}
-            """
-        )
+        async for session in get_session():
+            result = await session.execute(
+                text(
+                    f"""
+                SELECT material_id, url
+                FROM copyright_data
+                WHERE {where_clause} AND url IS NOT NULL AND url != ''
+                ORDER BY last_canvas_check ASC NULLS FIRST
+                LIMIT {batch_size} {offset_clause}
+                """
+                )
+            )
+            items = result.fetchall()
         for item in items:
             material_id: int = item.material_id
             url: str = item.url
@@ -405,34 +411,41 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
 
         # Bulk update with SQLAlchemy
         try:
-            update_items = []
-            for result in results:
-                item = await CopyrightItem.get(material_id=result["material_id"])
-                item.file_exists = result["file_exists"]
-                item.last_canvas_check = result["last_canvas_check"]
-                item.canvas_course_id = result["course_id"]
-                update_items.append(item)
-            await CopyrightItem.bulk_update(
-                update_items,
-                fields=["file_exists", "last_canvas_check", "canvas_course_id"],
-            )
+            async for session in get_session():
+                for result in results:
+                    await session.execute(
+                        update(CopyrightItem)
+                        .where(CopyrightItem.material_id == result["material_id"])
+                        .values(
+                            file_exists=result["file_exists"],
+                            last_canvas_check=result["last_canvas_check"],
+                            canvas_course_id=result["course_id"],
+                        )
+                    )
+                await session.commit()
             logger.info(f"Successfully updated {len(results)} items using bulk update")
             return
         except Exception as e:
             logger.error(f"Bulk update failed: {e}")
 
-        # Fallback: use per-item filter().update() if bulk update is not feasible
-        for result in results:
-            material_id = result["material_id"]
-            file_exists = result["file_exists"]
-            last_canvas_check = result["last_canvas_check"]
-            canvas_course_id = result["course_id"]
+        # Fallback: use per-item update() if bulk update is not feasible
+        async for session in get_session():
+            for result in results:
+                material_id = result["material_id"]
+                file_exists = result["file_exists"]
+                last_canvas_check = result["last_canvas_check"]
+                canvas_course_id = result["course_id"]
 
-            await CopyrightItem.filter(material_id=material_id).update(
-                file_exists=file_exists,
-                last_canvas_check=last_canvas_check,
-                canvas_course_id=canvas_course_id,
-            )
+                await session.execute(
+                    update(CopyrightItem)
+                    .where(CopyrightItem.material_id == material_id)
+                    .values(
+                        file_exists=file_exists,
+                        last_canvas_check=last_canvas_check,
+                        canvas_course_id=canvas_course_id,
+                    )
+                )
+            await session.commit()
         logger.info(f"Successfully updated {len(results)} items using fallback method")
     except Exception as e:
         logger.error(f"Error during bulk update: {e}")
