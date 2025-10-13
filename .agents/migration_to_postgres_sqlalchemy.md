@@ -1,0 +1,164 @@
+### Migration Plan: Easy Access — Tortoise/SQLite -> PostgreSQL + SQLAlchemy
+
+This document describes a pragmatic, low-risk migration plan to move the project from SQLite + Tortoise ORM to PostgreSQL + SQLAlchemy (async). It includes critique of the supplied outline, recommended improvements, a detailed step-by-step implementation plan, testing/validation guidance, and questions for the team.
+
+## Summary of recommended approach
+
+- Use an async SQLAlchemy 2.0 setup (create_async_engine + async_sessionmaker) to align with the project's async-first design. Use the SQLAlchemy ORM for application writes and SQLAlchemy Core for large, performance-sensitive reads (reporting) as you proposed.
+- Add Alembic for migrations and configure autogenerate against your SQLAlchemy Base.metadata. Use a consistent MetaData naming_convention to make autogenerate deterministic.
+- Provide a Docker Compose development environment (Postgres + pgAdmin) and a `.env` to store DB_URL and credentials.
+- Keep a short-term SQLite fallback (optional) while performing the refactor to allow incremental migration and easier rollbacks in development tests.
+- Migrate data using a controlled process — either pgloader or a Python ETL script using the old Tortoise models to read and SQLAlchemy to write. pgloader is fast for whole-DB lifts, but a Python approach is safer when transformations or data cleaning are required.
+
+## Critique of the original five-step plan
+
+- Step 1 (Docker): Good. Add explicit Postgres version (e.g., 15) and persistent volume mapping. Consider using a `docker-compose.override.yml` for developer convenience.
+- Step 2 (Alembic): Essential. Note: Alembic needs the SQLAlchemy MetaData object (Base.metadata) in `env.py` for autogenerate. Use naming conventions and `include_object` to avoid dropping legacy tables accidentally.
+- Step 3 (pgloader): Works well for quick migrations. Caveats: SQLite types/constraints may not map cleanly, and pgloader may not handle complex type conversions or JSON fields exactly as you want. I recommend a test run and/or a Python-based ETL if you need per-row fixes or to merge/split tables.
+- Step 4 (Models): Converting models is the largest task. Keep table/column names stable (use __tablename__ and explicit column types/lengths). Preserve nullability and defaults. Add metadata naming_convention for Alembic.
+- Step 5 (App code): This is the most time-consuming. A hybrid approach (ORM for writes, Core for heavy reads) is sensible. Keep the same public function signatures where possible and add small adapter utilities to translate between Tortoise model objects and SQLAlchemy mapped objects (or dataclasses) during the migration to reduce churn.
+
+Risks and mitigations
+
+- Risk: Autogenerate producing incorrect migrations (dropping columns/tables). Mitigation: Use `include_object` to protect tables not yet modelled; review every autogenerate output; add process_revision_directives hook to drop empty revisions.
+- Risk: Feature/regression bugs when refactoring hundreds of call sites. Mitigation: Work incrementally by introducing `easy_access.db.session` and a compatibility layer that exposes a small subset of the Tortoise API you use (e.g., `get_by_id`, `filter_many`, `bulk_create`) implemented using SQLAlchemy. Convert modules one at a time and run tests.
+- Risk: Data mapping mismatches. Mitigation: Create sample datasets and write a small validation script to compare counts, checksums, and key field values between SQLite and Postgres exports.
+
+Design decisions & conventions
+
+- SQLAlchemy version: target SQLAlchemy 2.0+ (project's Python 3.12 is compatible). Use the asyncpg driver (`postgresql+asyncpg://...`).
+- Alembic: Keep `migrations/` in repo root (or `easy_access/migrations`) and ensure alembic.ini points to the right env. Configure alembic to use target_metadata = easy_access.db.models.Base.metadata.
+- Naming conventions: define MetaData(naming_convention=...) and ensure DeclarativeBase sets metadata to that object.
+- Sessions: provide `easy_access.db.session` with functions:
+  - `init_db(url: str, echo: bool = False) -> AsyncEngine`
+  - `get_async_session() -> async_sessionmaker` (single factory)
+  - `run_sync(fn, *args, **kwargs)` wrapper when synchronous utilities are required (follow project `run_sync` pattern)
+- Tests: Add a minimal test harness that spins up a temporary Postgres (docker-compose) and runs a subset of integration tests (ingest -> export) before switching all code.
+
+Detailed step-by-step implementation plan
+
+Phase 0 — Preparations
+
+1. Pick Postgres version and chosen driver (recommended: Postgres 15, asyncpg).
+2. Add the dependencies to `pyproject.toml` under dev & main where appropriate:
+   - sqlalchemy>=2.0
+   - asyncpg
+   - alembic
+   - psycopg[binary] (optional for sync tools)
+   - pgloader (documented external dependency) or `pgloader` Docker image to run migration pipeline
+3. Update `.agents/memory.instruction.md` (done separately) to record choices.
+
+Phase 1 — Local dev environment
+
+1. Add `docker-compose.postgres.yml` (or update `dev/` compose) with Postgres, pgadmin. Example:
+
+   - service: postgres:15
+     environment: POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+     volumes: ./data/postgres:/var/lib/postgresql/data
+
+2. Add `.env.sample` for DB credentials and `README` instructions on bringing the stack up.
+
+Phase 2 — SQLAlchemy foundation
+
+1. Create `easy_access/db/session.py`:
+   - Create async engine factory `create_async_engine(url)` and `async_sessionmaker` with `expire_on_commit=False`.
+   - Provide `init_db`, `get_session`, and `shutdown` helpers.
+2. Create SQLAlchemy DeclarativeBase in `easy_access/db/models_base.py` with explicit MetaData and naming convention:
+   - class Base(AsyncAttrs, DeclarativeBase): metadata = shared_metadata
+3. Add a lightweight compatibility shim `easy_access/db/compat.py` that exports helper functions mirroring the small Tortoise API used by the rest of the code. Implement these using SQLAlchemy under the hood to make incremental rewrites easier.
+
+Phase 3 — Models conversion
+
+1. Convert models in `easy_access/db/models.py` to SQLAlchemy. Keep `__tablename__` and column names the same. Add constraints and indexes to match the Tortoise schema as closely as possible.
+2. Add Pydantic dataclasses for DTOs if needed (optional but helpful for typed boundaries).
+3. Add `alembic/env.py` that imports `easy_access.db.models.Base.metadata` as `target_metadata` and configure the connection handling to accept async engines (use async_engine_from_config). Add `include_object` and `compare_type=True`.
+
+Phase 4 — Alembic and initial migration
+
+1. Initialize Alembic in `migrations/` (alembic init --template generic migrations).
+2. Configure `alembic.ini` and the `env.py` to point to `easy_access.db.models.Base.metadata`.
+3. Create the first autogenerate migration: `alembic revision --autogenerate -m "create initial schema"`. Carefully review the generated script
+4. Apply migrations to the local Postgres: `alembic upgrade head`.
+
+Phase 5 — Data migration (two options)
+
+Option A (fast): pgloader
+1. Install or run `pgloader` Docker container and run a migration: `pgloader sqlite:///path/to/db.sqlite3 postgresql://user:pass@host:port/dbname`.
+2. Validate counts, constraints, and sample rows.
+
+Option B (controlled): Python ETL
+1. Add a small script `scripts/migrate_sqlite_to_postgres.py` that:
+   - Uses the existing Tortoise models (or direct sqlite SQLAlchemy reflection) to read rows.
+   - Transforms rows where necessary.
+   - Writes into Postgres using SQLAlchemy sessions in batches.
+2. This is slower but allows custom fixes and data validation steps.
+
+Phase 6 — App refactor and incremental conversion
+
+1. Replace Tortoise init code: find where Tortoise is initialized (likely in `easy_access/db/base.py` or app start) and replace with `easy_access.db.session.init_db`.
+2. Implement and enable the `compat` shim and convert modules in order of dependency:
+   - `easy_access/db/ingest.py`
+   - `easy_access/db/update.py`
+   - `easy_access/db/retrieve.py` (consider keeping polars + Core queries here)
+   - `easy_access/db/relations.py`
+3. For each module:
+   - Replace small helper calls with `compat` wrappers and run tests.
+   - Replace complex queries with SQLAlchemy Core where necessary for performance.
+
+Phase 7 — Validation, tests, cleanup
+
+1. Run full test suite and fix failing tests.
+2. Add integration test(s) that:
+   - Spin up Postgres via Docker Compose
+   - Run migrations
+   - Seed with a small dataset (or run the ETL)
+   - Run critical flows (ingest -> enrichment -> export) and compare outputs.
+3. Remove Tortoise dependency once all modules have been ported and tests pass.
+4. Update documentation (README) with dev instructions for Postgres stack and `alembic` usage.
+
+Operational notes & best practices
+
+- Autogenerate is a helper, not a replacement for code review. Always inspect generated scripts.
+- Use the naming_convention on MetaData to avoid alembic autogenerate generating unpredictable constraint names.
+- For large tables, use `yield_per` / server-side cursors or SQLAlchemy Core streaming to avoid high memory usage when reading.
+- Consider creating a small set of SQL views for reporting if polars queries become overly complex; you can query views with polars via SQLAlchemy engine.
+- Keep migrations idempotent where possible; write data migrations carefully and test them against sample snapshots.
+
+Questions for you (required decisions)
+
+1. Postgres version (recommended: 15) and whether the project needs to support specific cloud providers (AWS RDS, Azure, GCP).
+2. Do you want to keep a SQLite fallback for local quick runs, or fully standardize on Postgres?
+3. Which migration method do you prefer: pgloader (fast) or Python ETL (safer/more adjustable)?
+4. Any PII / data sensitivity rules we must follow during migration (encryption at rest, off-network data movement restrictions)?
+
+Files to be created or updated (suggested)
+
+- Add: `.env.sample`, `docker-compose.postgres.yml`
+- Add: `easy_access/db/session.py`, `easy_access/db/models_base.py`, `easy_access/db/compat.py`
+- Update: `easy_access/db/models.py` (converted version)
+- Add: `migrations/` (Alembic files) and `alembic.ini`
+- Add: `scripts/migrate_sqlite_to_postgres.py` (optional)
+- Update README.md with Postgres dev instructions
+- Update `.agents/memory.instruction.md` with the recorded choices
+
+Next steps I'll take if you want me to proceed
+
+1. Ask the 4 questions above so I can finalize exact versions and approach.
+2. With your go-ahead, I'll scaffold `easy_access/db/session.py`, `models_base.py`, `compat.py`, and a `docker-compose.postgres.yml` and write corresponding tests scaffolding.
+3. After scaffolding, I'll run a local Docker compose up (if you want me to run commands) and attempt an initial Alembic autogenerate to validate metadata wiring.
+
+Completion checklist
+
+- [ ] Confirm Postgres version and migration method choice
+- [ ] Add dependencies to `pyproject.toml`
+- [ ] Add Docker Compose and environment samples
+- [ ] Scaffold `easy_access/db/session.py`, `models_base.py`, `compat.py`
+- [ ] Convert and test core models
+- [ ] Configure Alembic and generate initial migration
+- [ ] Migrate data and validate
+- [ ] Convert application code modules incrementally
+- [ ] Run full tests and remove Tortoise
+
+---
+
+Created by automated planning agent. Update `.agents/migration_to_postgres_sqlalchemy.md` or ask me to start implementing the scaffolding.
