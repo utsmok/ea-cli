@@ -3,13 +3,15 @@ services:
   postgres:
     image: postgres:18
     environment:
-      POSTGRES_USER: ea_user
-      POSTGRES_PASSWORD: ea_pass
-      POSTGRES_DB: ea_db
+      POSTGRES_USER: easyaccess
+      POSTGRES_PASSWORD: easyaccess
+      POSTGRES_DB: easyaccess
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - '5432:5432'
+      - "5432:5432"
     # volumes:
     #   - ./data/postgres:/var/lib/postgresql/data
+    restart: unless-stopped
 
   pgadmin:
     image: dpage/pgadmin4
