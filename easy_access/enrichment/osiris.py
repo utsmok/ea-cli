@@ -19,13 +19,13 @@ from loguru import logger
 from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import close_connections, ensure_db_inited
-from easy_access.db.models import (
+from easy_access.db.relations import link_persons_to_courses
+from easy_access.db.sa_models import (
     CopyrightItem,
     Course,
     MissingCourse,
     Person,
 )
-from easy_access.db.relations import link_persons_to_courses
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 

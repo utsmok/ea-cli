@@ -38,23 +38,46 @@ from .models_base import Base
 
 
 class Organization(Base):
+    """
+    'base' class for organizations, can be used for faculties, departments, etc.
+    """
+
     __tablename__ = "organization_data"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     parent_organization_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("organization_data.id"), nullable=True
     )
-    hierarchy_level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    hierarchy_level: Mapped[int] = mapped_column(
+        Integer
+    )  # how much levels of parent orgs are above this one. E.g. 0 for the university, 1 for faculty, 2 for departments, 3 for groups.
     name: Mapped[str] = mapped_column(String(2048), index=True)
-    abbreviation: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    full_abbreviation: Mapped[str] = mapped_column(String(2048), unique=True)
+    abbreviation: Mapped[str] = mapped_column(
+        String(255), index=True
+    )  # the standalone abbreviation of this org, e.g. HMI
+    full_abbreviation: Mapped[str] = mapped_column(
+        String(2048), index=True, unique=True
+    )  # including the parent orgs abbreviations, e.g. EEMCS-CS-HMI
 
     __table_args__ = (
         UniqueConstraint("name", "abbreviation", name="uq_organization_name_abbr"),
     )
 
-    # relationships
-    children = relationship("Organization", backref="parent", remote_side=[id])
+    def __str__(self) -> str:  # pragma: no cover - helper
+        return f"{self.name} ({self.abbreviation})"
+
+
+class Faculty(Organization):
+    """
+    Faculty data
+    Same as Organization, just using a distinct name as it's used a lot.
+    """
+
+    # Inherits all fields from Organization including abbreviation
+
+    __mapper_args__ = {
+        "polymorphic_identity": "faculty",
+    }
 
 
 class CourseEmployee(Base):
@@ -496,3 +519,83 @@ class CopyrightItem(Base):
         base_url = SETTINGS.university_settings.lms.url
 
         return f"{base_url}/courses/{self.canvas_course_id}/files?search_term={self.filename.replace(' ', '%20')}"
+
+
+class StagedCopyrightItem(Base):
+    """
+    Staging table for raw data ingested from copyright export files.
+    Fields are kept as simple as possible to accommodate raw data.
+    """
+
+    __tablename__ = "staged_copyright_item"
+
+    material_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    course_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    course_name: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    filename: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    filetype: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    classification: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manual_classification: Mapped[str | None] = mapped_column(
+        String(2048), nullable=True
+    )
+    manual_identifier: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    remarks: Mapped[str | None] = mapped_column(String(10000), nullable=True)
+    ml_prediction: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    isbn: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    doi: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    in_collection: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pagecount: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    wordcount: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    picturecount: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    publisher: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    auditor: Mapped[str | None] = mapped_column(String(10000), nullable=True)
+    last_change: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reliability: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pages_x_students: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    count_students_registered: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    retrieved_from_copyright_on: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    workflow_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    faculty: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_exists: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class StagedFacultyUpdate(Base):
+    """
+    Staging table for updates from faculty sheets.
+    """
+
+    __tablename__ = "staged_faculty_update"
+
+    material_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    manual_classification: Mapped[str | None] = mapped_column(
+        String(2048), nullable=True
+    )
+    remarks: Mapped[str | None] = mapped_column(String(10000), nullable=True)
+    workflow_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class StagedProcessingFailure(Base):
+    """
+    Stores failures encountered while processing staged rows.
+    Each row references the staged material_id (if available), the raw payload
+    (as JSON), and an error message to aid debugging/retry.
+    """
+
+    __tablename__ = "staged_processing_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    material_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    staged_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)

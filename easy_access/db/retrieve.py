@@ -13,11 +13,9 @@ import polars as pl
 # from easy_access.settings import SETTINGS # Will be passed as an argument
 from loguru import logger
 from sqlalchemy import Engine, text
-from tortoise import Tortoise
-from tortoise.expressions import Q
 
 from easy_access.db.base import ensure_db_inited, init_engine
-from easy_access.db.models import PDF
+from easy_access.db.sa_models import PDF
 from easy_access.settings import Settings  # Import Settings for type hint
 
 engine: Engine | None = None
@@ -677,63 +675,7 @@ async def retrieve_item_history(
     return items
 
 
-async def retrieve_unmarked_deleted_items(settings: Settings) -> list:
-    """
-    for each PDF in the db that has been marked with 'download_succeeded'==False (NOTE: -not- is None!),
-    retrieve the corresponding copyright item using `material_id` (pk for both).
-
-    Return all copyrightitems that DO NOT have the status `deleted` but failed to download.
-    These are (probably) actually deleted, but aren't marked as such.
-    """
-    from sqlalchemy import select
-
-    from easy_access.db.base import close_connections
-    from easy_access.db.sa_models import PDF as SAPDF
-    from easy_access.db.sa_models import CopyrightItem as SACopyrightItem
-    from easy_access.db.session import get_session
-
-    global engine
-    if not settings:
-        raise ValueError("Settings must be provided to retrieve_failed_downloads")
-    # Ensure SQLAlchemy is initialized
-    await ensure_db_inited(settings)
-
-    if not engine:
-        engine = init_engine(settings=settings)  # Pass settings
-
-    # Retrieve material_ids as a flat list of ints
-    async for session in get_session():
-        stmt = select(SAPDF.material_id).where(SAPDF.download_succeeded == False)
-        result = await session.execute(stmt)
-        deleted_pdfs_ids = [row[0] for row in result.fetchall() if row[0] is not None]
-
-    logger.debug(deleted_pdfs_ids[0:5] if deleted_pdfs_ids else [])
-    logger.info(
-        f'Retrieved {len(deleted_pdfs_ids)} PDFs with "download_succeeded" set to False'
-    )
-    logger.debug(deleted_pdfs_ids)
-
-    # Return CopyrightItem model instances
-    async for session in get_session():
-        stmt = select(SACopyrightItem).where(
-            SACopyrightItem.material_id.in_(deleted_pdfs_ids)
-        )
-        result = await session.execute(stmt)
-        copyright_items = list(result.scalars().all())
-
-    # Log statuses if we can access them on model instances
-    try:
-        logger.debug([getattr(item, "status", None) for item in copyright_items])
-    except Exception:
-        logger.debug("Could not read status attributes from CopyrightItem instances")
-    logger.info(
-        f"Retrieved {len(copyright_items)} copyright items associated with non-downloadable PDFs"
-    )
-    await close_connections()
-    return copyright_items
-
-
-async def retrieve_tortoise_copyright_items(
+async def retrieve_db_copyright_items(
     settings: Settings,
     material_ids: list[str] | list[int] | None = None,
 ) -> list:
@@ -754,9 +696,7 @@ async def retrieve_tortoise_copyright_items(
     from easy_access.db.session import get_session
 
     if not settings:
-        raise ValueError(
-            "Settings must be provided to retrieve_tortoise_copyright_items"
-        )
+        raise ValueError("Settings must be provided to retrieve_db_copyright_items")
     await ensure_db_inited(settings)
 
     async for session in get_session():
@@ -800,30 +740,38 @@ async def retrieve_pdfs(
         raise ValueError("Settings must be provided to retrieve_pdfs")
     await ensure_db_inited(settings)
 
-    prefetch_list = ["canvas_metadata", "extracted_text", "extracted_entities"]
-    if prefetch_copyright_item:
-        prefetch_list.append("copyright_item")
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
 
-    query = PDF.all().prefetch_related(*prefetch_list)
+    from easy_access.db.session import get_session
 
-    filter_obj = []
-    if filter:
-        for field, value in filter.items():
-            if isinstance(value, list) and value:
-                filter_obj.append(Q(kwargs={f"{field}__in": value}))
-            elif value is not None:
-                filter_obj.append(Q(kwargs={field: value}))
+    async for session in get_session():
+        # Build the base query with joined loads
+        stmt = select(PDF).options(
+            joinedload(PDF.canvas_metadata),
+            joinedload(PDF.extracted_text),
+            joinedload(PDF.entities),
+        )
 
-    if only_successful_extracts:
-        filter_obj.append(Q(extraction_successful=True))
-    if only_attempted_extracts:
-        filter_obj.append(Q(extraction_attempted=True))
+        # Apply filters
+        if filter:
+            for field, value in filter.items():
+                if isinstance(value, list) and value:
+                    stmt = stmt.where(getattr(PDF, field).in_(value))
+                elif value is not None:
+                    stmt = stmt.where(getattr(PDF, field) == value)
 
-    if filter_obj:
-        query = query.filter(*filter_obj)
+        if only_successful_extracts:
+            stmt = stmt.where(PDF.extraction_successful)
+        if only_attempted_extracts:
+            stmt = stmt.where(PDF.extraction_attempted)
 
-    pdfs = await query
-    await Tortoise.close_connections()
+        result = await session.execute(stmt)
+        pdfs = list(result.scalars().all())
+
+    from easy_access.db.base import close_connections
+
+    await close_connections()
     return pdfs
 
 

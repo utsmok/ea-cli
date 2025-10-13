@@ -22,7 +22,7 @@ async def parse_pdfs(
     """Parses all PDFs that have not yet been attempted for text extraction."""
 
     async for session in get_session():
-        stmt = select(SAPDF).where(SAPDF.extraction_attempted == False)
+        stmt = select(SAPDF).where(not SAPDF.extraction_attempted)
         if filter_ids:
             stmt = stmt.where(
                 or_(

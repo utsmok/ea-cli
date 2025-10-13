@@ -13,7 +13,7 @@ from easy_access.db.compat import (
     get_or_create,
     get_or_none,
 )
-from easy_access.db.models import (
+from easy_access.db.sa_models import (
     PDF,
     CopyrightItem,
     Faculty,
@@ -65,7 +65,7 @@ async def load_org_data_from_settings(settings: Settings) -> None:
                 continue
             if programme.abbreviation:
                 abbr = programme.abbreviation
-            else:
+            elif programme.name:
                 abbr = ""
                 if "master" in programme.name.lower():
                     abbr = "M-"

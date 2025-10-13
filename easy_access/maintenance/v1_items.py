@@ -32,7 +32,7 @@ from easy_access.db.enums import (
     Status,
     WorkflowStatus,
 )
-from easy_access.db.models import v1_CopyrightItem
+from easy_access.db.sa_models import v1_CopyrightItem
 from easy_access.pdf.download import download_pdfs_for_items
 from easy_access.pdf.parse import parse_pdfs
 from easy_access.settings import Settings

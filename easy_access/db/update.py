@@ -11,28 +11,31 @@ from typing import Any
 
 import polars as pl
 from loguru import logger
-from tortoise import Tortoise
-from tortoise.expressions import Q
-from tortoise.transactions import in_transaction
+from sqlalchemy import select
 
 from easy_access.db.base import (
+    close_connections,
     copyright_item_from_dict,
     ensure_db_inited,
+    get_session,
 )
-from easy_access.db.enums import Classification, ClassificationV2
-from easy_access.db.models import (
+from easy_access.db.enums import (
+    Classification,
+    ClassificationV2,
+    Infringement,
+    Status,
+    WorkflowStatus,
+)
+from easy_access.db.sa_models import (
     CopyrightItem,
     Course,
     Faculty,
-    Infringement,
     ItemUpdate,
     Organization,
     Person,
     StagedCopyrightItem,
     StagedFacultyUpdate,
     StagedProcessingFailure,
-    Status,
-    WorkflowStatus,
 )
 from easy_access.merge_rules import (
     build_merge_rules_from_settings,
@@ -260,8 +263,9 @@ async def preprocess_input_data(
 
     if isinstance(data, pl.DataFrame):
         data = standardize_dataframe(data)
-        existing_mat_ids = await CopyrightItem.all().values("material_id")
-        existing_mat_ids = {safe_int(m["material_id"]) for m in existing_mat_ids}
+        async for session in get_session():
+            result = await session.execute(select(CopyrightItem.material_id))
+            existing_mat_ids = {row[0] for row in result}
         existing_mat_ids = {m for m in existing_mat_ids if m is not None}
 
         # Candidate new items (may be partial if coming from faculty sheets)
@@ -339,26 +343,10 @@ async def process_new_items(new_items: list[dict]) -> list[CopyrightItem]:
     if new_items:
         new_objects = [await copyright_item_from_dict(item) for item in new_items]
         new_objects = [item for item in new_objects if item]
-        try:
-            await CopyrightItem.bulk_create(objects=new_objects)
-        except Exception as e:
-            logger.warning(
-                f"Bulk creation failed: {e}. Attempting one-by-one creation."
-            )
-            failed_items = []
-            for item in new_objects:
-                try:
-                    await item.save()
-                except Exception as save_error:
-                    logger.error(
-                        f"Failed to save item {item.material_id}: {save_error}"
-                    )
-                    failed_items.append(item.material_id)
-
-            if failed_items:
-                raise DatabaseOperationError(
-                    f"Failed to create items with material_ids: {failed_items}"
-                ) from e
+        async for session in get_session():
+            async with session.begin():
+                session.add_all(new_objects)
+                await session.flush()
         logger.success(f"Created {len(new_objects)} new copyright items in db.")
 
     return new_objects
@@ -877,7 +865,7 @@ async def update_copyright_items(
     )
 
     logger.success("Done updating CopyrightItems!")
-    await Tortoise.close_connections()
+    await close_connections()
 
 
 async def process_staged_raw_data(settings: Settings) -> None:

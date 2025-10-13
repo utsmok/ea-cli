@@ -12,7 +12,7 @@ from sqlalchemy import Engine, create_engine
 
 from easy_access.db.compat import get_or_create
 from easy_access.db.enums import Classification, Status
-from easy_access.db.models import (
+from easy_access.db.sa_models import (
     CopyrightItem,
     Faculty,
     Organization,
@@ -164,7 +164,7 @@ async def create() -> None:
 
     async for session in get_session():
         async with session.begin():
-            await session.run_sync(Base.metadata.create_all)
+            await session.run_sync(Base.metadata.create_all)  # type: ignore
 
 
 async def close_connections() -> None:
@@ -242,7 +242,7 @@ async def copyright_item_from_dict(
             item["status"] = Status.PUBLISHED.value
 
         item["material_id"] = (
-            int(item.get("material_id"))
+            int(item.get("material_id"))  # type: ignore
             if isinstance(item.get("material_id"), str | int)
             else 0
         )  # type: ignore[arg-type]
@@ -266,32 +266,32 @@ async def copyright_item_from_dict(
         )
 
         item["pagecount"] = (
-            int(item.get("pagecount"))
+            int(item.get("pagecount"))  # type: ignore
             if isinstance(item.get("pagecount"), str | int)
             else 0
         )  # type: ignore[arg-type]
         item["wordcount"] = (
-            int(item.get("wordcount"))
+            int(item.get("wordcount"))  # type: ignore
             if isinstance(item.get("wordcount"), str | int)
             else 0
         )  # type: ignore[arg-type]
         item["picturecount"] = (
-            int(item.get("picturecount"))
+            int(item.get("picturecount"))  # type: ignore
             if isinstance(item.get("picturecount"), str | int)
             else 0  # type: ignore[arg-type]
         )
         item["reliability"] = (
-            int(item.get("reliability"))
+            int(item.get("reliability"))  # type: ignore
             if isinstance(item.get("reliability"), str | int)
             else 0  # type: ignore[arg-type]
         )
         item["pages_x_students"] = (
-            int(item.get("pages_x_students"))
+            int(item.get("pages_x_students"))  # type: ignore
             if isinstance(item.get("pages_x_students"), str | int)
             else 0  # type: ignore[arg-type]
         )
         item["count_students_registered"] = (
-            int(item.get("count_students_registered"))
+            int(item.get("count_students_registered"))  # type: ignore
             if isinstance(item.get("count_students_registered"), str | int)
             else 0  # type: ignore[arg-type]
         )

@@ -8,12 +8,13 @@ The Easy Access Sheet Toolkit is a comprehensive Python application with a built
 - Multi-stage Pipeline: Modular processing pipeline with independent stages (ingest, process, enrich, file-existence, export)
 - Data Enrichment: Automatic enrichment with OSIRIS course and person data using TTL-based freshness
 - File Existence Verification: TTL-based Canvas API file existence checking with rate limiting
-- Bulk Operations: Optimized database operations for performance using Tortoise ORM
+- Bulk Operations: Optimized database operations for performance using SQLAlchemy ORM
 - Export Generation: Multiple export formats (faculty sheets, overview, all items) with conditional formatting
 - Backup & Restore: Automated backup of faculty sheets with configurable retention
 - Admin Tools: Failure inspection, retry mechanisms, and cleanup utilities
 - Modern Architecture: Async/await, dependency injection, comprehensive testing
 - Workflow Mode: Optional reactive workflow exports (new/to_check/checked sheets)
+- Database: PostgreSQL with asyncpg driver for production deployments
 
 ## Pipeline Stages
 
@@ -23,7 +24,7 @@ The toolkit's main processing function operates through several configurable pip
 - Reads raw copyright data from SURF CopyRight exports
 - Processes data into standardized format using `copyright_item_from_dict`
 - Handles duplicate detection and merging via `merge_rules.py`
-- Stores processed data in SQLite database using Tortoise ORM
+- Stores processed data in PostgreSQL database using SQLAlchemy ORM
 
 ### 2. Data Processing (`--process-only`)
 - Applies business rules and transformations
@@ -54,7 +55,26 @@ The toolkit's main processing function operates through several configurable pip
 
 ### Prerequisites
 - Python 3.11+
+- PostgreSQL 18+ with asyncpg driver
 - [uv](https://docs.astral.sh/uv/) package manager (recommended)
+
+### Database Setup
+
+1. Install and start PostgreSQL:
+   ```bash
+   # Using Docker (recommended for development)
+   docker run --name ea-postgres -e POSTGRES_PASSWORD=password -e POSTGRES_DB=ea_db -p 5432:5432 -d postgres:18
+   ```
+
+2. Create `.env` file in project root:
+   ```
+   DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/ea_db
+   ```
+
+3. Run database migrations:
+   ```bash
+   uv run alembic upgrade head
+   ```
 
 ### Installation
 
@@ -161,7 +181,7 @@ uv run run.py admin retry-failures --material-id 12345
 
 - `pipeline.py`: Main orchestrator coordinating all stages with async entrypoints
 - `db/`: Database models and operations
-  - `models.py`: Tortoise ORM models (CopyrightItem, CourseData, PersonData, etc.)
+  - `sa_models.py`: SQLAlchemy ORM models (CopyrightItem, CourseData, PersonData, etc.)
   - `ingest.py`: Raw data ingestion and processing
   - `update.py`: Data processing and merging logic with staged failure handling
   - `relations.py`: M2M relationship management with bulk operations
@@ -187,12 +207,14 @@ Key entities:
 - StagedProcessingFailure: Failure tracking for retries
 - StagedCopyrightItem/StagedFacultyUpdate: Staging tables
 
+Database: PostgreSQL with SQLAlchemy 2.0 async ORM and Alembic migrations
+
 ### Performance Optimizations
 
 - Bulk Operations: Raw SQL for efficient batch updates
 - Memory Management: Streaming/chunked data processing
 - Rate Limiting: Configurable delays for API calls
-- Connection Pooling: Optimized Tortoise connections
+- Connection Pooling: Optimized SQLAlchemy async connections
 - Async Processing: Concurrent API calls with semaphores
 - TTL Caching: Avoid redundant API calls
 
@@ -249,7 +271,8 @@ ea-cli/
 │   ├── merge_rules.py       # Data merging logic
 │   ├── read_data_and_update.py # Legacy data reading
 │   ├── db/
-│   │   ├── models.py        # Tortoise ORM models
+│   │   ├── sa_models.py     # SQLAlchemy ORM models
+│   │   ├── models.py        # Legacy Tortoise ORM models (deprecated)
 │   │   ├── ingest.py        # Data ingestion
 │   │   ├── update.py        # Data processing
 │   │   ├── relations.py     # M2M relationships

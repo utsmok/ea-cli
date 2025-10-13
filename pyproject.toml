@@ -15,7 +15,6 @@ dependencies = [
     "bs4",
     "loguru",
     "aiometer",
-    "tortoise-orm[accel]",
     "tqdm",
     "fastexcel>=0.15.1",
     "webcolors>=24.11.1",

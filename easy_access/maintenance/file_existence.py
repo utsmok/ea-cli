@@ -18,7 +18,7 @@ import httpx
 from loguru import logger
 
 from easy_access.db.base import close_connections, ensure_db_inited
-from easy_access.db.models import CopyrightItem
+from easy_access.db.sa_models import CopyrightItem
 from easy_access.settings import Settings
 
 # --------------------------------

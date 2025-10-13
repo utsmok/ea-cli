@@ -4,8 +4,8 @@ from typing import Any
 
 from loguru import logger
 
-from easy_access.db.models import CopyrightItem
 from easy_access.db.retrieve import retrieve_pdfs
+from easy_access.db.sa_models import CopyrightItem
 from easy_access.settings import Settings
 
 
