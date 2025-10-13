@@ -178,8 +178,8 @@ async def select_items_needing_file_check(
             """
         )
         for item in items:
-            material_id: int = getattr(item, "material_id")
-            url: str = getattr(item, "url")
+            material_id: int = item.material_id
+            url: str = item.url
             if material_id and url:
                 res.append(
                     Item(
@@ -379,7 +379,6 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
         last_check_values.append(result["last_canvas_check"].isoformat())
         course_ids.append(result["course_id"])
 
-
     try:
         # Shortcut for tests: if CopyrightItem.filter has been patched to return
         # a mock whose .update() is an AsyncMock, use that path so tests can
@@ -403,7 +402,6 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
         except Exception:
             # Fall through to normal bulk path
             pass
-
 
         # Bulk update with tortoise ORM
         try:
@@ -431,12 +429,15 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
             canvas_course_id = result["course_id"]
 
             await CopyrightItem.filter(material_id=material_id).update(
-                file_exists=file_exists, last_canvas_check=last_canvas_check, canvas_course_id=canvas_course_id
+                file_exists=file_exists,
+                last_canvas_check=last_canvas_check,
+                canvas_course_id=canvas_course_id,
             )
         logger.info(f"Successfully updated {len(results)} items using fallback method")
     except Exception as e:
         logger.error(f"Error during bulk update: {e}")
         return
+
 
 async def refresh_file_existence_async(
     settings: Settings,

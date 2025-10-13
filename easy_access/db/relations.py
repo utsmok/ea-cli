@@ -506,7 +506,9 @@ async def match_v1_to_copyright_items(
         # compare schema v1 with retrieved dict keys:
         # turn into two dicts with name + type, zip and compare
         for col, val in v1_item_retrieved_dict[0].items():
-            logger.debug(f"v1 col: {col} type: {type(val)} schema type: {schema_v1.get(col, '[col missing in schema]')}")
+            logger.debug(
+                f"v1 col: {col} type: {type(val)} schema type: {schema_v1.get(col, '[col missing in schema]')}"
+            )
 
         return
     try:
@@ -516,7 +518,9 @@ async def match_v1_to_copyright_items(
     except Exception as e:
         logger.error(f"Error creating current_df: {e}")
         for col, val in current_items_retrieved_dict[0].items():
-            logger.debug(f"current col: {col} type: {type(val)} schema type: {schema_current.get(col, '[col missing in schema]')}")
+            logger.debug(
+                f"current col: {col} type: {type(val)} schema type: {schema_current.get(col, '[col missing in schema]')}"
+            )
         return
 
     v1_items = await v1_items_qs.all()

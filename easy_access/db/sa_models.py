@@ -19,6 +19,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from easy_access.settings import SETTINGS
+
 from .enums import (
     Classification,
     ClassificationV2,
@@ -300,7 +302,7 @@ class v1_CopyrightItem(Base):
     title: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     filehash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     owner: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    period: Mapped[Period | None] = mapped_column(SAEnum(Period), nullable=True)
+    period: Mapped[Period | None] = mapped_column(SAEnum(Period), nullable=True)  # type: ignore
     department: Mapped[str | None] = mapped_column(
         String(2048), nullable=True, index=True
     )
@@ -364,7 +366,7 @@ class CopyrightItem(Base):
     __tablename__ = "copyright_data"
 
     material_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    period: Mapped[Period] = mapped_column(SAEnum(Period), nullable=False)
+    period: Mapped[Period] = mapped_column(SAEnum(Period), nullable=False)  # type: ignore
     department: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
     course_code: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     course_name: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
@@ -468,7 +470,7 @@ class CopyrightItem(Base):
     def misaligned_status(self) -> bool:
         return self.status != self.actual_status()
 
-    def status_details(self) -> dict[str, str | bool | datetime | int | Status]:
+    def status_details(self) -> dict[str, str | bool | datetime | int | Status | None]:
         return {
             "material_id": self.material_id,
             "filename": self.filename,
@@ -483,7 +485,6 @@ class CopyrightItem(Base):
     def course_link(self) -> str:
         if not self.canvas_course_id or not self.filename:
             return ""
-        # Assuming SETTINGS is imported or accessed somehow
-        # base_url = SETTINGS.university_settings.lms.url
-        base_url = "https://canvas.example.com"  # placeholder
+        base_url = SETTINGS.university_settings.lms.url
+
         return f"{base_url}/courses/{self.canvas_course_id}/files?search_term={self.filename.replace(' ', '%20')}"

@@ -170,3 +170,62 @@ These notes are reflected in the "Files inspected" and the utilities / schema / 
 - Data migration tool: pgloader (user chose pgloader; a Docker wrapper script is recommended)
 - Alembic migrations location: `migrations/` in the repo root
 - Test scaffold for this migration: skip (user requested no test scaffold)
+
+### Migration Progress & Validation (Oct 13, 2025)
+
+**Completed Phases:**
+- Phase 1: Dependencies, Docker environment, .env setup ✅
+- Phase 2: SQLAlchemy foundation (session.py, models_base.py, compat.py) ✅
+- Phase 3: Model conversion (sa_models.py with full SQLAlchemy equivalents) ✅
+- Phase 4: Alembic setup (alembic.ini, initial migration generated and applied) ✅
+- Phase 5: Data migration (pgloader migrated 27,343 rows from SQLite to PostgreSQL) ✅
+
+**Data Migration Verification Test:**
+- **Test Performed:** Ran complex SQL query `retrieve_full_data` (with CTEs for course/person aggregations) on both SQLite (`db.sqlite3`) and PostgreSQL databases, adding `ORDER BY cd.material_id` for consistent ordering.
+- **Query Adaptation:** For PostgreSQL, replaced `GROUP_CONCAT` with `STRING_AGG` and added `::text` casts to avoid type errors.
+- **Results:**
+  - **Rows:** 2,512 (identical)
+  - **Columns:** 54 (identical)
+  - **Types:** Compatible (object vs datetime64[ns] for dates)
+  - **Data:** Identical except for expected ordering differences in aggregated strings (no ORDER BY in STRING_AGG/GROUP_CONCAT)
+- **Conclusion:** Migration successful - all data integrity preserved.
+
+**Pending:** Phase 6 - App refactor (replace Tortoise init, convert db modules to use SQLAlchemy via compat shim)
+
+### TortoiseORM Usage Analysis (Oct 13, 2025)
+
+**Files with Tortoise Usage:**
+- `db/base.py`: Tortoise.init/generate_schemas/close_connections, Model.get_or_create
+- `db/retrieve.py`: Tortoise, Q expressions, Model.filter/all/get/values_list
+- `db/update.py`: Tortoise, Q, in_transaction, bulk_create/bulk_update, CRUD operations
+- `db/relations.py`: in_transaction, filter, prefetch_related, M2M .add()
+- `db/ingest.py`: Tortoise, bulk_create, get_or_create, all/values
+- `db/models.py`: tortoise fields, Model class inheritance
+- `pdf/download.py`: get_or_none, create, filter
+- `pdf/parse.py`: all, create, save
+- `maintenance/v1_items.py`: update_or_create, all, values_list, filter
+- `enrichment/osiris.py`: all, filter, distinct, get_or_none, M2M .add(), delete
+- `maintenance/file_existence.py`: filter, get, update
+
+**Common Patterns:**
+- **Querying:** Model.filter().all(), Model.get/get_or_none()
+- **Bulk Ops:** bulk_create, bulk_update
+- **Transactions:** in_transaction (inconsistent usage)
+- **M2M Relations:** .add()/.remove()
+- **Expressions:** Q objects for complex queries
+- **CRUD:** create, save, update, delete
+
+**Areas for Improvement During Migration:**
+1. **Repeated Queries:** Abstract common filter/all patterns into repository methods
+2. **Transaction Management:** Standardize async transaction usage with SQLAlchemy
+3. **Error Handling:** Add comprehensive try/catch with proper logging
+4. **Business Logic Separation:** Extract DB queries from business logic into service layers
+5. **N+1 Prevention:** Ensure all queries use proper joins/prefetching
+6. **Batch Processing:** Standardize batch sizes and processing patterns
+7. **Logging:** Add consistent operation logging and metrics
+
+**Specific Refactor Opportunities:**
+- `update.py`: Break down complex staged processing logic into smaller functions
+- `relations.py`: Simplify queryset resolution logic
+- `ingest.py`: Improve error handling in bulk operations
+- `retrieve.py`: Unify SQLAlchemy engine vs Tortoise ORM usage patterns

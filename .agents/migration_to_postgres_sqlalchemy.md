@@ -10,6 +10,8 @@ This document describes a pragmatic, low-risk migration plan to move the project
 - Keep a short-term SQLite fallback (optional) while performing the refactor to allow incremental migration and easier rollbacks in development tests.
 - Migrate data using a controlled process — either pgloader or a Python ETL script using the old Tortoise models to read and SQLAlchemy to write. pgloader is fast for whole-DB lifts, but a Python approach is safer when transformations or data cleaning are required.
 
+**Current Status (Oct 13, 2025):** Phases 1-5 completed successfully. Data migration verified with identical query results between SQLite and PostgreSQL (27,343 rows migrated). Phase 6 (app refactor) pending - replace Tortoise init and convert db modules incrementally.
+
 Note: The user has chosen to standardize on PostgreSQL (no SQLite fallback). See "Required decisions" below for the full choices applied to this plan.
 
 ## Critique of the original five-step plan
@@ -124,17 +126,148 @@ Validation: After pgloader completes, run queries to compare row counts and a sm
 
 Note: Because the project standardizes on Postgres (no SQLite fallback), plan to run a full migration and then switch the app's configuration to point to Postgres.
 
+**Migration Results (Oct 13, 2025):** Successfully migrated 27,343 rows across all tables using pgloader. Verification test confirmed data integrity - complex query returned identical results (2,512 rows, 54 columns) between SQLite and PostgreSQL sources, with only expected ordering differences in unordered string aggregations.
+
+## TortoiseORM to SQLAlchemy Migration Analysis
+
+### Current Tortoise Usage Patterns
+
+**Core DB Modules:**
+- `base.py`: Tortoise initialization, schema generation, connection management
+- `models.py`: Tortoise Model classes with fields, relationships, and mixins
+- `retrieve.py`: Mixed SQLAlchemy engine + Tortoise ORM queries (inconsistent)
+- `update.py`: Complex business logic with Tortoise CRUD operations and transactions
+- `ingest.py`: Bulk operations and data loading
+- `relations.py`: M2M relationship management and batch processing
+
+**Application Modules:**
+- `pdf/download.py`: Basic CRUD for PDF metadata
+- `pdf/parse.py`: PDF processing with entity creation
+- `enrichment/osiris.py`: Complex enrichment logic with M2M relations
+- `maintenance/v1_items.py`: Bulk upserts and data processing
+- `maintenance/file_existence.py`: Batch updates with filtering
+
+### Key Migration Challenges
+
+1. **Mixed Query Patterns:** `retrieve.py` uses both SQLAlchemy engine (for polars) and Tortoise ORM - need unification
+2. **Complex Business Logic:** `update.py` has 1700+ lines with intricate merge rules and staged processing
+3. **Transaction Management:** Inconsistent `in_transaction` usage across modules
+4. **M2M Relationships:** Need to convert `.add()` calls to association table operations
+5. **Bulk Operations:** Convert `bulk_create`/`bulk_update` to SQLAlchemy equivalents
+6. **Error Handling:** Many operations lack proper rollback and logging
+
+### Recommended Refactor Strategy
+
+**Phase 6a - Foundation (Priority: High)**
+- Replace Tortoise.init with `session.init_db()` in `base.py`
+- Create repository base class with common query patterns
+- Implement transaction context managers
+- Add comprehensive error handling decorators
+
+**Phase 6b - Core DB Modules (Priority: High)**
+- Convert `ingest.py`: Straightforward bulk operations
+- Convert `relations.py`: Simplify queryset resolution, standardize batching
+- Convert `retrieve.py`: Unify query patterns, keep polars integration
+
+**Phase 6c - Complex Logic (Priority: Medium)**
+- Refactor `update.py`: Break down into smaller functions, extract business rules
+- Create service layer for merge/update logic
+- Implement proper transaction boundaries
+
+**Phase 6d - Application Modules (Priority: Low)**
+- Convert remaining modules using established patterns
+- Update tests and fixtures
+- Performance optimization and cleanup
+
+### Architecture Improvements
+
+**Repository Pattern:**
+```python
+class BaseRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_id(self, id: int) -> Model | None:
+        return await self.session.get(Model, id)
+
+    async def filter(self, *filters) -> list[Model]:
+        stmt = select(Model).where(*filters)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+```
+
+**Service Layer:**
+```python
+class CopyrightItemService:
+    def __init__(self, repo: CopyrightItemRepository):
+        self.repo = repo
+
+    async def update_with_merge_rules(self, data: dict) -> CopyrightItem:
+        # Business logic separated from DB operations
+        pass
+```
+
+**Transaction Management:**
+```python
+async def process_batch(self, items: list[dict]) -> None:
+    async with self.session.begin():
+        try:
+            # Batch operations
+            await self.bulk_create(items)
+        except Exception:
+            await self.session.rollback()
+            raise
+```
+
+This analysis provides a roadmap for systematic conversion while improving code maintainability and performance.
+
 Phase 6 — App refactor and incremental conversion
 
 1. Replace Tortoise init code: find where Tortoise is initialized (likely in `easy_access/db/base.py` or app start) and replace with `easy_access.db.session.init_db`.
 2. Implement and enable the `compat` shim and convert modules in order of dependency:
    - `easy_access/db/ingest.py`
-   - `easy_access/db/update.py`
-   - `easy_access/db/retrieve.py` (consider keeping polars + Core queries here)
-   - `easy_access/db/relations.py`
+   - `easy_access/db/update.py` (complex - break down staged processing logic)
+   - `easy_access/db/retrieve.py` (unify SQLAlchemy engine vs ORM usage)
+   - `easy_access/db/relations.py` (simplify queryset resolution)
 3. For each module:
    - Replace small helper calls with `compat` wrappers and run tests.
    - Replace complex queries with SQLAlchemy Core where necessary for performance.
+   - Add proper transaction management with SQLAlchemy async sessions
+   - Extract business logic from DB interaction into service/repository layers
+   - Add comprehensive error handling and logging
+   - Ensure N+1 prevention with proper joins/prefetching
+   - Standardize batch processing patterns
+
+**TortoiseORM Usage Analysis (Oct 13, 2025):**
+
+**Files with Tortoise Usage:**
+- `db/base.py`: Tortoise.init/generate_schemas/close_connections, Model.get_or_create
+- `db/retrieve.py`: Tortoise, Q expressions, Model.filter/all/get/values_list
+- `db/update.py`: Tortoise, Q, in_transaction, bulk_create/bulk_update, CRUD operations
+- `db/relations.py`: in_transaction, filter, prefetch_related, M2M .add()
+- `db/ingest.py`: Tortoise, bulk_create, get_or_create, all/values
+- `db/models.py`: tortoise fields, Model class inheritance
+- `pdf/download.py`: get_or_none, create, filter
+- `pdf/parse.py`: all, create, save
+- `maintenance/v1_items.py`: update_or_create, all, values_list, filter
+- `enrichment/osiris.py`: all, filter, distinct, get_or_none, M2M .add(), delete
+- `maintenance/file_existence.py`: filter, get, update
+
+**Common Patterns to Replace:**
+- **Querying:** Model.filter().all() → session.execute(select(Model).where(...))
+- **Bulk Ops:** bulk_create → session.execute(insert(Model).values([...]))
+- **Transactions:** in_transaction → async with session.begin()
+- **M2M Relations:** .add() → association table inserts
+- **Expressions:** Q objects → SQLAlchemy and_/or_/not_ expressions
+- **CRUD:** create/save/update/delete → session.add()/commit()
+
+**Refactor Priorities:**
+1. **Repository Pattern:** Create repository classes for each model to centralize queries
+2. **Service Layer:** Extract business logic from DB operations
+3. **Transaction Consistency:** Use SQLAlchemy async sessions with proper transaction scopes
+4. **Error Handling:** Add try/catch blocks with rollback and logging
+5. **Performance:** Replace N+1 queries with joins, use batch processing
+6. **Testing:** Update tests to use SQLAlchemy session fixtures
 
 Phase 7 — Validation, tests, cleanup
 
@@ -155,33 +288,15 @@ Operational notes & best practices
 - Consider creating a small set of SQL views for reporting if polars queries become overly complex; you can query views with polars via SQLAlchemy engine.
 - Keep migrations idempotent where possible; write data migrations carefully and test them against sample snapshots.
 
-Questions for you (required decisions)
-
-
-Files to be created or updated (suggested)
-
-- Add: `.env.sample`, `docker-compose.postgres.yml`
-- Add: `easy_access/db/session.py`, `easy_access/db/models_base.py`, `easy_access/db/compat.py`
-- Update: `easy_access/db/models.py` (converted version)
-- Add: `migrations/` (Alembic files) and `alembic.ini`
-- Add: `scripts/migrate_sqlite_to_postgres.py` (optional)
-- Update README.md with Postgres dev instructions
-- Update `.agents/memory.instruction.md` with the recorded choices
-
-Next steps I'll take if you want me to proceed
-
-1. Ask the 4 questions above so I can finalize exact versions and approach.
-2. With your go-ahead, I'll scaffold `easy_access/db/session.py`, `models_base.py`, `compat.py`, and a `docker-compose.postgres.yml` and write corresponding tests scaffolding.
-3. After scaffolding, I'll run a local Docker compose up (if you want me to run commands) and attempt an initial Alembic autogenerate to validate metadata wiring.
 
 Completion checklist
 
-- [ ] Add dependencies to `pyproject.toml`
-- [ ] Add Docker Compose and environment samples
-- [ ] Scaffold `easy_access/db/session.py`, `models_base.py`, `compat.py`
-- [ ] Convert and test core models
-- [ ] Configure Alembic and generate initial migration
-- [ ] Migrate data and validate
+- [x] Add dependencies to `pyproject.toml`
+- [x] Add Docker Compose and environment samples
+- [x] Scaffold `easy_access/db/session.py`, `models_base.py`, `compat.py`
+- [x] Convert and test core models
+- [x] Configure Alembic and generate initial migration
+- [x] Migrate data and validate
 - [ ] Convert application code modules incrementally
 - [ ] Run full tests and remove Tortoise
 

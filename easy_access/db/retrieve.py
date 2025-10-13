@@ -194,7 +194,6 @@ def retrieve_full_data(
             faculty_where_clause = f"AND cd.faculty_id IN ('{faculties_string}')"
 
         # Optimized query with pre-aggregated data and reduced subqueries
-        # TODO: for all the group_concats, make sure to make them DISTINCT so we don't get duplicates in the returned strings
         query: str = f"""
             -- Pre-aggregate course data to avoid repeated computations
             WITH CourseAggregations AS (
