@@ -17,7 +17,7 @@ from tortoise import Tortoise
 from tortoise.expressions import Q
 
 from easy_access.db.base import ensure_db_inited, init_engine
-from easy_access.db.models import PDF, CopyrightItem
+from easy_access.db.models import PDF
 from easy_access.settings import Settings  # Import Settings for type hint
 
 engine: Engine | None = None
@@ -736,7 +736,7 @@ async def retrieve_unmarked_deleted_items(settings: Settings) -> list:
 async def retrieve_tortoise_copyright_items(
     settings: Settings,
     material_ids: list[str] | list[int] | None = None,
-) -> list[CopyrightItem]:
+) -> list:
     """
     Retrieves copyright items from the database based on a list of material ids; or all if None.
 
@@ -745,19 +745,31 @@ async def retrieve_tortoise_copyright_items(
         material_ids: A list of material IDs to retrieve copyright items for. If None, all copyright items will be retrieved.
 
     Returns:
-        A list of CopyrightItem instances.
+        A list of SACopyrightItem instances.
     """
+    from sqlalchemy import select
+
+    from easy_access.db.base import close_connections
+    from easy_access.db.sa_models import CopyrightItem as SACopyrightItem
+    from easy_access.db.session import get_session
+
     if not settings:
         raise ValueError(
             "Settings must be provided to retrieve_tortoise_copyright_items"
         )
     await ensure_db_inited(settings)
 
-    if material_ids is None:
-        items = await CopyrightItem.all()
-    else:
-        items = await CopyrightItem.filter(material_id__in=material_ids).all()
-    await Tortoise.close_connections()
+    async for session in get_session():
+        if material_ids is None:
+            stmt = select(SACopyrightItem)
+        else:
+            stmt = select(SACopyrightItem).where(
+                SACopyrightItem.material_id.in_(material_ids)
+            )
+        result = await session.execute(stmt)
+        items = list(result.scalars().all())
+
+    await close_connections()
     return items
 
 
