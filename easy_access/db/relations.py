@@ -629,10 +629,12 @@ async def update_relations_async(settings: Settings) -> None:
     except Exception as e:
         logger.error(f"link_courses failed: {e}")
 
-    try:
-        await match_v1_to_copyright_items(settings)
-    except Exception as e:
-        logger.error(f"match_v1_to_copyright_items failed: {e}")
+    # Temporarily skip match_v1_to_copyright_items as it still uses Tortoise ORM
+    # TODO: Convert to SQLAlchemy when needed
+    # try:
+    #     await match_v1_to_copyright_items(settings)
+    # except Exception as e:
+    #     logger.error(f"match_v1_to_copyright_items failed: {e}")
 
     logger.info("Relations update completed")
 

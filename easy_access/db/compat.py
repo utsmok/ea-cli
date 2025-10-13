@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -68,10 +69,22 @@ async def bulk_create(
     if not data:
         return
 
+    # For upsert operations, use much smaller batch size to avoid PostgreSQL parameter limits
+    # Each row can have dozens of parameters, so limit to very small batches
+    effective_batch_size = batch_size
+    if on_conflict and update_fields:
+        # PostgreSQL has a hard limit of ~65k parameters per prepared statement
+        # For upsert operations, each row contributes parameters to both INSERT and UPDATE clauses
+        # Be extremely conservative - use a fixed small batch size
+        effective_batch_size = min(batch_size, 50)  # Fixed small batch size for upsert
+        logger.info(
+            f"Using batch size {effective_batch_size} for upsert operation (fixed conservative size)"
+        )
+
     async for session in get_session():
         async with session.begin():
             # Process in batches
-            for batch in _batched(data, batch_size):
+            for batch in _batched(data, effective_batch_size):
                 if on_conflict and update_fields:
                     # PostgreSQL upsert
                     stmt = pg_insert(model.__table__).values(batch)

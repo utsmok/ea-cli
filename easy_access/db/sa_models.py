@@ -498,7 +498,7 @@ class CopyrightItem(Base):
         nullable=False,
         default=Infringement.UNDETERMINED,
     )
-    file_exists: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    file_exists: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_canvas_check: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     canvas_course_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, index=True

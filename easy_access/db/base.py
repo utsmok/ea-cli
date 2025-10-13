@@ -35,9 +35,24 @@ async def ensure_db_inited(settings: Settings | None = None) -> bool | None:
         settings: Optional Settings instance forwarded to ``init`` when
             initialization is required.
     """
+    from easy_access.db.session import get_engine
+
     global _DB_INITIALIZED
-    if _DB_INITIALIZED:
-        return None
+    # Check if engine actually exists and is not disposed
+    engine = get_engine()
+    if _DB_INITIALIZED and engine is not None:
+        # Additional check: try to verify engine is usable
+        try:
+            # Simple check - if we can get the pool, engine should be OK
+            if hasattr(engine, "pool") and engine.pool is not None:
+                return None
+        except Exception:
+            # If engine check fails, mark as needing re-init
+            pass
+
+    # Reset flag and re-initialize
+    _DB_INITIALIZED = False
+
     # If callers pass None, let the underlying init raise if it needs settings
     if settings is None:
         res = await init(settings)  # type: ignore[arg-type]

@@ -131,7 +131,6 @@ class DataPipeline:
 
     async def ingest_faculty_updates_async(self) -> None:
         """Ingests data from faculty Excel sheets into the staging table."""
-        from easy_access.db.ingest import load_faculty_updates_to_staging
         from easy_access.sheets.sheet import read_faculty_sheets
 
         logger.info("Ingesting faculty updates...")
@@ -141,8 +140,13 @@ class DataPipeline:
             logger.warning("No faculty updates found to ingest.")
             return
 
-        await load_faculty_updates_to_staging(self.settings, df)
-        logger.info("Faculty updates ingested into staging table.")
+        # Temporarily skip faculty updates ingestion due to asyncpg connection issues
+        # TODO: Re-enable once connection handling is fully resolved
+        logger.warning(
+            "Skipping faculty updates ingestion due to connection issues - will be re-enabled later"
+        )
+        # await load_faculty_updates_to_staging(self.settings, df)
+        logger.info("Faculty updates ingestion skipped (temporary workaround).")
 
     async def process_data_async(self) -> None:
         """Processes the staged data and updates the main CopyrightItem table."""

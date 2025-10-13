@@ -73,10 +73,23 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 async def shutdown_db() -> None:
     """Dispose the async engine and free connections."""
-    global _engine
+    global _engine, _SessionFactory
     if _engine is not None:
-        await _engine.dispose()
-        _engine = None
+        # Instead of disposing completely, try to reset connection pool
+        try:
+            # Close all connections in the pool more gently
+            await _engine.dispose(close=True)
+            # Reset globals to force re-initialization
+            _engine = None
+            _SessionFactory = None
+        except Exception as e:
+            # If gentle dispose fails, force reset globals anyway
+            _engine = None
+            _SessionFactory = None
+            # Log the error but don't raise - we want cleanup to succeed
+            import logging
+
+            logging.warning(f"Error during database shutdown: {e}")
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

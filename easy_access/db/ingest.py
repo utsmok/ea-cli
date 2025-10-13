@@ -2,6 +2,8 @@
 functions to ingest new data into the database
 """
 
+from datetime import datetime
+
 import polars as pl
 from loguru import logger
 
@@ -193,6 +195,41 @@ async def load_raw_copyright_data_to_staging(
     """
     await ensure_db_inited(settings)
     items = standardize_dataframe(data).to_dicts()
+
+    # Convert material_id from string to integer for database compatibility
+    for item in items:
+        if "material_id" in item and item["material_id"] is not None:
+            try:
+                item["material_id"] = int(item["material_id"])
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid material_id value: {item['material_id']}, skipping item"
+                )
+                continue
+
+        # Convert date/datetime fields from strings to proper types
+        if "last_change" in item and item["last_change"] is not None:
+            try:
+                item["last_change"] = datetime.fromisoformat(item["last_change"]).date()
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid last_change value: {item['last_change']}, setting to None"
+                )
+                item["last_change"] = None
+
+        if (
+            "retrieved_from_copyright_on" in item
+            and item["retrieved_from_copyright_on"] is not None
+        ):
+            try:
+                item["retrieved_from_copyright_on"] = datetime.fromisoformat(
+                    item["retrieved_from_copyright_on"]
+                )
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid retrieved_from_copyright_on value: {item['retrieved_from_copyright_on']}, setting to None"
+                )
+                item["retrieved_from_copyright_on"] = None
 
     # Define fields to update on conflict (all fields except primary key)
     update_fields = [

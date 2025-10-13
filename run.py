@@ -313,6 +313,14 @@ def process_data(
                         logger.warning(
                             f"Non-critical stage, skipping {stage_name} and moving on."
                         )
+                finally:
+                    # Always close connections after each stage to prevent state issues
+                    try:
+                        tool.close_connections()
+                    except Exception as close_error:
+                        logger.warning(
+                            f"Error closing connections after {stage_name}: {close_error}"
+                        )
             else:
                 logger.warning(f"{stage_name} stage disabled. Skipping!")
     except Exception as e:

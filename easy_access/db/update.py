@@ -11,7 +11,7 @@ from typing import Any
 
 import polars as pl
 from loguru import logger
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 
 from easy_access.db.base import (
     close_connections,
@@ -21,7 +21,6 @@ from easy_access.db.base import (
 )
 from easy_access.db.enums import (
     Classification,
-    ClassificationV2,
     Infringement,
     Status,
     WorkflowStatus,
@@ -38,6 +37,7 @@ from easy_access.db.sa_models import (
     StagedFacultyUpdate,
     StagedProcessingFailure,
 )
+from easy_access.db.session import get_session_factory
 from easy_access.merge_rules import (
     build_merge_rules_from_settings,
     get_mergeable_fields,
@@ -915,15 +915,6 @@ async def process_staged_raw_data(settings: Settings) -> None:
     Processes the staged raw data and updates the main CopyrightItem table.
     """
     await ensure_db_inited(settings)
-    async for session in get_session():
-        result = await session.execute(select(StagedCopyrightItem))
-        staged_items = result.scalars().all()
-
-    if not staged_items:
-        logger.info("No staged raw data to process.")
-        return
-
-    logger.info(f"Processing {len(staged_items)} staged raw items...")
 
     # Helper: list of known staged fields (keeps mapping explicit and safe)
     staged_fields = [
@@ -965,11 +956,20 @@ async def process_staged_raw_data(settings: Settings) -> None:
 
     processed_ids: list[int] = []
 
-    for batch_idx, batch in enumerate(batched(staged_items, 500)):
-        batch_processed_ids: list[int] = []
-        complex_item_dicts: list[dict] = []
-        logger.info(f"Processing batch {batch_idx} with {len(batch)} items")
-        async for session in get_session():
+    async for session in get_session():
+        result = await session.execute(select(StagedCopyrightItem))
+        staged_items = result.scalars().all()
+
+        if not staged_items:
+            logger.info("No staged raw data to process.")
+            return
+
+        logger.info(f"Processing {len(staged_items)} staged raw items...")
+
+        for batch_idx, batch in enumerate(batched(staged_items, 500)):
+            batch_processed_ids: list[int] = []
+            complex_item_dicts: list[dict] = []
+            logger.info(f"Processing batch {batch_idx} with {len(batch)} items")
             for _item_idx, staged_item in enumerate(batch):
                 try:
                     # Build a safe dict from known fields
@@ -1125,40 +1125,41 @@ async def process_staged_raw_data(settings: Settings) -> None:
                         ...
                     # Do not re-raise; keep other rows processing. Failed staged rows remain for manual inspection.
 
-        # Process complex merges outside transaction since update_copyright_items does its own operations
-        if complex_item_dicts:
-            logger.info(
-                f"Processing {len(complex_item_dicts)} complex merges for batch {batch_idx}"
-            )
-            try:
-                await update_copyright_items(
-                    settings=settings, data=complex_item_dicts, update_relations=False
-                )
+            # Process complex merges outside transaction since update_copyright_items does its own operations
+            if complex_item_dicts:
                 logger.info(
-                    f"Successfully processed {len(complex_item_dicts)} complex merges"
+                    f"Processing {len(complex_item_dicts)} complex merges for batch {batch_idx}"
                 )
-            except Exception as e:
-                logger.exception(f"Error processing complex merges: {e}")
-                # Don't fail the whole batch, just log the error
+                try:
+                    await update_copyright_items(
+                        settings=settings,
+                        data=complex_item_dicts,
+                        update_relations=False,
+                    )
+                    logger.info(
+                        f"Successfully processed {len(complex_item_dicts)} complex merges"
+                    )
+                except Exception as e:
+                    logger.exception(f"Error processing complex merges: {e}")
+                    # Don't fail the whole batch, just log the error
 
-        # After successful transaction, remove successfully processed staged rows
-        if batch_processed_ids:
-            try:
-                async for session in get_session():
+            # After successful transaction, remove successfully processed staged rows
+            if batch_processed_ids:
+                try:
                     await session.execute(
                         delete(StagedCopyrightItem).where(
                             StagedCopyrightItem.material_id.in_(batch_processed_ids)
                         )
                     )
                     await session.commit()
-                logger.info(
-                    f"Cleared {len(batch_processed_ids)} processed staged rows."
-                )
-                processed_ids.extend(batch_processed_ids)
-            except Exception as e:
-                logger.exception(
-                    f"Error deleting staged rows {batch_processed_ids}: {e}"
-                )
+                    logger.info(
+                        f"Cleared {len(batch_processed_ids)} processed staged rows."
+                    )
+                    processed_ids.extend(batch_processed_ids)
+                except Exception as e:
+                    logger.exception(
+                        f"Error deleting staged rows {batch_processed_ids}: {e}"
+                    )
 
     logger.info(
         f"Finished processing staged raw data. Successfully processed {len(processed_ids)} rows."
@@ -1195,21 +1196,21 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
         return mapping.get(lower)
 
     await ensure_db_inited(settings)
+
     async for session in get_session():
         result = await session.execute(select(StagedFacultyUpdate))
         staged_updates = result.scalars().all()
 
-    if not staged_updates:
-        logger.info("No staged faculty updates to process.")
-        return
+        if not staged_updates:
+            logger.info("No staged faculty updates to process.")
+            return
 
-    logger.info(f"Processing {len(staged_updates)} staged faculty updates...")
+        logger.info(f"Processing {len(staged_updates)} staged faculty updates...")
 
-    # Process staged faculty updates in batches inside transactions; delete only processed rows
-    processed_updates: list[int] = []
-    for batch in batched(staged_updates, 100):
-        batch_processed: list[int] = []
-        async for session in get_session():
+        # Process staged faculty updates in batches inside transactions; delete only processed rows
+        processed_updates: list[int] = []
+        for batch in batched(staged_updates, 100):
+            batch_processed: list[int] = []
             for staged_update in batch:
                 try:
                     mid = staged_update.material_id
@@ -1286,23 +1287,22 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                     #    f"[STAGED][TRACE] material_id={mid_val}, stage=faculty_update: {traceback.format_exc()}"
                     # )
 
-        if batch_processed:
-            try:
-                async for session in get_session():
+            if batch_processed:
+                try:
                     await session.execute(
                         delete(StagedFacultyUpdate).where(
                             StagedFacultyUpdate.material_id.in_(batch_processed)
                         )
                     )
                     await session.commit()
-                # logger.info(
-                #    f"Cleared {len(batch_processed)} processed staged faculty updates."
-                # )
-                processed_updates.extend(batch_processed)
-            except Exception:
-                logger.exception(
-                    f"Error deleting processed staged faculty updates: {batch_processed}"
-                )
+                    # logger.info(
+                    #    f"Cleared {len(batch_processed)} processed staged faculty updates."
+                    # )
+                    processed_updates.extend(batch_processed)
+                except Exception:
+                    logger.exception(
+                        f"Error deleting processed staged faculty updates: {batch_processed}"
+                    )
 
     logger.info(
         f"Finished processing staged faculty updates. Successfully processed {len(processed_updates)} rows."
@@ -1386,84 +1386,84 @@ async def persist_courses(
         logger.info("No course data to persist")
         return
 
-    # Split create/update
     async for session in get_session():
+        # Split create/update
         result = await session.execute(
             select(Course).where(Course.cursuscode.in_(list(courses_data.keys())))
         )
         existing = result.scalars().all()
-    existing_codes = {c.cursuscode for c in existing}
+        existing_codes = {c.cursuscode for c in existing}
 
-    to_create: list[dict] = []
-    to_update: list[dict] = []
+        to_create: list[dict] = []
+        to_update: list[dict] = []
 
-    # Preprocess each course dict
-    allowed_course_fields = {
-        "cursuscode",
-        "internal_id",
-        "year",
-        "name",
-        "short_name",
-        "ec",
-        "programme",
-        "notes",
-        "category",
-        "faculty_id",
-    }
+        # Preprocess each course dict
+        allowed_course_fields = {
+            "cursuscode",
+            "internal_id",
+            "year",
+            "name",
+            "short_name",
+            "ec",
+            "programme",
+            "notes",
+            "category",
+            "faculty_id",
+        }
 
-    for code, data in courses_data.items():
-        if not isinstance(data, dict):
-            logger.warning(f"Skipping invalid course data for {code}: not a dict")
-            continue
-        # Shallow copy so we can mutate safely
-        cd = dict(data)
+        for code, data in courses_data.items():
+            if not isinstance(data, dict):
+                logger.warning(f"Skipping invalid course data for {code}: not a dict")
+                continue
+            # Shallow copy so we can mutate safely
+            cd = dict(data)
 
-        # Handle faculty FK (stored by abbreviation). Use faculty_id convention.
-        faculty_abbr = cd.pop("faculty", None)
-        if faculty_abbr:
-            async for session in get_session():
+            # Handle faculty FK (stored by abbreviation). Use faculty_id convention.
+            faculty_abbr = cd.pop("faculty", None)
+            if faculty_abbr:
                 result = await session.execute(
                     select(Faculty).where(Faculty.abbreviation == faculty_abbr)
                 )
                 faculty_obj = result.scalar_one_or_none()
-            if faculty_obj:
-                cd["faculty_id"] = faculty_obj.abbreviation
+                if faculty_obj:
+                    cd["faculty_id"] = faculty_obj.abbreviation
+                else:
+                    logger.debug(
+                        f"Faculty '{faculty_abbr}' not found for course {code}; leaving FK null"
+                    )
+
+            # Drop unsupported keys (e.g. faculty_long, language, etc.)
+            cd = {
+                k: v
+                for k, v in cd.items()
+                if k in allowed_course_fields or k.startswith("_")
+            }
+
+            if "ec" in cd:
+                if "," in str(cd["ec"]):
+                    cd["ec"] = cd["ec"].replace(",", ".")
+                try:
+                    cd["ec"] = float(cd["ec"])
+                except (ValueError, TypeError):
+                    cd["ec"] = None
+            if code in existing_codes:
+                to_update.append(cd | {"cursuscode": code})
             else:
-                logger.debug(
-                    f"Faculty '{faculty_abbr}' not found for course {code}; leaving FK null"
-                )
+                # Required minimal fields guard
+                missing_req = [
+                    k
+                    for k in ["cursuscode", "internal_id", "year", "name"]
+                    if k not in cd
+                ]
+                if missing_req:
+                    logger.warning(
+                        f"Skipping create for course {code}: missing {missing_req}"
+                    )
+                    continue
+                cd["cursuscode"] = code
+                to_create.append(cd)
 
-        # Drop unsupported keys (e.g. faculty_long, language, etc.)
-        cd = {
-            k: v
-            for k, v in cd.items()
-            if k in allowed_course_fields or k.startswith("_")
-        }
-
-        if "ec" in cd:
-            if "," in str(cd["ec"]):
-                cd["ec"] = cd["ec"].replace(",", ".")
-            try:
-                cd["ec"] = float(cd["ec"])
-            except (ValueError, TypeError):
-                cd["ec"] = None
-        if code in existing_codes:
-            to_update.append(cd | {"cursuscode": code})
-        else:
-            # Required minimal fields guard
-            missing_req = [
-                k for k in ["cursuscode", "internal_id", "year", "name"] if k not in cd
-            ]
-            if missing_req:
-                logger.warning(
-                    f"Skipping create for course {code}: missing {missing_req}"
-                )
-                continue
-            cd["cursuscode"] = code
-            to_create.append(cd)
-
-    # Create
-    async for session in get_session():
+        # Create
         for cd in to_create:
             try:
                 course_obj = Course(**cd)
@@ -1473,8 +1473,7 @@ async def persist_courses(
                 logger.error(f"Error creating course {cd.get('cursuscode')}: {exc}")
                 continue
 
-    # Update existing (exclude PK)
-    async for session in get_session():
+        # Update existing (exclude PK)
         for ud in to_update:
             code = ud.pop("cursuscode")
             try:
@@ -1493,7 +1492,9 @@ async def persist_courses(
     logger.info(f"Successfully persisted {len(courses_data)} courses")
 
 
-async def _apply_course_teacher_relations(course_obj, rel_payload: dict, PersonModel):
+async def _apply_course_teacher_relations(
+    course_obj, rel_payload: dict, PersonModel, session
+):
     """Handle teacher/person many-to-many assignments for a course.
 
     We unify all available role sets into a single collection for now; role-specific
@@ -1517,40 +1518,39 @@ async def _apply_course_teacher_relations(course_obj, rel_payload: dict, PersonM
     if not teacher_sets:
         return
     all_teachers = set.union(*teacher_sets)
-    async for session in get_session():
-        for name in sorted(all_teachers):
-            if not name or not str(name).strip():
-                continue
-            # Check if person exists
+    for name in sorted(all_teachers):
+        if not name or not str(name).strip():
+            continue
+        # Check if person exists
+        result = await session.execute(
+            select(Person).where(Person.input_name == str(name).strip())
+        )
+        person_obj = result.scalar_one_or_none()
+        if not person_obj:
+            # Create new person
+            person_obj = Person(input_name=str(name).strip(), main_name=None)
+            session.add(person_obj)
+            await session.commit()
+        try:
+            # Add teacher relationship via CourseEmployee table
+            # Check if relationship already exists
             result = await session.execute(
-                select(Person).where(Person.input_name == str(name).strip())
+                select(CourseEmployee).where(
+                    (CourseEmployee.course_cursuscode == course_obj.cursuscode)
+                    & (CourseEmployee.person_id == person_obj.id)
+                )
             )
-            person_obj = result.scalar_one_or_none()
-            if not person_obj:
-                # Create new person
-                person_obj = Person(input_name=str(name).strip(), main_name=None)
-                session.add(person_obj)
+            existing_rel = result.scalar_one_or_none()
+            if not existing_rel:
+                course_employee = CourseEmployee(
+                    course_cursuscode=course_obj.cursuscode, person_id=person_obj.id
+                )
+                session.add(course_employee)
                 await session.commit()
-            try:
-                # Add teacher relationship via CourseEmployee table
-                # Check if relationship already exists
-                result = await session.execute(
-                    select(CourseEmployee).where(
-                        (CourseEmployee.course_cursuscode == course_obj.cursuscode)
-                        & (CourseEmployee.person_id == person_obj.id)
-                    )
-                )
-                existing_rel = result.scalar_one_or_none()
-                if not existing_rel:
-                    course_employee = CourseEmployee(
-                        course_cursuscode=course_obj.cursuscode, person_id=person_obj.id
-                    )
-                    session.add(course_employee)
-                    await session.commit()
-            except Exception as exc:  # pragma: no cover
-                logger.debug(
-                    f"Could not add teacher '{name}' to course {course_obj.cursuscode}: {exc}"
-                )
+        except Exception as exc:  # pragma: no cover
+            logger.debug(
+                f"Could not add teacher '{name}' to course {course_obj.cursuscode}: {exc}"
+            )
 
 
 async def persist_persons(
@@ -1573,56 +1573,56 @@ async def persist_persons(
             select(Person).where(Person.input_name.in_(list(persons_data.keys())))
         )
         existing = result.scalars().all()
-    existing_names = {p.input_name for p in existing}
+        existing_names = {p.input_name for p in existing}
 
-    to_create: list[dict] = []
-    to_update: list[dict] = []
+        to_create: list[dict] = []
+        to_update: list[dict] = []
 
-    # Allowed direct columns (excluding M2M + unserialized fields)
-    direct_fields = {
-        "input_name",
-        "main_name",
-        "match_confidence",
-        "first_name",
-        "email",
-        "people_page_url",
-    }
+        # Allowed direct columns (excluding M2M + unserialized fields)
+        direct_fields = {
+            "input_name",
+            "main_name",
+            "match_confidence",
+            "first_name",
+            "email",
+            "people_page_url",
+        }
 
-    for input_name, pdata in persons_data.items():
-        if not isinstance(pdata, dict):
-            logger.warning(f"Skipping invalid person data for {input_name}: not a dict")
-            continue
-        pd = dict(pdata)
-        faculty_abbr = pd.pop("faculty", None)
-        if faculty_abbr:
-            async for session in get_session():
+        for input_name, pdata in persons_data.items():
+            if not isinstance(pdata, dict):
+                logger.warning(
+                    f"Skipping invalid person data for {input_name}: not a dict"
+                )
+                continue
+            pd = dict(pdata)
+            faculty_abbr = pd.pop("faculty", None)
+            if faculty_abbr:
                 result = await session.execute(
                     select(Faculty).where(Faculty.abbreviation == faculty_abbr)
                 )
                 faculty_obj = result.scalar_one_or_none()
-            if faculty_obj:
-                pd["faculty_id"] = faculty_obj.abbreviation
+                if faculty_obj:
+                    pd["faculty_id"] = faculty_obj.abbreviation
+                else:
+                    logger.debug(
+                        f"Faculty '{faculty_abbr}' not found for person {input_name}"
+                    )
+            # Stash org info
+            orgs_payload = pd.pop("orgs", [])
+            pd["_orgs_payload"] = orgs_payload
+            # Drop unsupported keys
+            cleaned = {
+                k: v
+                for k, v in pd.items()
+                if k in direct_fields or k.endswith("_id") or k.startswith("_")
+            }
+            cleaned["input_name"] = input_name  # ensure primary identifier present
+            if input_name in existing_names:
+                to_update.append(cleaned)
             else:
-                logger.debug(
-                    f"Faculty '{faculty_abbr}' not found for person {input_name}"
-                )
-        # Stash org info
-        orgs_payload = pd.pop("orgs", [])
-        pd["_orgs_payload"] = orgs_payload
-        # Drop unsupported keys
-        cleaned = {
-            k: v
-            for k, v in pd.items()
-            if k in direct_fields or k.endswith("_id") or k.startswith("_")
-        }
-        cleaned["input_name"] = input_name  # ensure primary identifier present
-        if input_name in existing_names:
-            to_update.append(cleaned)
-        else:
-            to_create.append(cleaned)
+                to_create.append(cleaned)
 
-    # Create
-    async for session in get_session():
+        # Create
         for cd in to_create:
             orgs_payload = cd.pop("_orgs_payload", [])
             try:
@@ -1635,11 +1635,10 @@ async def persist_persons(
                 logger.error(f"Error creating person {cd.get('input_name')}: {exc}")
                 continue
             await _apply_person_org_relations(
-                person_obj, orgs_payload, OrganizationModel
+                person_obj, orgs_payload, OrganizationModel, session
             )
 
-    # Update
-    async for session in get_session():
+        # Update
         for ud in to_update:
             orgs_payload = ud.pop("_orgs_payload", [])
             input_name = ud.pop("input_name")
@@ -1654,7 +1653,7 @@ async def persist_persons(
                             setattr(person_obj, k, v)
                     await session.commit()
                     await _apply_person_org_relations(
-                        person_obj, orgs_payload, OrganizationModel
+                        person_obj, orgs_payload, OrganizationModel, session
                     )
             except Exception as exc:  # pragma: no cover
                 logger.error(f"Error updating person {input_name}: {exc}")
@@ -1666,91 +1665,89 @@ async def _apply_person_org_relations(
     person_obj: Person,
     orgs_payload: dict[str, str],
     OrganizationModel: type[Organization],
+    session,
 ):
     if not person_obj or not orgs_payload:
         return
-    async for session in get_session():
-        for org in orgs_payload:
-            if not isinstance(org, dict):
-                continue
-            raw_abbr = org.get("abbr") or org.get("abbreviation") or org.get("name")
-            name = org.get("name") or raw_abbr
-            if not raw_abbr:
-                continue
-            full_abbr = raw_abbr  # provided chain (e.g. ET-CEM-MD)
-            base_abbr = full_abbr.split("-")[-1] if full_abbr else full_abbr
-            hierarchy_level = full_abbr.count("-") + 1 if full_abbr else 1
+    for org in orgs_payload:
+        if not isinstance(org, dict):
+            continue
+        raw_abbr = org.get("abbr") or org.get("abbreviation") or org.get("name")
+        name = org.get("name") or raw_abbr
+        if not raw_abbr:
+            continue
+        full_abbr = raw_abbr  # provided chain (e.g. ET-CEM-MD)
+        base_abbr = full_abbr.split("-")[-1] if full_abbr else full_abbr
+        hierarchy_level = full_abbr.count("-") + 1 if full_abbr else 1
 
-            # Prefer lookup by full_abbreviation (unique); fallback to base abbreviation
-            result = await session.execute(
-                select(Organization).where(Organization.full_abbreviation == full_abbr)
-            )
-            org_obj = result.scalar_one_or_none()
-            if not org_obj:
-                try:
-                    result = await session.execute(
-                        select(Organization).where(
-                            Organization.abbreviation == base_abbr
-                        )
-                    )
-                    org_obj = result.scalar_one_or_none()
-                except Exception:
-                    # probably multiple with the same 'abbreviation'
-                    # instead filter on abbreviation and hierarchy_level
-                    result = await session.execute(
-                        select(Organization).where(
-                            (Organization.full_abbreviation == full_abbr)
-                            & (Organization.name == name)
-                        )
-                    )
-                    org_obj_filtered = result.scalars().all()
-                    # if exactly one match, use it
-                    if not org_obj_filtered:
-                        org_obj = None
-                    elif len(org_obj_filtered) == 1:
-                        org_obj = org_obj_filtered[0]
-                    else:
-                        logger.error(
-                            f"Found multiple organizations matching abbreviation='{base_abbr}', hierarchy_level={hierarchy_level}, name='{name}'; cannot disambiguate, skipping"
-                        )
-                        org_obj = None
-            if not org_obj:
-                try:
-                    org_obj = Organization(
-                        parent_organization=None,
-                        hierarchy_level=hierarchy_level,
-                        name=name,
-                        abbreviation=base_abbr,
-                        full_abbreviation=full_abbr,
-                    )
-                    session.add(org_obj)
-                    await session.commit()
-                except Exception as exc:  # pragma: no cover
-                    # Retry fetch in case of race creating same full_abbreviation
-                    result = await session.execute(
-                        select(Organization).where(
-                            Organization.full_abbreviation == full_abbr
-                        )
-                    )
-                    existing_retry = result.scalar_one_or_none()
-                    if existing_retry:
-                        org_obj = existing_retry
-                    else:
-                        logger.debug(
-                            f"Could not create organization '{full_abbr}' for person {person_obj.input_name}: {exc}"
-                        )
-                        continue
+        # Prefer lookup by full_abbreviation (unique); fallback to base abbreviation
+        result = await session.execute(
+            select(Organization).where(Organization.full_abbreviation == full_abbr)
+        )
+        org_obj = result.scalar_one_or_none()
+        if not org_obj:
             try:
-                # Add organization to person's organizations
-                # Note: orgs relationship not implemented in SQLAlchemy models yet
-                # if org_obj not in person_obj.orgs:
-                #     person_obj.orgs.append(org_obj)
-                #     await session.commit()
-                pass
-            except Exception as exc:  # pragma: no cover
-                logger.debug(
-                    f"Could not add org '{full_abbr}' to person {person_obj.input_name}: {exc}"
+                result = await session.execute(
+                    select(Organization).where(Organization.abbreviation == base_abbr)
                 )
+                org_obj = result.scalar_one_or_none()
+            except Exception:
+                # probably multiple with the same 'abbreviation'
+                # instead filter on abbreviation and hierarchy_level
+                result = await session.execute(
+                    select(Organization).where(
+                        (Organization.full_abbreviation == full_abbr)
+                        & (Organization.name == name)
+                    )
+                )
+                org_obj_filtered = result.scalars().all()
+                # if exactly one match, use it
+                if not org_obj_filtered:
+                    org_obj = None
+                elif len(org_obj_filtered) == 1:
+                    org_obj = org_obj_filtered[0]
+                else:
+                    logger.error(
+                        f"Found multiple organizations matching abbreviation='{base_abbr}', hierarchy_level={hierarchy_level}, name='{name}'; cannot disambiguate, skipping"
+                    )
+                    org_obj = None
+        if not org_obj:
+            try:
+                org_obj = Organization(
+                    parent_organization=None,
+                    hierarchy_level=hierarchy_level,
+                    name=name,
+                    abbreviation=base_abbr,
+                    full_abbreviation=full_abbr,
+                )
+                session.add(org_obj)
+                await session.commit()
+            except Exception as exc:  # pragma: no cover
+                # Retry fetch in case of race creating same full_abbreviation
+                result = await session.execute(
+                    select(Organization).where(
+                        Organization.full_abbreviation == full_abbr
+                    )
+                )
+                existing_retry = result.scalar_one_or_none()
+                if existing_retry:
+                    org_obj = existing_retry
+                else:
+                    logger.debug(
+                        f"Could not create organization '{full_abbr}' for person {person_obj.input_name}: {exc}"
+                    )
+                    continue
+        try:
+            # Add organization to person's organizations
+            # Note: orgs relationship not implemented in SQLAlchemy models yet
+            # if org_obj not in person_obj.orgs:
+            #     person_obj.orgs.append(org_obj)
+            #     await session.commit()
+            pass
+        except Exception as exc:  # pragma: no cover
+            logger.debug(
+                f"Could not add org '{full_abbr}' to person {person_obj.input_name}: {exc}"
+            )
 
 
 async def update_workflow_status_from_db(settings: Settings) -> None:
@@ -1760,14 +1757,6 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
     if a file does not exist, also set it to Done, etc.
     """
     await ensure_db_inited(settings)
-    # grab all items with non-Done workflow status
-    async for session in get_session():
-        result = await session.execute(
-            select(CopyrightItem).where(
-                CopyrightItem.workflow_status != WorkflowStatus.Done
-            )
-        )
-        items = result.scalars().all()
 
     DONE_MANUAL_CLASSIFICATIONS = [
         Classification.OPEN_ACCESS.value,
@@ -1777,29 +1766,73 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
         Classification.EIGEN_MATERIAAL.value,
     ]
 
-    if not items:
-        logger.info("No items to update workflow status for.")
-        return
-    logger.info(f"Updating workflow status for {len(items)} items...")
-    updated_count = 0
     async for session in get_session():
-        for item in items:
-            if item.file_exists is False:
-                item.workflow_status = WorkflowStatus.Done
-                await session.commit()
+        result = await session.execute(
+            text(
+                """
+                SELECT material_id, period, department, course_code, course_name, url, filename, title, owner, filetype, classification, ml_prediction, manual_classification, manual_identifier, v2_manual_classification, v2_overnamestatus, v2_lengte, scope, remarks, auditor, last_change, status, isbn, doi, in_collection, pagecount, wordcount, picturecount, author, publisher, reliability, pages_x_students, count_students_registered, filehash, last_scan_date_university, last_scan_date_course, retrieved_from_copyright_on, workflow_status, possible_fine, infringement, file_exists, last_canvas_check, canvas_course_id, faculty_id, is_duplicate
+                FROM copyright_data
+                WHERE workflow_status != 'Done'
+                """
+            )
+        )
+        items = result.fetchall()
+
+        if not items:
+            logger.info("No items to update workflow status for.")
+            return
+        logger.info(f"Updating workflow status for {len(items)} items...")
+        updated_count = 0
+        for row in items:
+            # Access columns by index from the raw SQL result
+            material_id = row[0]  # material_id is first column
+            file_exists = row[40]  # file_exists column index
+            manual_classification = row[12]  # manual_classification column index
+
+            if file_exists is False:
+                # Update using raw SQL
+                await session.execute(
+                    text(
+                        """
+                        UPDATE copyright_data
+                        SET workflow_status = 'Done'
+                        WHERE material_id = :material_id
+                        """
+                    ),
+                    {"material_id": material_id},
+                )
                 updated_count += 1
                 continue
             if (
-                item.manual_classification
-                and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
+                manual_classification
+                and manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
             ):
                 print(
-                    f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
+                    f"Updating item {material_id} to Done based on manual_classification '{manual_classification}'"
                 )
-                item.workflow_status = WorkflowStatus.Done
-                await session.commit()
+                # Update using raw SQL
+                await session.execute(
+                    text(
+                        """
+                        UPDATE copyright_data
+                        SET workflow_status = 'Done'
+                        WHERE material_id = :material_id
+                        """
+                    ),
+                    {"material_id": material_id},
+                )
                 updated_count += 1
                 continue
+
+        # Commit all changes at once
+        try:
+            await session.commit()
+        except Exception as exc:
+            logger.error(f"Failed to commit workflow status updates: {exc}")
+            await session.rollback()
+            return
+
+        logger.info(f"Updated workflow status for {updated_count} items.")
 
 
 async def map_v1_to_v2_classifications(settings: Settings) -> None:
@@ -1811,24 +1844,6 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
     # select all items:
     # - without a v2 classification (null or empty)
     await ensure_db_inited(settings)
-    async for session in get_session():
-        result = await session.execute(
-            select(CopyrightItem).where(
-                (CopyrightItem.v2_manual_classification.is_(None))
-                | (CopyrightItem.v2_manual_classification == ClassificationV2.ONBEKEND)
-            )
-        )
-        selected_items = result.scalars().all()
-
-    if not selected_items:
-        logger.info("No items to map v1 to v2 classifications for.")
-        return
-    # add mapping logic here, see add_v2_classification for reference
-    # relevant fields on CopyrightItem:
-    # - manual_classification (v1)
-    # - v2_manual_classification
-    # - v2_lengte
-    # - v2_overnamestatus
 
     # perform mapping using the same lookup as the old DataFrame-based helper
     from easy_access.db.enums import CLASSIFICATION_MAPPING_V1_TO_V2, Classification
@@ -1836,7 +1851,30 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
     mapped_count = 0
     failed_count = 0
 
-    async for session in get_session():
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT material_id, period, department, course_code, course_name, url, filename, title, owner, filetype, classification, ml_prediction, manual_classification, manual_identifier, v2_manual_classification, v2_overnamestatus, v2_lengte, scope, remarks, auditor, last_change, status, isbn, doi, in_collection, pagecount, wordcount, picturecount, author, publisher, reliability, pages_x_students, count_students_registered, filehash, last_scan_date_university, last_scan_date_course, retrieved_from_copyright_on, workflow_status, possible_fine, infringement, file_exists, last_canvas_check, canvas_course_id, faculty_id, is_duplicate
+                FROM copyright_data
+                WHERE v2_manual_classification IS NULL OR v2_manual_classification = 'Onbekend'
+                """
+            )
+        )
+        rows = result.fetchall()
+        selected_items = []
+        for row in rows:
+            # Convert row to CopyrightItem-like object
+            item = type("CopyrightItem", (), {})()
+            for i, col in enumerate(result.keys()):
+                setattr(item, col, row[i])
+            selected_items.append(item)
+
+        if not selected_items:
+            logger.info("No items to map v1 to v2 classifications for.")
+            return
+
         for item in selected_items:
             try:
                 current = item.manual_classification or "onbekend"
@@ -1861,13 +1899,21 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 item.v2_lengte = mapped.length
                 item.v2_overnamestatus = mapped.overname_status
 
-                await session.commit()
+                # Don't commit here - we'll commit all changes at once
                 mapped_count += 1
             except Exception as exc:
                 logger.error(
                     f"Failed to map v1->v2 classification for material_id={getattr(item, 'material_id', None)}: {exc}"
                 )
                 failed_count += 1
+
+        # Commit all changes at once
+        try:
+            await session.commit()
+        except Exception as exc:
+            logger.error(f"Failed to commit v1->v2 classification mappings: {exc}")
+            await session.rollback()
+            return
 
     logger.info(
         f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count} (out of {len(selected_items)})"

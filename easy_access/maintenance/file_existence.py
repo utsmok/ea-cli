@@ -413,11 +413,12 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
         try:
             async for session in get_session():
                 for result in results:
+                    file_exists_int = 1 if result["file_exists"] else 0
                     await session.execute(
                         update(CopyrightItem)
                         .where(CopyrightItem.material_id == result["material_id"])
                         .values(
-                            file_exists=result["file_exists"],
+                            file_exists=file_exists_int,
                             last_canvas_check=result["last_canvas_check"],
                             canvas_course_id=result["course_id"],
                         )
@@ -432,7 +433,7 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
         async for session in get_session():
             for result in results:
                 material_id = result["material_id"]
-                file_exists = result["file_exists"]
+                file_exists_int = 1 if result["file_exists"] else 0
                 last_canvas_check = result["last_canvas_check"]
                 canvas_course_id = result["course_id"]
 
@@ -440,7 +441,7 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
                     update(CopyrightItem)
                     .where(CopyrightItem.material_id == material_id)
                     .values(
-                        file_exists=file_exists,
+                        file_exists=file_exists_int,
                         last_canvas_check=last_canvas_check,
                         canvas_course_id=canvas_course_id,
                     )

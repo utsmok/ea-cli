@@ -16,7 +16,7 @@ import httpx
 import Levenshtein
 from bs4 import Tag
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import close_connections, ensure_db_inited
@@ -27,7 +27,7 @@ from easy_access.db.sa_models import (
     MissingCourse,
     Person,
 )
-from easy_access.db.session import get_session
+from easy_access.db.session import get_session, get_session_factory
 from easy_access.settings import Settings
 from easy_access.utils import determine_course_code, safe_int
 
@@ -42,7 +42,8 @@ async def gather_target_course_codes(settings: Settings) -> set[int]:
     logger.info("Gathering target course codes for enrichment...")
 
     # Query all unique course codes from copyright items
-    async for session in get_session():
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         result = await session.execute(select(CopyrightItem).distinct())
         items = result.scalars().all()
     all_course_codes: set[str] = set()
@@ -270,15 +271,29 @@ async def fetch_and_parse_courses(
                         logger.warning(f"No data found for course {course_code}")
                         # Upsert MissingCourse record (touch modified_at)
                         try:
-                            existing = await MissingCourse.get_or_none(
-                                cursuscode=course_code
-                            )
-                            if existing:
-                                await MissingCourse.filter(
-                                    cursuscode=course_code
-                                ).update(cursuscode=course_code)
-                            else:
-                                await MissingCourse.create(cursuscode=course_code)
+                            async with get_session_factory()() as session:
+                                # Check if exists
+                                result = await session.execute(
+                                    select(MissingCourse).where(
+                                        MissingCourse.cursuscode == course_code
+                                    )
+                                )
+                                existing = result.scalar_one_or_none()
+                                if existing:
+                                    # Update modified_at
+                                    await session.execute(
+                                        update(MissingCourse)
+                                        .where(MissingCourse.cursuscode == course_code)
+                                        .values(cursuscode=course_code)
+                                    )
+                                else:
+                                    # Insert new record
+                                    await session.execute(
+                                        insert(MissingCourse).values(
+                                            cursuscode=course_code
+                                        )
+                                    )
+                                await session.commit()
                         except Exception:
                             logger.debug(
                                 f"Could not record missing course {course_code}"
