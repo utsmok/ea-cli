@@ -4,7 +4,7 @@ import sys
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -25,11 +25,32 @@ config = context.config
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        fileConfig(config.config_file_name)
 
 
 def run_migrations_online() -> None:
     cfg_section = config.get_section(config.config_ini_section) or {}
+    # allow a sqlite fallback for local autogenerate without Postgres/docker
+    url = cfg_section.get("sqlalchemy.url") or ""
+
+    if url.startswith("sqlite"):
+        # use sync engine for sqlite autogenerate
+        sync_engine = engine_from_config(
+            cfg_section, prefix="sqlalchemy.", poolclass=pool.NullPool
+        )
+        with sync_engine.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+        return
+
     connectable = async_engine_from_config(
         cfg_section, prefix="sqlalchemy.", poolclass=pool.NullPool
     )

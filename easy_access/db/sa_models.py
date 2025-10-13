@@ -21,7 +21,7 @@ class Organization(Base):
     )
     hierarchy_level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     name: Mapped[str] = mapped_column(String(2048), index=True)
-    abbreviation: Mapped[str] = mapped_column(String(255), index=True)
+    abbreviation: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_abbreviation: Mapped[str] = mapped_column(String(2048), unique=True)
 
     __table_args__ = (

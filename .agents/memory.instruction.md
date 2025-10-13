@@ -16,13 +16,13 @@ applyTo: '**'
 - Key components:
   - `pipeline.py`: async pipeline stages and sync wrappers.
   - `settings.py`: dataclasses (`Settings`, `EasyAccessSettings`), YAML parsing, logger setup.
-  - `db/`: Tortoise ORM models and DB helpers (ingest/update/retrieve/relations).
+  - `db/`: Tortoise ORM models and DB helpers (ingest/update/retrieve/relations). **New: SQLAlchemy models in `sa_models.py`, session management in `session.py`, base in `models_base.py`.**
   - `enrichment/`: OSIRIS enrichment and PDF-backed enrichment helpers.
   - `sheets/`: Excel sheet builders, backups, overviews and export orchestration.
   - `maintenance/`: Canvas file existence checks, v1 ingestion helpers, cleanup utilities.
   - `pdf/`: Canvas downloads, extraction/parsing, and PDF-related models.
 - Configuration: `settings.yaml` at repo root is authoritative; per-faculty and per-run overrides supported.
-- DB: SQLite (default `db.sqlite3`) with Tortoise ORM; several DB snapshots in repo for restoration/testing.
+- DB: SQLite (default `db.sqlite3`) with Tortoise ORM; several DB snapshots in repo for restoration/testing. **Migration in progress to PostgreSQL 18 with SQLAlchemy 2.0 (async) and Alembic migrations.**
 - Performance: uses bulk DB ops, `polars` for DataFrame work, TTL policies, semaphores and async concurrency.
 
 ## Solutions & common patterns
