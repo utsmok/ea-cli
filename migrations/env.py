@@ -14,6 +14,12 @@ try:
     from easy_access.db.models_base import metadata as target_metadata
 except Exception:  # pragma: no cover - keep imports tolerant during scaffolding
     target_metadata = None
+else:
+    # Import SA models to ensure tables are registered on Base.metadata
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        import easy_access.db.sa_models  # noqa: F401 - registers models on import
 
 config = context.config
 
