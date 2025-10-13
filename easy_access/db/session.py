@@ -35,13 +35,27 @@ def init_db(settings_or_url: Settings | str, *, echo: bool = False) -> None:
         db_url = settings_or_url
     else:
         # It's a Settings object - construct PostgreSQL URL
-        # For now, use environment variable or default
+        # Check environment variable, then .env file, then default
         from os import environ
+        from pathlib import Path
 
-        db_url = environ.get(
-            "DATABASE_URL",
-            "postgresql+asyncpg://postgres:postgres@localhost:5432/ea_db",
-        )
+        db_url = environ.get("DATABASE_URL")
+
+        # If not in environment, try to load from .env file
+        if not db_url:
+            env_file = Path(".env")
+            if env_file.exists():
+                for line in env_file.read_text().splitlines():
+                    line = line.strip()
+                    if line.startswith("DATABASE_URL="):
+                        db_url = line.split("=", 1)[1].strip()
+                        break
+
+        # Fall back to default matching docker-compose.postgres.yml
+        if not db_url:
+            db_url = (
+                "postgresql+asyncpg://easyaccess:easyaccess@localhost:5432/easyaccess"
+            )
 
     _engine = create_async_engine(db_url, echo=echo)
     _SessionFactory = async_sessionmaker(_engine, expire_on_commit=False)
