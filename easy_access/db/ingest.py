@@ -4,11 +4,14 @@ functions to ingest new data into the database
 
 import polars as pl
 from loguru import logger
-from tortoise import Tortoise
 
-from easy_access.db.base import (
-    create,
-    ensure_db_inited,
+from easy_access.db.base import create, ensure_db_inited
+from easy_access.db.compat import (
+    all_values,
+    bulk_create,
+    count,
+    get_or_create,
+    get_or_none,
 )
 from easy_access.db.models import (
     PDF,
@@ -19,11 +22,8 @@ from easy_access.db.models import (
     StagedCopyrightItem,
     StagedFacultyUpdate,
 )
-from easy_access.settings import (
-    DirSetting,
-    Settings,
-    SettingsFaculty,
-)
+from easy_access.db.session import shutdown_db
+from easy_access.settings import DirSetting, Settings, SettingsFaculty
 from easy_access.utils import File, standardize_dataframe
 
 
@@ -33,7 +33,9 @@ async def load_org_data_from_settings(settings: Settings) -> None:
     """
     faculties: list[SettingsFaculty] = settings.university_settings.faculties
     # first retrieve or create the university org
-    university, _ = await Organization.get_or_create(
+    university, _ = await get_or_create(
+        Organization,
+        abbreviation="UT",
         defaults={
             "name": "University of Twente",
             "abbreviation": "UT",
@@ -41,11 +43,12 @@ async def load_org_data_from_settings(settings: Settings) -> None:
             "parent_organization": None,
             "hierarchy_level": 0,
         },
-        abbreviation="UT",
     )
     await ensure_db_inited(settings)
     for faculty in faculties:
-        faculty_obj, _ = await Faculty.get_or_create(
+        faculty_obj, _ = await get_or_create(
+            Faculty,
+            abbreviation=faculty.abbreviation,
             defaults={
                 "name": faculty.name,
                 "abbreviation": faculty.abbreviation,
@@ -53,10 +56,9 @@ async def load_org_data_from_settings(settings: Settings) -> None:
                 "parent_organization": university,
                 "hierarchy_level": 1,
             },
-            abbreviation=faculty.abbreviation,
         )
         progamme_list = []
-        existing_programme_names = await Programme().all().values("name")
+        existing_programme_names = await all_values(Programme, "name")
         existing_programme_names = {p["name"] for p in existing_programme_names}
         for programme in faculty.programmes:
             if programme.name in existing_programme_names:
@@ -98,7 +100,7 @@ async def load_org_data_from_settings(settings: Settings) -> None:
             }
             progamme_list.append(programme_dict)
 
-        await Programme.bulk_create(objects=[Programme(**p) for p in progamme_list])
+        await bulk_create(Programme, rows=progamme_list)
 
 
 async def load_base_data(settings: Settings) -> None:
@@ -110,8 +112,8 @@ async def load_base_data(settings: Settings) -> None:
     try:
         await load_org_data_from_settings(settings=settings)
 
-        faculty_count = await Faculty.all().count()
-        programme_count = await Programme.all().count()
+        faculty_count = await count(Faculty)
+        programme_count = await count(Programme)
         logger.success(
             f"# of Faculties present in DB after load_org_data: {faculty_count}"
         )
@@ -122,7 +124,7 @@ async def load_base_data(settings: Settings) -> None:
     except Exception as e:
         logger.warning(f"Error loading base data: {e}")
 
-    await Tortoise.close_connections()
+    await shutdown_db()
 
 
 async def load_pdfs(settings: Settings) -> None:
@@ -151,7 +153,7 @@ async def load_pdfs(settings: Settings) -> None:
     if not pdf_files:
         logger.warning("No PDF files found; data not loaded to DB.")
         return
-    existing_pdfs_mat_ids = await PDF.all().values("material_id")
+    existing_pdfs_mat_ids = await all_values(PDF, "material_id")
 
     pdf_files = {
         k: v
@@ -160,7 +162,7 @@ async def load_pdfs(settings: Settings) -> None:
     }
     pdf_dicts = []
     for mat_id, pdf_file in pdf_files.items():
-        related_item = await CopyrightItem.get_or_none(material_id=int(mat_id))
+        related_item = await get_or_none(CopyrightItem, material_id=int(mat_id))
         if not related_item:
             logger.warning(
                 f"No related item found for pdf with material_id {mat_id}. Skipping."
@@ -178,9 +180,9 @@ async def load_pdfs(settings: Settings) -> None:
         pdf_dicts.append(pdf_dict)
 
     logger.info(f"Creating {len(pdf_dicts)} new PDF objects in DB.")
-    await PDF.bulk_create(objects=[PDF(**p) for p in pdf_dicts])
+    await bulk_create(PDF, rows=pdf_dicts)
 
-    await Tortoise.close_connections()
+    await shutdown_db()
 
 
 async def load_raw_copyright_data_to_staging(
@@ -191,7 +193,6 @@ async def load_raw_copyright_data_to_staging(
     """
     await ensure_db_inited(settings)
     items = standardize_dataframe(data).to_dicts()
-    staged_items = [StagedCopyrightItem(**item) for item in items]
 
     # Define fields to update on conflict (all fields except primary key)
     update_fields = [
@@ -230,8 +231,9 @@ async def load_raw_copyright_data_to_staging(
         "file_exists",
     ]
 
-    await StagedCopyrightItem.bulk_create(
-        staged_items,
+    await bulk_create(
+        StagedCopyrightItem,
+        rows=items,
         on_conflict=["material_id"],
         update_fields=update_fields,
     )
@@ -248,9 +250,9 @@ async def load_faculty_updates_to_staging(
         ["material_id", "manual_classification", "remarks", "workflow_status"]
     )
     items = standardize_dataframe(data).to_dicts()
-    staged_items = [StagedFacultyUpdate(**item) for item in items]
-    await StagedFacultyUpdate.bulk_create(
-        staged_items,
+    await bulk_create(
+        StagedFacultyUpdate,
+        rows=items,
         on_conflict=["material_id"],
         update_fields=["manual_classification", "remarks", "workflow_status"],
     )

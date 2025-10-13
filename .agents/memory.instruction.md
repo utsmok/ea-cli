@@ -171,7 +171,7 @@ These notes are reflected in the "Files inspected" and the utilities / schema / 
 - Alembic migrations location: `migrations/` in the repo root
 - Test scaffold for this migration: skip (user requested no test scaffold)
 
-### Migration Progress & Validation (Oct 13, 2025)
+### Migration Progress & Validation (Oct 13, 2025 - Updated Session 2)
 
 **Completed Phases:**
 - Phase 1: Dependencies, Docker environment, .env setup ✅
@@ -190,7 +190,52 @@ These notes are reflected in the "Files inspected" and the utilities / schema / 
   - **Data:** Identical except for expected ordering differences in aggregated strings (no ORDER BY in STRING_AGG/GROUP_CONCAT)
 - **Conclusion:** Migration successful - all data integrity preserved.
 
-**Pending:** Phase 6 - App refactor (replace Tortoise init, convert db modules to use SQLAlchemy via compat shim)
+**Phase 6 - Application Code Migration (In Progress - 29% Complete):**
+
+**✅ Completed Modules (4/14):**
+1. **compat.py** - Comprehensive compatibility layer with 20+ functions
+   - All Tortoise patterns have SQLAlchemy equivalents
+   - Key functions: bulk_create/bulk_update (with upsert), get_or_create, update_or_create, transaction context, filter/count helpers
+   - Handles race conditions, batching, PostgreSQL-specific upserts
+
+2. **session.py** - Async session management
+   - Modified init_db() to accept Settings object
+   - Extracts DATABASE_URL from environment
+   - Provides get_session() async generator pattern
+
+3. **base.py** - Database initialization
+   - Converted from Tortoise.init() to SQLAlchemy init_db()
+   - Replaced generate_schemas() with Base.metadata.create_all()
+   - Minor cleanup pending: copyright_item_from_dict() type hint
+
+4. **ingest.py** - Data ingestion (all 5 functions)
+   - load_org_data_from_settings(), load_base_data(), load_pdfs(), load_raw_copyright_data_to_staging(), load_faculty_updates_to_staging()
+   - All Tortoise calls replaced with compat layer functions
+   - 3 minor non-critical lint warnings remain (type checking)
+
+**🔄 In Progress (1/14):**
+5. **relations.py** - M2M relationship management (500+ lines)
+   - Conversion guide created in `.agents/relations_conversion_guide.md`
+   - Needs: selectinload for prefetch, association table inserts for M2M, transaction context
+   - Functions: link_courses(), link_persons_to_courses(), match_v1_to_copyright_items()
+
+**📋 Remaining Modules (9/14):**
+6. **update.py** - Complex merge logic (1,734 lines) - highest priority
+7. **retrieve.py** - Mixed Tortoise/SQLAlchemy (827 lines) - cleanup mostly
+8. **pdf/download.py** - Simple CRUD (straightforward)
+9. **pdf/parse.py** - Simple CRUD (straightforward)
+10. **enrichment/osiris.py** - M2M operations (similar to relations.py)
+11. **maintenance/file_existence.py** - Simple CRUD (straightforward)
+12. **maintenance/v1_items.py** - Simple CRUD (straightforward)
+13. **Dependency cleanup** - Remove tortoise-orm from pyproject.toml
+14. **Documentation** - Update README.md with PostgreSQL setup instructions
+
+**Session 2 Deliverables:**
+- Created comprehensive conversion guide for relations.py with code examples
+- Updated memory and TODO tracking
+- Documented M2M patterns (association table inserts vs ORM .add())
+- Documented prefetch patterns (selectinload vs prefetch_related)
+- Preserved project state with detailed status documentation
 
 ### TortoiseORM Usage Analysis (Oct 13, 2025)
 

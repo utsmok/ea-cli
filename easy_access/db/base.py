@@ -5,17 +5,19 @@ Base & util functions for db-related operations
 import traceback
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 from sqlalchemy import Engine, create_engine
-from tortoise import Model, Tortoise
 
+from easy_access.db.compat import get_or_create
 from easy_access.db.enums import Classification, Status
 from easy_access.db.models import (
     CopyrightItem,
     Faculty,
     Organization,
 )
+from easy_access.db.session import get_engine, get_session, init_db, shutdown_db
 from easy_access.settings import Settings
 
 # Module-level flag to memoize initialization
@@ -23,7 +25,7 @@ _DB_INITIALIZED: bool = False
 
 
 async def ensure_db_inited(settings: Settings | None = None) -> bool | None:
-    """Ensure Tortoise ORM is initialized once per process.
+    """Ensure SQLAlchemy async engine is initialized once per process.
 
     This is a thin wrapper around :func:`init` that memoizes the initialized
     state so callers don't have to remember to call ``await init(...)``.
@@ -46,80 +48,132 @@ async def ensure_db_inited(settings: Settings | None = None) -> bool | None:
 
 
 def init_engine(settings: Settings) -> Engine:
+    """Create a synchronous SQLAlchemy engine for polars/pandas reads.
+
+    This is used by retrieve.py for read-heavy operations with polars.
+    For ORM operations, use the async session from session.py instead.
+    """
     db_file_path = settings.db_path
     return create_engine(f"sqlite:///{str(db_file_path)}")
 
 
 async def init(settings: Settings) -> bool | None:
+    """Initialize the async database connection and create tables if needed.
+
+    Args:
+        settings: Application settings containing DB configuration
+
+    Returns:
+        True if tables were created, None otherwise
+    """
+
+    from easy_access.db.models_base import Base
+
     db_file_path = settings.db_path
     create_tables = False
+
     if not db_file_path.exists():
         create_tables = True
 
-    # check if models.py file has been modified since last db modification
-    models_py_path = Path("easy_access/db/models.py")
+    # Check if models have been modified since last DB modification
+    models_py_path = Path("easy_access/db/sa_models.py")
     if models_py_path.exists() and db_file_path.exists():
         models_py_mod_time = models_py_path.stat().st_mtime
         db_mod_time = db_file_path.stat().st_mtime
         if models_py_mod_time > db_mod_time:
             create_tables = True
-    await Tortoise.init(
-        db_url=f"sqlite://{str(db_file_path)}",
-        modules={"models": ["easy_access.db.models"]},
-    )
-    await Tortoise.generate_schemas(safe=True)
+
+    # Initialize the async engine
+    init_db(settings)
+
     if create_tables:
-        await Tortoise.generate_schemas(safe=True)
+        # Create all tables using the engine directly
+        engine = get_engine()
+        if engine:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+
         # Also create the default faculties
         await init_faculties(settings)
         return True
 
+    return None
+
 
 async def init_faculties(settings: Settings) -> None:
-    # create university entry in 'Organization' table
-    main_uni, success = await Organization.get_or_create(
+    """Initialize default faculties in the database.
+
+    Args:
+        settings: Application settings containing university and faculty config
+    """
+    # Create university entry in 'Organization' table
+    main_uni, success = await get_or_create(
+        Organization,
         name=settings.university_settings.name,
-        abbreviation=settings.university_settings.abbreviation,
-        full_abbreviation=settings.university_settings.abbreviation,
-        hierarchy_level=0,
+        defaults={
+            "abbreviation": settings.university_settings.abbreviation,
+            "full_abbreviation": settings.university_settings.abbreviation,
+            "hierarchy_level": 0,
+        },
     )
-    # retrieve faculties from settings
+
+    # Retrieve faculties from settings
     faculties = settings.university_settings.faculties
 
     for faculty in faculties:
-        faculty_obj, success = await Faculty.get_or_create(
+        faculty_obj, success = await get_or_create(
+            Faculty,
             name=faculty.name,
-            abbreviation=faculty.abbreviation,
-            full_abbreviation=faculty.abbreviation,
-            hierarchy_level=1,
+            defaults={
+                "abbreviation": faculty.abbreviation,
+                "full_abbreviation": faculty.abbreviation,
+                "hierarchy_level": 1,
+            },
         )
+
+        # Set parent organization if not already set
         if not faculty_obj.parent_organization:
             faculty_obj.parent_organization = main_uni
-            await faculty_obj.save()
+            async for session in get_session():
+                async with session.begin():
+                    session.add(faculty_obj)
+                    await session.flush()
 
-    # also create an "Unmapped" faculty to use as a fallback
-    unmapped, success = await Faculty.get_or_create(
+    # Also create an "Unmapped" faculty to use as a fallback
+    unmapped, success = await get_or_create(
+        Faculty,
         name="Unmapped",
-        abbreviation="UNM",
-        full_abbreviation="UNM",
-        hierarchy_level=1,
+        defaults={
+            "abbreviation": "UNM",
+            "full_abbreviation": "UNM",
+            "hierarchy_level": 1,
+        },
     )
+
     if not unmapped.parent_organization:
         unmapped.parent_organization = main_uni
-        await unmapped.save()
+        async for session in get_session():
+            async with session.begin():
+                session.add(unmapped)
+                await session.flush()
 
 
 async def create() -> None:
-    await Tortoise.generate_schemas(safe=True)
+    """Create all database tables (deprecated - use init instead)."""
+    from easy_access.db.models_base import Base
+
+    async for session in get_session():
+        async with session.begin():
+            await session.run_sync(Base.metadata.create_all)
 
 
 async def close_connections() -> None:
-    """Close all Tortoise ORM database connections."""
-    await Tortoise.close_connections()
+    """Close all database connections."""
+    await shutdown_db()
 
 
 async def copyright_item_from_dict(
-    item: dict[str, str | Model | int | datetime | None],
+    item: dict[str, Any],
 ) -> CopyrightItem | None:
     """
     Turns a dict with data for a CopyrightItem into a CopyrightItem object

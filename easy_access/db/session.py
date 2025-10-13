@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -9,18 +10,38 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+if TYPE_CHECKING:
+    from easy_access.settings import Settings
+
 _engine: AsyncEngine | None = None
 _SessionFactory: async_sessionmaker[AsyncSession] | None = None
 
 
-def init_db(db_url: str, *, echo: bool = False) -> None:
+def init_db(settings_or_url: Settings | str, *, echo: bool = False) -> None:
     """Initialize the async engine and session factory for the application.
 
-    Call this once at application startup with the repository's DATABASE_URL.
+    Call this once at application startup with either a Settings object or DATABASE_URL.
+
+    Args:
+        settings_or_url: Either a Settings object or a database URL string
+        echo: Whether to echo SQL statements
     """
     global _engine, _SessionFactory
     if _engine is not None:
         return
+
+    # Extract DB URL from Settings if provided
+    if isinstance(settings_or_url, str):
+        db_url = settings_or_url
+    else:
+        # It's a Settings object - construct PostgreSQL URL
+        # For now, use environment variable or default
+        from os import environ
+
+        db_url = environ.get(
+            "DATABASE_URL",
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/ea_db",
+        )
 
     _engine = create_async_engine(db_url, echo=echo)
     _SessionFactory = async_sessionmaker(_engine, expire_on_commit=False)
@@ -48,7 +69,7 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     """Async context manager factory for working with sessions.
 
     Usage:
-        async with get_session() as session:
+        async for session in get_session():
             await session.execute(...)
     """
     factory = get_session_factory()
