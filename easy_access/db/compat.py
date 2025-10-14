@@ -85,6 +85,37 @@ async def bulk_create(
         async with session.begin():
             # Process in batches
             for batch in _batched(data, effective_batch_size):
+                # Normalize batch values: coerce booleans for integer-backed fields
+                try:
+                    # Batch can be a list of dicts
+                    if isinstance(batch, list):
+                        for row in batch:
+                            if isinstance(row, dict):
+                                if "in_collection" in row and isinstance(
+                                    row["in_collection"], bool
+                                ):
+                                    row["in_collection"] = (
+                                        1 if row["in_collection"] else 0
+                                    )
+                                if "file_exists" in row and isinstance(
+                                    row["file_exists"], bool
+                                ):
+                                    row["file_exists"] = 1 if row["file_exists"] else 0
+                    elif isinstance(batch, dict):
+                        if "in_collection" in batch and isinstance(
+                            batch["in_collection"], bool
+                        ):
+                            batch["in_collection"] = 1 if batch["in_collection"] else 0
+                        if "file_exists" in batch and isinstance(
+                            batch["file_exists"], bool
+                        ):
+                            batch["file_exists"] = 1 if batch["file_exists"] else 0
+                except Exception:
+                    # Never fail the whole batch normalization; log and continue
+                    logger.debug(
+                        "Failed to normalize boolean fields in batch; continuing without coercion"
+                    )
+
                 if on_conflict and update_fields:
                     # PostgreSQL upsert
                     stmt = pg_insert(model.__table__).values(batch)
