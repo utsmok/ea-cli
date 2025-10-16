@@ -2,7 +2,8 @@ compare/
 compare/*.*
 dashboard/*.*
 .kreuzberg/
-
+node_modules/
+.github/old
 # datafiles
 *.xls
 *.xlsx
