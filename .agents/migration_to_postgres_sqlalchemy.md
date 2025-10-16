@@ -297,7 +297,7 @@ Completion checklist
 - [x] Convert and test core models
 - [x] Configure Alembic and generate initial migration
 - [x] Migrate data and validate
-- [ ] Convert application code modules incrementally
+- [x] Convert application code modules incrementally
 - [ ] Run full tests and remove Tortoise
 
 ---
