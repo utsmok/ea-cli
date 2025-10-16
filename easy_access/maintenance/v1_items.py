@@ -107,6 +107,9 @@ def import_v1_sheets(
     sheets = {}
     weekly = 0
     for file in all_files:
+        if "overview" not in file.name:
+            continue
+
         try:
             sheets[file.name] = {
                 "complete_data": _read_excel_quiet(file, sheet_name="Complete data"),
@@ -127,21 +130,21 @@ def import_v1_sheets(
 
 def clean_and_cast_cols(
     df: pl.DataFrame, conflict_cols: list[tuple[str, str]]
-) -> pl.DataFrame:
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """
     Cleans and casts columns in the dataframe to appropriate types.
     Handles conflict columns by prioritizing non-null values from the first column.
     """
-
+    changes = pl.DataFrame()
     # first we normalize col values for key col manual_classification
-
+    material_col_pairs = {}
     man_class_cols: list[str] = []
     if "manual_classification" in df.columns:
         man_class_cols.append("manual_classification")
     if "manual_classification_entry" in df.columns:
         man_class_cols.append("manual_classification_entry")
     if not man_class_cols:
-        print("No manual_classification columns found in df.")
+        logger.info("No manual_classification columns found in df.")
     for col in man_class_cols:
         # all values in these cols should be a valid value in the Classification enum.
         # all lowercased strings.
@@ -149,7 +152,9 @@ def clean_and_cast_cols(
         # Possible values:
         # - Classification.[CATEGORY] (so the enum class+key as string, e.g. "Classification.ONBEKEND")
         # - anders and/or Classification.ANDERS: do not exist in this enum, translate to "onbekend"
-
+        logger.info(f"Before translation: {df.select(col).group_by(col).len().sort('len', descending=True)}")
+        # store pairs of material_id and col value for logging later
+        material_col_pairs['before']= df.select("material_id", col).with_columns(pl.col(col).alias('before'))
         ALLOWED_VALUES = {c.value.lower(): c.value for c in Classification}
         TRANSLATIONS = {
             "anders": "onbekend",
@@ -191,7 +196,8 @@ def clean_and_cast_cols(
         df = df.with_columns(
             pl.col(col).replace(TRANSLATIONS, default="onbekend").alias(col)
         )
-        print(f"After translation: {(df[col]).unique().sort().to_list()}")
+        logger.info(f"After translation: {df.select(col).group_by(col).len().sort('len', descending=True)}")
+        material_col_pairs['after'] = df.select("material_id", col).with_columns(pl.col(col).alias('after'))
         # check if any values are not in the allowed values
         values = (df[col]).to_list()
         invalid_values = {
@@ -199,6 +205,14 @@ def clean_and_cast_cols(
         }
         if invalid_values:
             logger.warning(f"Invalid values in {col}: {invalid_values}")
+
+        changes = material_col_pairs["after"].join(
+            material_col_pairs["before"], on="material_id"
+        ).filter(pl.col("before") != pl.col("after"))
+        grouped = changes.group_by('before', 'after').len().sort('len', descending=True)
+        logger.info(f"Found {len(changes)} changes in {col} values after translation.")
+        logger.info(f"Changes summary:\n{grouped}")
+
 
     for col_entry, col_base in conflict_cols:
         if col_base not in df.columns:
@@ -308,16 +322,16 @@ def clean_and_cast_cols(
                 )
             except Exception as e:
                 logger.error(f"Error parsing date column {col}: {e}")
-    return df
+    return df, changes
 
 
 def process_v1_sheet(
     filename: str,
     dfs: dict[str, pl.DataFrame],
     existing_item_ids: set[int] | list[int] | None = None,
-) -> pl.DataFrame:
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """
-    input: two dataframes from a signle v1-style sheet:
+    input: two dataframes from a single v1-style sheet:
         - complete_df: dataframe from the 'Complete data' sheet
         - entry_df: dataframe from the 'Data entry' sheet
 
@@ -352,6 +366,7 @@ def process_v1_sheet(
             ~pl.col("material_id").is_in(existing_item_ids)
         )
         if combined_df.is_empty():
+            logger.warning(f'empty combined df after filtering existing item_ids for {filename}')
             return combined_df
     # Col selection
     cols_to_keep = []
@@ -388,18 +403,18 @@ def process_v1_sheet(
         if col.endswith("_entry")
     ]
 
-    combined_df = clean_and_cast_cols(combined_df, conflict_cols)
+    combined_df, changes = clean_and_cast_cols(combined_df, conflict_cols)
 
     if details:
         logger.info(f"Details for {filename}:")
         print_details(combined_df)
-    return combined_df
+    return combined_df, changes
 
 
 def process_v1_sheets(
     extracted_sheets: dict[str, dict[str, pl.DataFrame]],
     existing_item_ids: set[int] | list[int] | None = None,
-) -> dict[str, pl.DataFrame]:
+) -> tuple[dict[str, pl.DataFrame], pl.DataFrame]:
     """
     input: dict of sheets as returned by import_v1_sheets()
 
@@ -411,10 +426,12 @@ def process_v1_sheets(
         filename: process_v1_sheet(filename, dfs, existing_item_ids)
         for filename, dfs in extracted_sheets.items()
     }
-
-    # filter out keys that have empty dataframes
-    return {k: v for k, v in results.items() if not v.is_empty()}
-
+    # unpack the tuple results, keep only non-empty dfs
+    res = {k: v[0] for k, v in results.items() if not v[0].is_empty()}
+    changes = {k: v[1] for k, v in results.items() if not v[1].is_empty()}
+    # append all changes to a single df and save to csv for inspection
+    all_changes = pl.concat(changes.values()) if changes else pl.DataFrame()
+    return res, all_changes
 
 def merge_all_sheets(
     processed_sheets: dict[str, pl.DataFrame],
@@ -470,32 +487,43 @@ async def ingest_v1_items(df: pl.DataFrame) -> None:
         await v1_CopyrightItem.update_or_create(**row)
 
 
-async def ingest_v1_data(settings: Settings, base_dir: Path) -> None:
+async def ingest_v1_data(settings: Settings, base_dir: Path, delete: bool=False) -> None:
     """
     given a base directory with subdirectories for each faculty containing v1 sheets,
     ingest all data into the database.
     """
     await ensure_db_inited(settings)
+    if delete:
+        await v1_CopyrightItem.all().delete()
     existing_v1_item_ids: list[int] = await v1_CopyrightItem.all().values_list(
         "material_id", flat=True
     )  # type: ignore
 
+
     individual_results = {}
     processed_results = {}
     final_results: dict[str, pl.DataFrame] = {}
+    changes_results = pl.DataFrame()
     for subdir in base_dir.iterdir():
         if subdir.is_dir():
             logger.info(f"Processing faculty directory: {subdir.name}")
 
             result = import_v1_sheets(subdir)
             individual_results[subdir.name] = result
-            final = process_v1_sheets(result, existing_v1_item_ids)
+            final, changes = process_v1_sheets(result, existing_v1_item_ids)
+            changes_results = pl.concat([changes_results, changes]) if not changes.is_empty() else changes_results
             if not final:
                 logger.info(f"No new items to process for {subdir.name}. Skipping.")
                 continue
             processed_results[subdir.name] = final
             main = merge_all_sheets(final)
             final_results[subdir.name] = main
+    grouped = changes_results.group_by(['before', 'after']).len().sort('len', descending=True)
+    logger.info(f"Total of {len(changes_results)} value changes across all sheets.")
+    logger.info(f"Changes summary:\n{grouped}")
+    changes_results.write_csv("v1_sheet_value_changes.csv")
+    grouped.write_csv("v1_sheet_value_changes_summary.csv")
+    logger.info(f"Saved all value changes to v1_sheet_value_changes.csv")
 
     for _faculty, df in final_results.items():
         await ingest_v1_items(df)
@@ -542,6 +570,16 @@ def print_details(combined_df: pl.DataFrame):
         )
         print("Samples:")
         print(unique[:5])
+
+    # now print the count of each value in 'manual_classification' col
+    if "manual_classification" in combined_df.columns:
+        logger.info("Manual classifications overiew:")
+        counts = (
+            combined_df.group_by("manual_classification")
+            .len()
+            .sort("len", descending=True)
+        )
+        logger.info(counts)
 
 
 def inspect_fields(complete_df: pl.DataFrame, entry_df: pl.DataFrame) -> pl.DataFrame:

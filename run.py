@@ -23,6 +23,7 @@ from loguru import logger
 
 from easy_access.db.base import close_connections
 from easy_access.settings import Settings
+from easy_access.utils import run_sync
 
 # Compatibility shim: some combinations of Typer and Click/Rich have a
 # small signature mismatch where Typer's rich help calls
@@ -307,8 +308,7 @@ def process_data(
                         logger.critical(
                             "Critical error in core stage. Aborting further processing."
                         )
-                        tool.close_connections()
-                        typer.Exit(1)
+                        break
                     else:
                         logger.warning(
                             f"Non-critical stage, skipping {stage_name} and moving on."
@@ -342,8 +342,8 @@ def update_from_v1(
     from easy_access.maintenance.v1_items import add_v1_hashes, ingest_v1_data
 
     async def run_ingest_pipeline(settings: Settings, path: Path):
-        await ingest_v1_data(settings, path)
-        await add_v1_hashes(settings)
+        await ingest_v1_data(settings, path, True)
+        #await add_v1_hashes(settings)
         await match_v1_to_copyright_items(settings)
         await map_v1_to_v2_classifications(settings)
         await update_workflow_status_from_db(settings)
@@ -353,7 +353,15 @@ def update_from_v1(
     logger.info(
         f"Running v1 to v2 update pipeline on sheets in: {path.resolve()}, {type(path)}"
     )
-    asyncio.run(run_ingest_pipeline(settings, path))
+    try:
+        asyncio.run(run_ingest_pipeline(settings, path))
+    except Exception as e:
+        logger.error(f"Error occurred during v1 to v2 update pipeline: {e}")
+
+        logger.info("Closing database connections...")
+        return run_sync(close_connections())
+
+
     logger.success("v1 to v2 update pipeline completed.")
     typer.Exit()
 

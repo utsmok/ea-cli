@@ -10,7 +10,9 @@ This module provides functions to export copyright data to various Excel formats
 All functions follow the new DB-first architecture and use the Settings system.
 """
 
+import csv
 from datetime import datetime
+from io import TextIOWrapper
 from pathlib import Path
 
 import polars as pl
@@ -176,6 +178,21 @@ async def export_faculty_sheets(
 
     return style_iter
 
+def add_table(fh: TextIOWrapper, update_stats:dict[str, dict[str, int]]) -> None:
+    """
+    Helper function to write parsed update data into a formatted table in a text file.
+    Used by export_faculty_workflow_files.
+    """
+    fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}':{' '}^{40}}")
+    fh.write(
+        f"\n{f'{"Sheet":{" "}<12}|{"Old":{" "}^{5}}|{"New":{" "}^{5}}|{"Δ":{" "}^{5}}':{' '}^{40}}"
+    )
+    fh.write(f"\n{f'{"-" * 12}+{"-" * 5}+{"-" * 5}+{"-" * 5}':{' '}^{40}}")
+    for bucket_name, stats in update_stats.items():
+        fh.write(
+            f"\n{f'{bucket_name:{" "}<12}|{stats["old"]:{" "}^{5}}|{stats["new"]:{" "}^{5}}|{stats["new"] - stats["old"]:^+5}':{' '}^{40}}"
+        )
+    fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}':{' '}^{40}}\n")
 
 async def export_faculty_workflow_files(
     settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
@@ -288,36 +305,102 @@ async def export_faculty_workflow_files(
                     logger.info(f"Protected {target_path.name}")
                 except Exception as e:
                     logger.warning(f"Failed to protect workbook {target_path}: {e}")
+        # Store update data
+        # 1. data in a simple csv file in the faculty_sheets root folder
+        # 2. a simple text file in each faculty folder summarizing the latest update(s)
 
-        # Create a simple text file indicating last update time
-        # first remove any existing update_info_*.txt files
+        # CSV file
+        # columns: timestamp, faculty, bucket, old, new, delta
+        # append to file if it exists, otherwise create with header
+        # only add rows if there was a change (delta != 0)
+
+        summary_file = settings.dirs[DirSetting.FACULTIES_DIR].full / "update_overview.csv"
+        mode = "a" if summary_file.exists() else "w"
+        diff = False
+        with summary_file.open(mode, newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            if mode == "w":
+                writer.writerow(["timestamp", "faculty", "bucket", "old", "new", "delta"])
+            for bucket_name, stats in update_stats.items():
+                if stats["new"] - stats["old"] != 0:
+                    diff = True
+                    writer.writerow([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        faculty,
+                        bucket_name,
+                        stats["old"],
+                        stats["new"],
+                        stats["new"] - stats["old"],
+                    ])
+
+        # Text files
+        # we always create a new file with the current timestamp in the name
+
+        # if a file already exists, and there is no diff, we keep the content of the file except:
+        #   add line: [sync @ timestamp]: No changes (before the table)
+        #   modify the Last sync with main database line to the current timestamp
+
+        # if there are changes, we recreate the entire file with the new stats table
+        file_contents = []
+        # read existing file content, store as list of lines, delete old file
         for file in faculty_dir.files:
             if file.name.startswith("update_info_") and file.extension == ".txt":
                 try:
+                    with file.path.open("r", encoding="utf-8") as fh:
+                        file_contents = fh.readlines()
                     file.path.unlink()
                 except Exception:
                     logger.debug(
                         f"Failed to remove old update info file {file.path}; continuing"
                     )
+        # now create a new one with current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         with (faculty_dir.full / f"update_info_{timestamp}.txt").open(
             "w", encoding="utf-8"
         ) as fh:
-            fh.write(f"\n{'Update information for':{' '}^{40}}\n{faculty:{' '}^{40}}")
-            fh.write(
-                f"\n{'Last sync with main database:':{' '}^{40}}\n{datetime.now().strftime('%Y-%m-%d -- %H:%M:%S'):{' '}^{40}}"
-            )
-            # write update stats
-            fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}':{' '}^{40}}")
-            fh.write(
-                f"\n{f'{"Sheet":{" "}<12}|{"Old":{" "}^{5}}|{"New":{" "}^{5}}|{"Δ":{" "}^{5}}':{' '}^{40}}"
-            )
-            fh.write(f"\n{f'{"-" * 12}+{"-" * 5}+{"-" * 5}+{"-" * 5}':{' '}^{40}}")
-            for bucket_name, stats in update_stats.items():
+            if not diff and file_contents:
+                # keep old content, but add a line about no changes
+                skip = False
+                syncstr = f"[{datetime.now().strftime('%Y-%m-%d')}]"
+                skip2 = False
+                for line in file_contents:
+                    if skip and skip2: # we are in the list of syncdates without changes
+                        if line.strip() == syncstr.strip(): # today is already there
+                            syncstr = ""  # only add once
+                            fh.write(line)
+                            continue
+                        if '[' in line: # another date line
+                            if syncstr: # add today's date line before the next date line
+                                fh.write(syncstr+"\n")
+                                syncstr = ""  # only add once
+                            fh.write(line) # write old date line
+                            continue
+                        else: # if no more date lines, we are done with this section
+                            if syncstr: # add sync line if not yet added
+                                fh.write(syncstr+"\n")
+                            skip = False
+                            skip2 = False
+                    if skip2: # header of list of syncs without changes
+                        fh.write(f"Syncs without changes:\n")
+                        skip = True
+                        continue
+                    if skip: # this should be the last sync date with changes
+                        fh.write(line)
+                        skip2 = True
+                        skip = False
+                        continue
+                    if "Last sync with main database" in line:
+                        fh.write(line) # write that line and start processing, see above
+                        skip = True
+                        continue
+                    else:
+                        fh.write(line)
+            else:
+                fh.write(f"\n{'Update information for':{' '}^{40}}\n{faculty:{' '}^{40}}")
                 fh.write(
-                    f"\n{f'{bucket_name:{" "}<12}|{stats["old"]:{" "}^{5}}|{stats["new"]:{" "}^{5}}|{stats["new"] - stats["old"]:^+5}':{' '}^{40}}"
-                )
-            fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}\n':{' '}^{40}}")
+                        f"\n{'Last sync with main database:':{' '}^{40}}\n{datetime.now().strftime('%Y-%m-%d -- %H:%M:%S'):{' '}^{40}}"
+                    )
+                add_table(fh, update_stats)
     return style_iter
 
 

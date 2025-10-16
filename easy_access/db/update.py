@@ -3,6 +3,7 @@ functions to update existing data in the database
 """
 
 import contextlib
+import re
 import traceback
 from datetime import UTC, date, datetime
 from enum import Enum, StrEnum
@@ -19,7 +20,12 @@ from easy_access.db.base import (
     copyright_item_from_dict,
     ensure_db_inited,
 )
-from easy_access.db.enums import Classification, ClassificationV2
+from easy_access.db.enums import (
+    CLASSIFICATION_MAPPING_V1_TO_V2,
+    Classification,
+    ClassificationMapping,
+    ClassificationV2,
+)
 from easy_access.db.models import (
     CopyrightItem,
     Course,
@@ -1658,7 +1664,6 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
             updated_count += 1
             continue
 
-
 async def map_v1_to_v2_classifications(settings: Settings) -> None:
     """
     uses the classification mapping to map manual_classification values from v1 items to v2 items
@@ -1671,8 +1676,8 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
     selected_items = await CopyrightItem.filter(
         Q(v2_manual_classification__isnull=True)
         | Q(v2_manual_classification=ClassificationV2.ONBEKEND)
-    ).all()
-
+    ).all().prefetch_related('v1_items', 'faculty')
+    logger.info(f"Mapping v1 to v2 classifications for {len(selected_items)} items...")
     if not selected_items:
         logger.info("No items to map v1 to v2 classifications for.")
         return
@@ -1684,43 +1689,103 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
     # - v2_overnamestatus
 
     # perform mapping using the same lookup as the old DataFrame-based helper
-    from easy_access.db.enums import CLASSIFICATION_MAPPING_V1_TO_V2, Classification
-
+    details = []
     mapped_count = 0
     failed_count = 0
-
+    modified_count = 0
+    unlinked_upd = 0
     async with in_transaction():
         for item in selected_items:
+            detaildict = {}
             try:
-                current = item.manual_classification or "onbekend"
+                input_val = item.manual_classification
+                if not isinstance(input_val, str):
+                    try:
+                        input_val = input_val.value
+                    except Exception:
+                        input_val = str(input_val)
+
+                current = input_val or "onbekend"
                 if not current or current == "-":
                     current = "onbekend"
 
                 # normalize common variations to improve enum lookup
                 if isinstance(current, str):
                     current = current.strip().lower()
-
                 # try to coerce to the v1 Classification enum; fall back to ONBEKEND
-                try:
-                    key = Classification(current)
-                except Exception:
-                    key = Classification.ONBEKEND
+                # use a match case statement for this.
+                # 1. exact match to enum values
+                # 2. match ignoring case
+                # 3. match ignoring underscores, hyphens, spaces, and case
+                # 4. default to ONBEKEND
+                match current:
+                    case val if val in {e.value for e in Classification}:
+                        key = Classification(val)
+                    case val if val.lower() in {e.value.lower() for e in Classification}:
+                        key = Classification(
+                            next(
+                                e.value
+                                for e in Classification
+                                if e.value.lower() == val.lower()
+                            )
+                        )
+                    case val if re.sub(r"[\s_-]", "", val.lower()) in {
+                        re.sub(r"[\s_-]", "", e.value.lower())
+                        for e in Classification
+                    }:
+                        key = Classification(
+                            next(
+                                e.value
+                                for e in Classification
+                                if re.sub(r"[\s_-]", "", e.value.lower())
+                                == re.sub(r"[\s_-]", "", val.lower())
+                            )
+                        )
+                    case _:
+                        key = Classification.ONBEKEND
 
                 mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
                 if not mapped:
                     mapped = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
 
-                item.v2_manual_classification = mapped.classification
-                item.v2_lengte = mapped.length
-                item.v2_overnamestatus = mapped.overname_status
+                current_v2_classification = item.v2_manual_classification.value
 
-                await item.save(
-                    update_fields=[
-                        "v2_manual_classification",
-                        "v2_lengte",
-                        "v2_overnamestatus",
-                    ]
-                )
+                if item.v2_manual_classification != mapped.classification:
+
+                    item.v2_manual_classification = mapped.classification
+                    item.v2_lengte = mapped.length
+                    item.v2_overnamestatus = mapped.overname_status
+                    faculty = item.faculty
+                    print(faculty, type(faculty))
+                    abbreviation = faculty.abbreviation
+                    print(abbreviation, type(abbreviation))
+                    v1_items = await item.v1_items.all()
+                    v1_id = None
+                    if v1_items:
+                        v1_id = v1_items[0].material_id
+                    if not v1_id:
+                        unlinked_upd += 1
+                    detaildict = {
+                        "material_id": item.material_id,
+                        "faculty": abbreviation,
+                        "v1_material_id": v1_id,
+                        "found_v1_classification": input_val,
+                        "v2_classification_before_update": current_v2_classification,
+                        "used_v1_classification": key.value,
+                        "mapped_v2_classification": mapped.classification.value,
+                        "mapped_v2_length": mapped.length.value,
+                        "mapped_v2_overname_status": mapped.overname_status.value,
+                    }
+                    details.append(detaildict)
+                    logger.debug(f"material_id {item.material_id}: [v1] {input_val} -> {current} -> {key.value} mapped to [v2] {mapped.classification}")
+                    await item.save(
+                        update_fields=[
+                            "v2_manual_classification",
+                            "v2_lengte",
+                            "v2_overnamestatus",
+                        ]
+                    )
+                    modified_count += 1
                 mapped_count += 1
             except Exception as exc:
                 logger.error(
@@ -1729,5 +1794,19 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 failed_count += 1
 
     logger.info(
-        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count} (out of {len(selected_items)})"
+        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count}, unlinked updates={unlinked_upd} (out of {len(selected_items)})"
     )
+    if len(details) > 0:
+        logger.debug(f"Stored parsed/mapped details to csv for inspection")
+        try:
+            pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
+        except Exception as exc:
+            details = [{a:str(b) for a,b in d.items()} for d in details]
+            try:
+                pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
+            except Exception as exc2:
+                logger.error(f"Could not write mapping details to csv: {exc2}")
+                if len(details) < 20:
+                    logger.debug(f"Mapping details: {details}")
+                else:
+                    logger.debug(f"Mapping details: {details[:20]} ... (truncated)")

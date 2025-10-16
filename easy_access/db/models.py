@@ -206,7 +206,7 @@ class CopyrightItem(Model, TimestampMixin):
     )  # if this item is a duplicate of another item -- determined by comparing PDFs
 
     pdf: fields.ReverseRelation["PDF"]
-
+    v1_items: fields.ReverseRelation["v1_CopyrightItem"]
     class Meta:
         table = "copyright_data"
 
