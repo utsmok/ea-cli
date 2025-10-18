@@ -68,8 +68,6 @@ ocr = [
     "paddleocr[doc-parser]",
     "gliner>=0.2.22",
     "semchunk>=3.2.3",
-    "paddlepaddle-gpu==3.2.0",
-    "safetensors"
 ]
 
 [tool.uv.sources]
@@ -80,12 +78,7 @@ torch = [
 torchvision = [
   { index = "pytorch-cu126" },
 ]
-paddlepaddle-gpu = [
-  { index = "paddlegpu" },
-]
-safetensors = [
-    { index = "safetensors"}
-]
+
 
 
 [[tool.uv.index]]
@@ -93,15 +86,6 @@ name = "pytorch-cu126"
 url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
-[[tool.uv.index]]
-name="paddlegpu"
-url="https://www.paddlepaddle.org.cn/packages/stable/cu126/"
-explicit=true
-
-[[tool.uv.index]]
-name = "safetensors"
-url = "https://paddle-whl.bj.bcebos.com/nightly/cu126/safetensors/safetensors-0.6.2.dev0-cp38-abi3-linux_x86_64.whl"
-explicit = true
 
 [tool.ruff]
 line-length = 88
