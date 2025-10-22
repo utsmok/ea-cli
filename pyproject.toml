@@ -65,7 +65,7 @@ ocr = [
     "torch",
     "torchvision",
     "pdf2image",
-    "paddleocr[all]>=3.2.0",
+    "paddleocr[doc-parser]",
     "gliner>=0.2.22",
     "semchunk>=3.2.3",
 ]
@@ -73,16 +73,17 @@ ocr = [
 [tool.uv.sources]
 ea-cli = { workspace = true }
 torch = [
-  { index = "pytorch-cu129"},
+  { index = "pytorch-cu126"},
 ]
 torchvision = [
-  { index = "pytorch-cu129" },
+  { index = "pytorch-cu126" },
 ]
+
 
 
 [[tool.uv.index]]
-name = "pytorch-cu129"
-url = "https://download.pytorch.org/whl/cu129"
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 

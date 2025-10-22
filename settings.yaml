@@ -36,9 +36,6 @@ data_settings:
     - name: "is_duplicate"
     - name: "url"
       is_url: true
-    - name: "course_link"
-      is_url: true
-      new_name: "view_in_canvas"
     - name: "file_exists"
       style:
         activate_on: ['"No"']
@@ -88,6 +85,9 @@ data_settings:
       new_name: "uploaded_by"
     - name: "author"
       new_name: "detected_pdf_author"
+    - name: "course_link"
+      is_url: true
+      new_name: "view_in_canvas"
     - name: "course_contacts_names"
     - name: "course_contacts_emails"
     - name: 'course_name'

@@ -237,6 +237,7 @@ data_settings:
 #    retrieved_from_copyright_on,
 #    workflow_status,
 #    faculty,
+#    course_link,
 #    course_contacts_faculties,
 #    course_contacts_names,
 #    course_contacts_emails,
