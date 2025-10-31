@@ -1727,7 +1727,7 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 if not key:
                     normalized = re.sub(r'[\s_-]', '', current)
                     key = NORMALIZED_TO_CLASSIFICATION.get(normalized)
-                
+
                 if not key:
                     key = Classification.ONBEKEND
 
