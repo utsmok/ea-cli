@@ -89,6 +89,13 @@ class ValidationError(MergeError):
 DEFAULT_RANK = 20
 MIN_CHANGES_THRESHOLD = 3
 
+# Pre-calculated lookup dictionaries for Classification enum normalization
+# Used in map_v1_to_v2_classifications to avoid recreating sets for each item
+LOWER_TO_CLASSIFICATION = {e.value.lower(): e for e in Classification}
+NORMALIZED_TO_CLASSIFICATION = {
+    re.sub(r'[\s_-]', '', e.value.lower()): e for e in Classification
+}
+
 
 class FieldComparisonStrategy:
     """Base class for field comparison strategies."""
@@ -1713,36 +1720,16 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 if isinstance(current, str):
                     current = current.strip().lower()
                 # try to coerce to the v1 Classification enum; fall back to ONBEKEND
-                # use a match case statement for this.
-                # 1. exact match to enum values
-                # 2. match ignoring case
-                # 3. match ignoring underscores, hyphens, spaces, and case
-                # 4. default to ONBEKEND
-                match current:
-                    case val if val in {e.value for e in Classification}:
-                        key = Classification(val)
-                    case val if val.lower() in {e.value.lower() for e in Classification}:
-                        key = Classification(
-                            next(
-                                e.value
-                                for e in Classification
-                                if e.value.lower() == val.lower()
-                            )
-                        )
-                    case val if re.sub(r"[\s_-]", "", val.lower()) in {
-                        re.sub(r"[\s_-]", "", e.value.lower())
-                        for e in Classification
-                    }:
-                        key = Classification(
-                            next(
-                                e.value
-                                for e in Classification
-                                if re.sub(r"[\s_-]", "", e.value.lower())
-                                == re.sub(r"[\s_-]", "", val.lower())
-                            )
-                        )
-                    case _:
-                        key = Classification.ONBEKEND
+                # 1. match ignoring case (current is already lowercase)
+                # 2. match ignoring underscores, hyphens, spaces, and case
+                # 3. default to ONBEKEND
+                key = LOWER_TO_CLASSIFICATION.get(current)
+                if not key:
+                    normalized = re.sub(r'[\s_-]', '', current)
+                    key = NORMALIZED_TO_CLASSIFICATION.get(normalized)
+                
+                if not key:
+                    key = Classification.ONBEKEND
 
                 mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
                 if not mapped:
