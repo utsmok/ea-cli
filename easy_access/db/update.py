@@ -91,9 +91,10 @@ MIN_CHANGES_THRESHOLD = 3
 
 # Pre-calculated lookup dictionaries for Classification enum normalization
 # Used in map_v1_to_v2_classifications to avoid recreating sets for each item
+_CLASSIFICATION_NORMALIZE_PATTERN = re.compile(r'[\s_-]')
 LOWER_TO_CLASSIFICATION = {e.value.lower(): e for e in Classification}
 NORMALIZED_TO_CLASSIFICATION = {
-    re.sub(r'[\s_-]', '', e.value.lower()): e for e in Classification
+    _CLASSIFICATION_NORMALIZE_PATTERN.sub('', e.value.lower()): e for e in Classification
 }
 
 
@@ -1725,7 +1726,7 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 # 3. default to ONBEKEND
                 key = LOWER_TO_CLASSIFICATION.get(current)
                 if not key:
-                    normalized = re.sub(r'[\s_-]', '', current)
+                    normalized = _CLASSIFICATION_NORMALIZE_PATTERN.sub('', current)
                     key = NORMALIZED_TO_CLASSIFICATION.get(normalized)
 
                 if not key:
