@@ -82,7 +82,7 @@ This repository contains the Easy Access Sheet Toolkit, a Python application wit
 
 ## Utilities & Common Helpers (from `easy_access/utils.py`)
 
-- **run_sync(coro)**: Async↔sync bridge that detects running event loop and, if present, executes the coroutine in a background thread via ThreadPoolExecutor to avoid "event loop already running" errors. Use this pattern for CLI wrappers.
+- **run_sync(coro)**: Async/sync bridge that detects running event loop and, if present, executes the coroutine in a background thread via ThreadPoolExecutor to avoid "event loop already running" errors. Use this pattern for CLI wrappers.
 - **safe_* helpers**: `safe_int`, `safe_float`, `safe_date`, `safe_enum`, `safe_compare_greater` — robust parsing helpers to normalize heterogeneous inputs from Excel/Canvas/OSIRIS
 - **determine_course_code(code, name)**: Heuristic parser to extract numeric Osiris course codes from Canvas course_code and course_name fields. It validates codes by being numeric and length >= 8
 - **standardize_dataframe(df: pl.DataFrame)**: Normalizes column names (lowercase, replace spaces and special chars), casts non-string columns to str, replaces '-' with None, filters missing material_id and undesirable filetypes, drops unwanted columns. Used before ingestion
@@ -96,7 +96,7 @@ This repository contains the Easy Access Sheet Toolkit, a Python application wit
   - `PDF`, `PDFCanvasMetadata`, `PDFText`, `Entity` — detailed PDF storage and extracted text/entities, with `filehash` and parsing metadata
   - `Course`, `Person`, `Faculty`/`Organization`, `Programme` — enrichment data with relations and M2M relationships (teachers → Person)
   - Staging tables: `StagedCopyrightItem`, `StagedFacultyUpdate`, `StagedProcessingFailure` used for robust staged ingestion and persisted failures
-- **Indexing & Datatypes**: Many fields use CharEnumField for controlled enums; text fields often have large max lengths; some fields are indexed (db_index=True). File-related fields include unique url constraint on `CopyrightItem.url`
+- **Indexing & Data Types**: Many fields use CharEnumField for controlled enums; text fields often have large max lengths; some fields are indexed (db_index=True). File-related fields include unique url constraint on `CopyrightItem.url`
 - **Schema Evolution**: Schema evolves ad-hoc; keep migrations simple. New fields like `filehash`, `last_scan_date_university/course` exist on models and are part of the expected dataflow
 
 ## Export Patterns & Behavior (from `easy_access/sheets/export.py`)
