@@ -24,6 +24,10 @@ imgs/
 easy_access/classification/api_keys.py
 api_keys.py
 
+.env
+
+uv.lock
+
 # documents
 *.doc
 *.docx
