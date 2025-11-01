@@ -12,7 +12,6 @@ from tortoise.models import Model
 from easy_access.db.enums import (
     Classification,
     ClassificationV2,
-    EntityTypes,
     Filetype,
     Infringement,
     Lengte,
@@ -189,9 +188,7 @@ class CopyrightItem(Model, TimestampMixin):
     last_canvas_check = fields.DatetimeField(
         null=True
     )  # when was the file existence last checked on Canvas
-    canvas_course_id = fields.IntField(
-        null=True, db_index=True
-    )  # the course ID on canvas, to link to courses more easily
+    canvas_course_id = fields.IntField(null=True, db_index=True) # the course ID on canvas, to link to courses more easily
 
     # relations
 
@@ -206,7 +203,7 @@ class CopyrightItem(Model, TimestampMixin):
     )  # if this item is a duplicate of another item -- determined by comparing PDFs
 
     pdf: fields.ReverseRelation["PDF"]
-    v1_items: fields.ReverseRelation["v1_CopyrightItem"]
+
     class Meta:
         table = "copyright_data"
 
@@ -231,7 +228,8 @@ class CopyrightItem(Model, TimestampMixin):
             "file_exists": self.file_exists,
             "last_canvas_check": self.last_canvas_check,
         }
-
+    
+    
     # course_links can only be retrieved, not set here
 
     @property
@@ -240,6 +238,7 @@ class CopyrightItem(Model, TimestampMixin):
             return ""
         base_url = SETTINGS.university_settings.lms.url
         return f"{base_url}/courses/{self.canvas_course_id}/files?search_term={self.filename.replace(' ', '%20')}"
+
 
     def __str__(self):
         return str(self.filename) + " (" + str(self.material_id) + ")"
@@ -550,7 +549,6 @@ class PDFText(Model, TimestampMixin):
     Extracted text from a PDF file.
     """
 
-    id = fields.IntField(primary_key=True)
     extracted_text = fields.TextField(null=True)
     num_pages = fields.IntField(null=True)
     text_quality = fields.FloatField(default=0)  # between 0 and 1
@@ -575,18 +573,9 @@ class Entity(Model, TimestampMixin):
     """
 
     id = fields.IntField(primary_key=True)
-    label = fields.CharField(max_length=255)
-    raw_text = fields.CharField(max_length=2048)
-    canonical_form = fields.CharField(
-        max_length=2048, null=True
-    )  # if recognized as a known entity, the canonical form (e.g. full name)
-    recognized = fields.BooleanField(
-        default=False
-    )  # whether the entity was recognized as a known entity (person/publisher/org/....)
-    recognition_type = fields.CharEnumField(enum_type=EntityTypes)
-    confidence = fields.FloatField(
-        null=True
-    )  # between 0 and 1. If 1, it was a precise match; e.g. by regex or lookup
+    entity_type = fields.CharField(max_length=255)
+    entity_text = fields.CharField(max_length=2048)
+    confidence = fields.FloatField(null=True)
 
     class Meta:
         table = "pdf_entity_data"
