@@ -1,5 +1,5 @@
 diff --git a/easy_access/db/update.py b/easy_access/db/update.py
-index 769518d..updated 100644
+index 769518d..8053b43 100644
 --- a/easy_access/db/update.py
 +++ b/easy_access/db/update.py
 @@ -3,6 +3,7 @@ functions to update existing data in the database
@@ -21,22 +21,7 @@ index 769518d..updated 100644
      Infringement,
      Status,
      WorkflowStatus,
-@@ -89,6 +93,14 @@ class ValidationError(MergeError):
- DEFAULT_RANK = 20
- MIN_CHANGES_THRESHOLD = 3
- 
-+# Pre-calculated lookup dictionaries for Classification enum normalization
-+# Used in map_v1_to_v2_classifications to avoid recreating sets for each item
-+_CLASSIFICATION_NORMALIZE_PATTERN = re.compile(r'[\s_-]')
-+LOWER_TO_CLASSIFICATION = {e.value.lower(): e for e in Classification}
-+NORMALIZED_TO_CLASSIFICATION = {
-+    _CLASSIFICATION_NORMALIZE_PATTERN.sub('', e.value.lower()): e for e in Classification
-+}
-+
- 
- class FieldComparisonStrategy:
-     """Base class for field comparison strategies."""
-@@ -1834,7 +1846,6 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
+@@ -1834,7 +1838,6 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
  
          logger.info(f"Updated workflow status for {updated_count} items.")
  
@@ -44,7 +29,7 @@ index 769518d..updated 100644
  async def map_v1_to_v2_classifications(settings: Settings) -> None:
      """
      uses the classification mapping to map manual_classification values from v1 items to v2 items
-@@ -1846,60 +1857,87 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
+@@ -1846,60 +1849,101 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
      await ensure_db_inited(settings)
  
      # perform mapping using the same lookup as the old DataFrame-based helper
@@ -110,16 +95,37 @@ index 769518d..updated 100644
 -                try:
 -                    key = Classification(current)
 -                except Exception:
-+                # 1. match ignoring case (current is already lowercase)
-+                # 2. match ignoring underscores, hyphens, spaces, and case
-+                # 3. default to ONBEKEND
-+                key = LOWER_TO_CLASSIFICATION.get(current)
-+                if not key:
-+                    normalized = _CLASSIFICATION_NORMALIZE_PATTERN.sub('', current)
-+                    key = NORMALIZED_TO_CLASSIFICATION.get(normalized)
-+
-+                if not key:
-                     key = Classification.ONBEKEND
+-                    key = Classification.ONBEKEND
++                # use a match case statement for this.
++                # 1. exact match to enum values
++                # 2. match ignoring case
++                # 3. match ignoring underscores, hyphens, spaces, and case
++                # 4. default to ONBEKEND
++                match current:
++                    case val if val in {e.value for e in Classification}:
++                        key = Classification(val)
++                    case val if val.lower() in {e.value.lower() for e in Classification}:
++                        key = Classification(
++                            next(
++                                e.value
++                                for e in Classification
++                                if e.value.lower() == val.lower()
++                            )
++                        )
++                    case val if re.sub(r"[\s_-]", "", val.lower()) in {
++                        re.sub(r"[\s_-]", "", e.value.lower())
++                        for e in Classification
++                    }:
++                        key = Classification(
++                            next(
++                                e.value
++                                for e in Classification
++                                if re.sub(r"[\s_-]", "", e.value.lower())
++                                == re.sub(r"[\s_-]", "", val.lower())
++                            )
++                        )
++                    case _:
++                        key = Classification.ONBEKEND
  
                  mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
                  if not mapped:
@@ -148,25 +154,18 @@ index 769518d..updated 100644
 +                    details.append(detaildict)
 +                    logger.debug(f"material_id {item.material_id}: [v1] {input_val} -> {current} -> {key.value} mapped to [v2] {mapped.classification}")
 +                    modified_count += 1
-+
+ 
+-                # Don't commit here - we'll commit all changes at once
                  mapped_count += 1
              except Exception as exc:
                  logger.error(
-                     f"Failed to map v1->v2 classification for material_id={getattr(item, 'material_id', None)}: {exc}"
-                 )
-                 failed_count += 1
-+
-+        # Commit all changes at once
-+        try:
-+            await session.commit()
-+        except Exception as exc:
-+            logger.error(f"Failed to commit v1->v2 classification mappings: {exc}")
-+            await session.rollback()
-+            return
-+
-+    logger.info(
+@@ -1916,5 +1960,19 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
+             return
+ 
+     logger.info(
+-        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count} (out of {len(selected_items)})"
 +        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count} (out of {len(selected_items)})"
-+    )
+     )
 +    if len(details) > 0:
 +        logger.debug(f"Stored parsed/mapped details to csv for inspection")
 +        try:

@@ -43,10 +43,16 @@ Follow the detailed instructions in `MERGE_CONFLICT_RESOLUTION_DETAILED.md`
    - `ClassificationMapping`
    - `ClassificationV2`
 
-2. Adapt `map_v1_to_v2_classifications` function:
+2. Add pre-calculated lookup dictionaries (from PR #12 optimization):
+   - `_CLASSIFICATION_NORMALIZE_PATTERN` - Pre-compiled regex pattern
+   - `LOWER_TO_CLASSIFICATION` - Lowercase enum value to enum mapping
+   - `NORMALIZED_TO_CLASSIFICATION` - Normalized (no spaces/hyphens/underscores) to enum mapping
+
+3. Adapt `map_v1_to_v2_classifications` function:
    - Change from Tortoise ORM (`filter`, `Q`, `in_transaction`) to SQLAlchemy (`select`, `where`, `get_session`)
    - Remove `prefetch_related` calls
    - Change from `item.save()` to direct attribute assignment + `session.commit()`
    - Simplify detail tracking (remove faculty/v1_items relationships)
+   - **Replace match-case statement with optimized if/elif using dictionary lookups** (PR #12)
 
 See `MERGE_CONFLICT_RESOLUTION_DETAILED.md` for the complete before/after code.
