@@ -1,0 +1,310 @@
+commit 2f2f621deb7515ec2f6e7371da907a10de4584a4
+Merge: 7b242a1 25d55d1
+Author: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>
+Date:   Fri Oct 31 23:32:06 2025 +0000
+
+    Resolve merge conflicts between postgres refactor and main
+    
+    - Accept main's uv.lock (will regenerate later)
+    - Update update.py imports to include v2 classification enums from main
+    - Adapt map_v1_to_v2_classifications function from Tortoise ORM to SQLAlchemy
+    - Keep postgres refactor's SQLAlchemy-based database operations
+
+diff --cc easy_access/db/update.py
+index 769518d,92eb23d..8053b43
+--- a/easy_access/db/update.py
++++ b/easy_access/db/update.py
+@@@ -11,25 -12,25 +12,28 @@@ from typing import An
+  
+  import polars as pl
+  from loguru import logger
+ -from tortoise import Tortoise
+ -from tortoise.expressions import Q
+ -from tortoise.transactions import in_transaction
+ +from sqlalchemy import delete, select, text, update
+  
+  from easy_access.db.base import (
+ +    close_connections,
+      copyright_item_from_dict,
+      ensure_db_inited,
+ +    get_session,
+  )
+  from easy_access.db.enums import (
++     CLASSIFICATION_MAPPING_V1_TO_V2,
+      Classification,
++     ClassificationMapping,
++     ClassificationV2,
+ +    Infringement,
+ +    Status,
+ +    WorkflowStatus,
+  )
+ -from easy_access.db.models import (
+ +from easy_access.db.sa_models import (
+      CopyrightItem,
+      Course,
+ +    CourseEmployee,
+      Faculty,
+ -    Infringement,
+      ItemUpdate,
+      Organization,
+      Person,
+@@@ -1766,75 -1641,29 +1770,74 @@@ async def update_workflow_status_from_d
+          Classification.EIGEN_MATERIAAL.value,
+      ]
+  
+ -    if not items:
+ -        logger.info("No items to update workflow status for.")
+ -        return
+ -    logger.info(f"Updating workflow status for {len(items)} items...")
+ -    updated_count = 0
+ -    for item in items:
+ -        if item.file_exists is False:
+ -            item.workflow_status = WorkflowStatus.Done
+ -            await item.save(update_fields=["workflow_status"])
+ -            updated_count += 1
+ -            continue
+ -        if (
+ -            item.manual_classification
+ -            and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
+ -        ):
+ -            print(
+ -                f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
+ +    async for session in get_session():
+ +        result = await session.execute(
+ +            text(
+ +                """
+ +                SELECT material_id, period, department, course_code, course_name, url, filename, title, owner, filetype, classification, ml_prediction, manual_classification, manual_identifier, v2_manual_classification, v2_overnamestatus, v2_lengte, scope, remarks, auditor, last_change, status, isbn, doi, in_collection, pagecount, wordcount, picturecount, author, publisher, reliability, pages_x_students, count_students_registered, filehash, last_scan_date_university, last_scan_date_course, retrieved_from_copyright_on, workflow_status, possible_fine, infringement, file_exists, last_canvas_check, canvas_course_id, faculty_id, is_duplicate
+ +                FROM copyright_data
+ +                WHERE workflow_status != 'Done'
+ +                """
+              )
+ -            item.workflow_status = WorkflowStatus.Done
+ -            await item.save(update_fields=["workflow_status"])
+ -            updated_count += 1
+ -            continue
+ +        )
+ +        items = result.fetchall()
+ +
+ +        if not items:
+ +            logger.info("No items to update workflow status for.")
+ +            return
+ +        logger.info(f"Updating workflow status for {len(items)} items...")
+ +        updated_count = 0
+ +        for row in items:
+ +            # Access columns by index from the raw SQL result
+ +            material_id = row[0]  # material_id is first column
+ +            file_exists = row[40]  # file_exists column index
+ +            manual_classification = row[12]  # manual_classification column index
+ +
+ +            if file_exists is False:
+ +                # Update using raw SQL
+ +                await session.execute(
+ +                    text(
+ +                        """
+ +                        UPDATE copyright_data
+ +                        SET workflow_status = 'Done'
+ +                        WHERE material_id = :material_id
+ +                        """
+ +                    ),
+ +                    {"material_id": material_id},
+ +                )
+ +                updated_count += 1
+ +                continue
+ +            if (
+ +                manual_classification
+ +                and manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
+ +            ):
+ +                print(
+ +                    f"Updating item {material_id} to Done based on manual_classification '{manual_classification}'"
+ +                )
+ +                # Update using raw SQL
+ +                await session.execute(
+ +                    text(
+ +                        """
+ +                        UPDATE copyright_data
+ +                        SET workflow_status = 'Done'
+ +                        WHERE material_id = :material_id
+ +                        """
+ +                    ),
+ +                    {"material_id": material_id},
+ +                )
+ +                updated_count += 1
+ +                continue
+ +
+ +        # Commit all changes at once
+ +        try:
+ +            await session.commit()
+ +        except Exception as exc:
+ +            logger.error(f"Failed to commit workflow status updates: {exc}")
+ +            await session.rollback()
+ +            return
+ +
+ +        logger.info(f"Updated workflow status for {updated_count} items.")
+  
+- 
+  async def map_v1_to_v2_classifications(settings: Settings) -> None:
+      """
+      uses the classification mapping to map manual_classification values from v1 items to v2 items
+@@@ -1844,40 -1673,39 +1847,40 @@@
+      # select all items:
+      # - without a v2 classification (null or empty)
+      await ensure_db_inited(settings)
+ -    selected_items = await CopyrightItem.filter(
+ -        Q(v2_manual_classification__isnull=True)
+ -        | Q(v2_manual_classification=ClassificationV2.ONBEKEND)
+ -    ).all().prefetch_related('v1_items', 'faculty')
+ -    logger.info(f"Mapping v1 to v2 classifications for {len(selected_items)} items...")
+ -    if not selected_items:
+ -        logger.info("No items to map v1 to v2 classifications for.")
+ -        return
+ -    # add mapping logic here, see add_v2_classification for reference
+ -    # relevant fields on CopyrightItem:
+ -    # - manual_classification (v1)
+ -    # - v2_manual_classification
+ -    # - v2_lengte
+ -    # - v2_overnamestatus
+  
+      # perform mapping using the same lookup as the old DataFrame-based helper
+-     from easy_access.db.enums import CLASSIFICATION_MAPPING_V1_TO_V2, Classification
+- 
++     details = []
+      mapped_count = 0
+      failed_count = 0
++     modified_count = 0
+ -    unlinked_upd = 0
+ -    async with in_transaction():
+ +
+-     session_factory = get_session_factory()
+-     async with session_factory() as session:
+++    async for session in get_session():
+++        # Query items without v2 classification using SQLAlchemy
+ +        result = await session.execute(
+-             text(
+-                 """
+-                 SELECT material_id, period, department, course_code, course_name, url, filename, title, owner, filetype, classification, ml_prediction, manual_classification, manual_identifier, v2_manual_classification, v2_overnamestatus, v2_lengte, scope, remarks, auditor, last_change, status, isbn, doi, in_collection, pagecount, wordcount, picturecount, author, publisher, reliability, pages_x_students, count_students_registered, filehash, last_scan_date_university, last_scan_date_course, retrieved_from_copyright_on, workflow_status, possible_fine, infringement, file_exists, last_canvas_check, canvas_course_id, faculty_id, is_duplicate
+-                 FROM copyright_data
+-                 WHERE v2_manual_classification IS NULL OR v2_manual_classification = 'Onbekend'
+-                 """
+++            select(CopyrightItem).where(
+++                (CopyrightItem.v2_manual_classification.is_(None))
+++                | (CopyrightItem.v2_manual_classification == ClassificationV2.ONBEKEND.value)
+ +            )
+ +        )
+-         rows = result.fetchall()
+-         selected_items = []
+-         for row in rows:
+-             # Convert row to CopyrightItem-like object
+-             item = type("CopyrightItem", (), {})()
+-             for i, col in enumerate(result.keys()):
+-                 setattr(item, col, row[i])
+-             selected_items.append(item)
+++        selected_items = result.scalars().all()
+ +
+ +        if not selected_items:
+ +            logger.info("No items to map v1 to v2 classifications for.")
+ +            return
+ +
+++        logger.info(f"Mapping v1 to v2 classifications for {len(selected_items)} items...")
+++
+          for item in selected_items:
++             detaildict = {}
+              try:
+-                 current = item.manual_classification or "onbekend"
++                 input_val = item.manual_classification
++                 if not isinstance(input_val, str):
++                     try:
++                         input_val = input_val.value
++                     except Exception:
++                         input_val = str(input_val)
++ 
++                 current = input_val or "onbekend"
+                  if not current or current == "-":
+                      current = "onbekend"
+  
+@@@ -1895,11 -1748,42 +1923,27 @@@
+                  if not mapped:
+                      mapped = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
+  
+-                 item.v2_manual_classification = mapped.classification
+-                 item.v2_lengte = mapped.length
+-                 item.v2_overnamestatus = mapped.overname_status
+ -                current_v2_classification = item.v2_manual_classification.value
+ -
+ -                if item.v2_manual_classification != mapped.classification:
+ -
+ -                    item.v2_manual_classification = mapped.classification
+ -                    item.v2_lengte = mapped.length
+ -                    item.v2_overnamestatus = mapped.overname_status
+ -                    faculty = item.faculty
+ -                    abbreviation = faculty.abbreviation
+ -                    v1_items = await item.v1_items.all()
+ -                    v1_id = None
+ -                    if v1_items:
+ -                        v1_id = v1_items[0].material_id
+ -                    if not v1_id:
+ -                        unlinked_upd += 1
+++                current_v2_classification = item.v2_manual_classification
+++
+++                # Update if different from mapped classification
+++                if item.v2_manual_classification != mapped.classification.value:
+++                    item.v2_manual_classification = mapped.classification.value
+++                    item.v2_lengte = mapped.length.value
+++                    item.v2_overnamestatus = mapped.overname_status.value
+++                    
++                     detaildict = {
++                         "material_id": item.material_id,
+ -                        "faculty": abbreviation,
+ -                        "v1_material_id": v1_id,
++                         "found_v1_classification": input_val,
++                         "v2_classification_before_update": current_v2_classification,
++                         "used_v1_classification": key.value,
++                         "mapped_v2_classification": mapped.classification.value,
++                         "mapped_v2_length": mapped.length.value,
++                         "mapped_v2_overname_status": mapped.overname_status.value,
++                     }
++                     details.append(detaildict)
++                     logger.debug(f"material_id {item.material_id}: [v1] {input_val} -> {current} -> {key.value} mapped to [v2] {mapped.classification}")
+ -                    await item.save(
+ -                        update_fields=[
+ -                            "v2_manual_classification",
+ -                            "v2_lengte",
+ -                            "v2_overnamestatus",
+ -                        ]
+ -                    )
++                     modified_count += 1
+ +
+-                 # Don't commit here - we'll commit all changes at once
+                  mapped_count += 1
+              except Exception as exc:
+                  logger.error(
+@@@ -1907,14 -1791,20 +1951,28 @@@
+                  )
+                  failed_count += 1
+  
+ +        # Commit all changes at once
+ +        try:
+ +            await session.commit()
+ +        except Exception as exc:
+ +            logger.error(f"Failed to commit v1->v2 classification mappings: {exc}")
+ +            await session.rollback()
+ +            return
+ +
+      logger.info(
+-         f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count} (out of {len(selected_items)})"
+ -        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count}, unlinked updates={unlinked_upd} (out of {len(selected_items)})"
+++        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count} (out of {len(selected_items)})"
+      )
++     if len(details) > 0:
++         logger.debug(f"Stored parsed/mapped details to csv for inspection")
++         try:
++             pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
++         except Exception as exc:
++             details = [{a:str(b) for a,b in d.items()} for d in details]
++             try:
++                 pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
++             except Exception as exc2:
++                 logger.error(f"Could not write mapping details to csv: {exc2}")
++                 if len(details) < 20:
++                     logger.debug(f"Mapping details: {details}")
++                 else:
++                     logger.debug(f"Mapping details: {details[:20]} ... (truncated)")
