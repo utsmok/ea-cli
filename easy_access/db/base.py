@@ -68,28 +68,13 @@ def init_engine(settings: Settings) -> Engine:
     This is used by retrieve.py for read-heavy operations with polars.
     For ORM operations, use the async session from session.py instead.
     """
-    # Get the PostgreSQL database URL and convert from async to sync
-    from os import environ
-    from pathlib import Path
+    from easy_access.db.session import get_database_url
     
-    db_url = environ.get("DATABASE_URL")
-    
-    # If not in environment, try to load from .env file
-    if not db_url:
-        env_file = Path(".env")
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if line.startswith("DATABASE_URL="):
-                    db_url = line.split("=", 1)[1].strip()
-                    break
-    
-    # Fall back to default matching docker-compose.postgres.yml
-    if not db_url:
-        db_url = "postgresql+asyncpg://easyaccess:easyaccess@localhost:5432/easyaccess"
+    # Get the async PostgreSQL database URL via Settings
+    async_db_url = get_database_url(settings)
     
     # Convert async URL (postgresql+asyncpg://) to sync URL (postgresql+psycopg2://)
-    sync_url = db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    sync_url = async_db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
     
     return create_engine(sync_url)
 
