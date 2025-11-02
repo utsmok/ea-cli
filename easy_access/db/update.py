@@ -278,9 +278,7 @@ async def preprocess_input_data(
         async for session in get_session():
             result = await session.execute(select(CopyrightItem.material_id))
             existing_mat_ids = {r[0] for r in result}
-
-        existing_mat_ids = {m for m in existing_mat_ids if m is not None}
-
+            existing_mat_ids = {m for m in existing_mat_ids if m is not None}
         # Candidate new items (may be partial if coming from faculty sheets)
         candidate_new_items = (
             data.with_columns(pl.col("material_id").cast(int))
