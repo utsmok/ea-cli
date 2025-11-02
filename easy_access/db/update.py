@@ -12,33 +12,34 @@ from typing import Any
 
 import polars as pl
 from loguru import logger
-from tortoise import Tortoise
-from tortoise.expressions import Q
-from tortoise.transactions import in_transaction
+from sqlalchemy import delete, select, text, update
 
 from easy_access.db.base import (
+    close_connections,
     copyright_item_from_dict,
     ensure_db_inited,
+    get_session,
 )
 from easy_access.db.enums import (
     CLASSIFICATION_MAPPING_V1_TO_V2,
     Classification,
     ClassificationMapping,
     ClassificationV2,
+    Infringement,
+    Status,
+    WorkflowStatus,
 )
-from easy_access.db.models import (
+from easy_access.db.sa_models import (
     CopyrightItem,
     Course,
+    CourseEmployee,
     Faculty,
-    Infringement,
     ItemUpdate,
     Organization,
     Person,
     StagedCopyrightItem,
     StagedFacultyUpdate,
     StagedProcessingFailure,
-    Status,
-    WorkflowStatus,
 )
 from easy_access.merge_rules import (
     build_merge_rules_from_settings,
@@ -88,6 +89,14 @@ class ValidationError(MergeError):
 # Constants for comparison logic
 DEFAULT_RANK = 20
 MIN_CHANGES_THRESHOLD = 3
+
+# Pre-calculated lookup dictionaries for Classification enum normalization
+# Used in map_v1_to_v2_classifications to avoid recreating sets for each item
+_CLASSIFICATION_NORMALIZE_PATTERN = re.compile(r'[\s_-]')
+LOWER_TO_CLASSIFICATION = {e.value.lower(): e for e in Classification}
+NORMALIZED_TO_CLASSIFICATION = {
+    _CLASSIFICATION_NORMALIZE_PATTERN.sub('', e.value.lower()): e for e in Classification
+}
 
 
 class FieldComparisonStrategy:
@@ -266,14 +275,16 @@ async def preprocess_input_data(
 
     if isinstance(data, pl.DataFrame):
         data = standardize_dataframe(data)
-        existing_mat_ids = await CopyrightItem.all().values("material_id")
-        existing_mat_ids = {safe_int(m["material_id"]) for m in existing_mat_ids}
+        async for session in get_session():
+            result = await session.execute(select(CopyrightItem.material_id))
+            existing_mat_ids = {r[0] for r in result}
+
         existing_mat_ids = {m for m in existing_mat_ids if m is not None}
 
         # Candidate new items (may be partial if coming from faculty sheets)
         candidate_new_items = (
             data.with_columns(pl.col("material_id").cast(int))
-            .filter(~pl.col("material_id").is_in(existing_mat_ids))
+            .filter(~pl.col("material_id").is_in(list(existing_mat_ids)))
             .to_dicts()
         )
 
@@ -315,7 +326,7 @@ async def preprocess_input_data(
 
         update_items = (
             data.with_columns(pl.col("material_id").cast(int))
-            .filter(pl.col("material_id").is_in(existing_mat_ids))
+            .filter(pl.col("material_id").is_in(list(existing_mat_ids)))
             .to_dicts()
         )
 
@@ -345,26 +356,31 @@ async def process_new_items(new_items: list[dict]) -> list[CopyrightItem]:
     if new_items:
         new_objects = [await copyright_item_from_dict(item) for item in new_items]
         new_objects = [item for item in new_objects if item]
-        try:
-            await CopyrightItem.bulk_create(objects=new_objects)
-        except Exception as e:
-            logger.warning(
-                f"Bulk creation failed: {e}. Attempting one-by-one creation."
-            )
-            failed_items = []
-            for item in new_objects:
-                try:
-                    await item.save()
-                except Exception as save_error:
-                    logger.error(
-                        f"Failed to save item {item.material_id}: {save_error}"
-                    )
-                    failed_items.append(item.material_id)
+        async for session in get_session():
+            try:
+                session.add_all(new_objects)
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.warning(
+                    f"Bulk creation failed: {e}. Attempting one-by-one creation."
+                )
+                failed_items = []
+                for item in new_objects:
+                    try:
+                        session.add(item)
+                        await session.commit()
+                    except Exception as save_error:
+                        await session.rollback()
+                        logger.error(
+                            f"Failed to save item {item.material_id}: {save_error}"
+                        )
+                        failed_items.append(item.material_id)
 
-            if failed_items:
-                raise DatabaseOperationError(
-                    f"Failed to create items with material_ids: {failed_items}"
-                ) from e
+                if failed_items:
+                    raise DatabaseOperationError(
+                        f"Failed to create items with material_ids: {failed_items}"
+                    ) from e
         logger.success(f"Created {len(new_objects)} new copyright items in db.")
 
     return new_objects
@@ -396,36 +412,45 @@ async def process_existing_items(
     changelist = []
     updates = {}
 
-    for new_item in update_items:
-        try:
-            if overwrite:
-                changes, db_item = await _process_item_overwrite(
-                    new_item, added_fields, changeable_fields
-                )
-            else:
-                changes, db_item = await _process_item_normal(
-                    new_item, added_fields, changeable_fields
-                )
+    async for session in get_session():
+        for new_item in update_items:
+            try:
+                material_id = new_item.get("material_id")
+                result = await session.execute(select(CopyrightItem).where(CopyrightItem.material_id == material_id))
+                db_item = result.scalar_one_or_none()
 
-            if len(list(changes.keys())) >= MIN_CHANGES_THRESHOLD:
-                changes["modified_at"] = datetime.now()
-                updates[new_item.get("material_id")] = changes
-                changelist.append(db_item)
-        except DatabaseOperationError:
-            # Re-raise database operation errors
-            raise
-        except Exception as e:
-            # Log unexpected errors but continue processing other items
-            logger.error(
-                f"Unexpected error processing item {new_item.get('material_id')}: {e}"
-            )
-            continue
+                if not db_item:
+                    logger.warning(f"Could not find item with material_id: {material_id}")
+                    continue
+
+                if overwrite:
+                    changes, db_item = await _process_item_overwrite(
+                        new_item, added_fields, changeable_fields, db_item
+                    )
+                else:
+                    changes, db_item = await _process_item_normal(
+                        new_item, added_fields, changeable_fields, db_item
+                    )
+
+                if len(list(changes.keys())) >= MIN_CHANGES_THRESHOLD:
+                    changes["modified_at"] = datetime.now()
+                    updates[new_item.get("material_id")] = changes
+                    changelist.append(db_item)
+            except DatabaseOperationError:
+                # Re-raise database operation errors
+                raise
+            except Exception as e:
+                # Log unexpected errors but continue processing other items
+                logger.error(
+                    f"Unexpected error processing item {new_item.get('material_id')}: {e}"
+                )
+                continue
 
     return changelist, updates
 
 
 async def _process_item_overwrite(
-    new_item: dict, added_fields: dict, changeable_fields: dict
+    new_item: dict, added_fields: dict, changeable_fields: dict, db_item: CopyrightItem
 ) -> tuple[dict, CopyrightItem | None]:
     """
     Process a single item in overwrite mode.
@@ -434,6 +459,7 @@ async def _process_item_overwrite(
         new_item: Dictionary with new field values
         added_fields: Dictionary of field priorities for added fields
         changeable_fields: Dictionary of field priorities for changeable fields
+        db_item: The item from the database
 
     Returns:
         Tuple of (changes dict, db_item)
@@ -442,8 +468,6 @@ async def _process_item_overwrite(
         DatabaseOperationError: When database operations fail
     """
     try:
-        db_item = await CopyrightItem.get(material_id=new_item.get("material_id"))
-
         changes = {
             "material_id": new_item.get("material_id"),
             "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -486,7 +510,7 @@ async def _process_item_overwrite(
 
 
 async def _process_item_normal(
-    new_item: dict, added_fields: dict, changeable_fields: dict
+    new_item: dict, added_fields: dict, changeable_fields: dict, db_item: CopyrightItem
 ) -> tuple[dict, CopyrightItem | None]:
     """
     Process a single item in normal mode using comparison logic.
@@ -495,6 +519,7 @@ async def _process_item_normal(
         new_item: Dictionary with new field values
         added_fields: Dictionary of field priorities for added fields
         changeable_fields: Dictionary of field priorities for changeable fields
+        db_item: The item from the database
 
     Returns:
         Tuple of (changes dict, db_item)
@@ -503,7 +528,6 @@ async def _process_item_normal(
         DatabaseOperationError: When database operations fail
     """
     try:
-        db_item = await CopyrightItem.get(material_id=new_item.get("material_id"))
         changes = {}
         changes, db_item = compare_and_update_fields(
             new_item, db_item, added_fields, changes
@@ -540,56 +564,27 @@ async def execute_bulk_database_operations(
         settings: Application settings
     """
     if changelist:
-        # get all values from 'updates'
-        # then get list of all distinct keys from all those dicts
-        # then drop keys 'material_id' and 'update_time'
-        # then add all those keys to the fields to update
+        async for session in get_session():
+            try:
+                for item in changelist:
+                    session.add(item)
 
-        all_keys = {key for item in updates.values() for key in item}
-        all_keys.discard("material_id")
-        all_keys.discard("update_time")
-        changed_fields = list(all_keys)
-        changed_fields.append("modified_at")
+                if cur_user:
+                    user_email = (
+                        cur_user.get("email") if isinstance(cur_user, dict) else cur_user
+                    )
+                    for changes in updates.values():
+                        changes.update({"modified_by": user_email})
+                    logger.info(f"items modified by {user_email}")
 
-        # process in batches of max 50:
-        for change_batch in batched(changelist, 500):
-            logger.info(
-                f"Updating fields {changed_fields} for {len(change_batch)} items that were changed."
-            )
-            await CopyrightItem.bulk_update(change_batch, fields=changed_fields)
+                for mat_id, changes in updates.items():
+                    update = ItemUpdate(change_details=changes, copyright_item_material_id=mat_id)
+                    session.add(update)
 
-        if cur_user:
-            user_email = (
-                cur_user.get("email") if isinstance(cur_user, dict) else cur_user
-            )
-            [
-                changes.update({"modified_by": user_email})
-                for changes in updates.values()
-            ]
-            logger.info(f"items modified by {user_email}")
-
-        for update_batch in batched(
-            [(mat_id, changes) for mat_id, changes in updates.items()], 500
-        ):
-            logger.info(f"Updating {len(update_batch)} changelog items in db.")
-
-            mat_ids = [mat_id for mat_id, _ in update_batch]
-            await ItemUpdate.bulk_create(
-                [
-                    ItemUpdate(change_details=changes, material_id=mat_id)
-                    for mat_id, changes in update_batch
-                ]
-            )
-
-            # now add each ItemUpdate as a m2m relation to the corresponding CopyrightItem
-            for mat_id in mat_ids:
-                item = await CopyrightItem.get(material_id=mat_id)
-                update = (
-                    await ItemUpdate.filter(material_id=mat_id)
-                    .order_by("-created_at")
-                    .first()
-                )
-                await item.changes.add(update)
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                raise DatabaseOperationError(f"Bulk database operations failed: {e}") from e
 
     if (changelist or new_objects) and update_relations:
         logger.success("Updating relations for all CopyrightItems.")
@@ -883,7 +878,7 @@ async def update_copyright_items(
     )
 
     logger.success("Done updating CopyrightItems!")
-    await Tortoise.close_connections()
+    await close_connections()
 
 
 async def process_staged_raw_data(settings: Settings) -> None:
@@ -891,7 +886,11 @@ async def process_staged_raw_data(settings: Settings) -> None:
     Processes the staged raw data and updates the main CopyrightItem table.
     """
     await ensure_db_inited(settings)
-    staged_items = await StagedCopyrightItem.all()
+
+    async for session in get_session():
+        result = await session.execute(select(StagedCopyrightItem))
+        staged_items = result.scalars().all()
+
     if not staged_items:
         logger.info("No staged raw data to process.")
         return
@@ -942,157 +941,114 @@ async def process_staged_raw_data(settings: Settings) -> None:
         batch_processed_ids: list[int] = []
         complex_item_dicts: list[dict] = []
         logger.info(f"Processing batch {batch_idx} with {len(batch)} items")
-        async with in_transaction():
-            for _item_idx, staged_item in enumerate(batch):
-                try:
-                    # Build a safe dict from known fields
-                    item_dict: dict = {}
-                    for f in staged_fields:
-                        # Use getattr to avoid ORM internals
-                        item_dict[f] = getattr(staged_item, f, None)
+        async for session in get_session():
+            try:
+                for _item_idx, staged_item in enumerate(batch):
+                    try:
+                        # Build a safe dict from known fields
+                        item_dict: dict = {}
+                        for f in staged_fields:
+                            # Use getattr to avoid ORM internals
+                            item_dict[f] = getattr(staged_item, f, None)
 
-                    # Ensure material_id is present and castable
-                    mid = item_dict.get("material_id")
-                    item_dict.get("faculty")
-                    if mid is None:
-                        # logger.warning(
-                        #    f"[STAGED][SKIP] material_id=None, faculty={faculty_val}, stage=raw_data: Missing required material_id"
-                        # )
-                        continue
+                        # Ensure material_id is present and castable
+                        mid = item_dict.get("material_id")
+                        item_dict.get("faculty")
+                        if mid is None:
+                            continue
 
-                    # logger.debug(
-                    #    f"[STAGED][PROCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Starting processing"
-                    # )
+                        result = await session.execute(select(CopyrightItem).where(CopyrightItem.material_id == mid))
+                        existing_item = result.scalar_one_or_none()
 
-                    existing_item = await CopyrightItem.get_or_none(material_id=mid)
-
-                    if not existing_item:
-                        # Create new item using canonical normalizer
-                        # logger.debug(
-                        #    f"[STAGED][CREATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Creating new item"
-                        # )
-                        new_item = await copyright_item_from_dict(item_dict)
-                        if new_item:
-                            await new_item.save()
-                            smid = safe_int(mid)
-                            if smid is not None:
-                                batch_processed_ids.append(smid)
-                            # logger.info(
-                            #    f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Created new item"
-                            # )
-                        else:
-                            # logger.warning(
-                            #    f"[STAGED][FAIL] material_id={mid}, faculty={faculty_val}, stage=raw_data: Failed to create item from dict"
-                            # )
-                            ...
-                    else:
-                        # Check if this item has complex fields that need merging
-                        mergeable_fields = get_mergeable_fields()
-                        has_complex_fields = False
-                        for field in mergeable_fields:
-                            if item_dict.get(field) is not None:
-                                has_complex_fields = True
-                                break
-
-                        if has_complex_fields:
-                            # Delegate to canonical merge path
-                            # logger.debug(
-                            #    f"[STAGED][MERGE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Delegating to complex merge"
-                            # )
-                            complex_item_dicts.append(item_dict)
-                            smid = safe_int(mid)
-                            if smid is not None:
-                                batch_processed_ids.append(smid)
-                        else:
-                            # Conservative updates for trivial fields
-                            update_fields = []
-                            # status: try to coerce to Status enum safely
-                            status_val = item_dict.get("status")
-                            if status_val:
-                                new_status = safe_enum(Status, status_val)
-                                if new_status and existing_item.status != new_status:
-                                    existing_item.status = new_status
-                                    update_fields.append("status")
-
-                            # last_change: accept datetime/date or parse common string formats
-                            lc_val = item_dict.get("last_change")
-                            if lc_val:
-                                parsed_date = None
-                                if isinstance(lc_val, datetime):
-                                    parsed_date = lc_val.date()
-                                elif isinstance(lc_val, date):
-                                    parsed_date = lc_val
-                                elif isinstance(lc_val, str):
-                                    try:
-                                        # try isoformat first
-                                        parsed_dt = datetime.fromisoformat(lc_val)
-                                        parsed_date = parsed_dt.date()
-                                    except Exception:
-                                        for fmt in (
-                                            "%Y-%m-%d %H:%M:%S%z",
-                                            "%Y-%m-%d %H:%M:%S",
-                                            "%Y-%m-%d",
-                                        ):
-                                            try:
-                                                parsed_dt = datetime.strptime(
-                                                    lc_val, fmt
-                                                )
-                                                parsed_date = parsed_dt.date()
-                                                break
-                                            except Exception:
-                                                continue
-                                if (
-                                    parsed_date
-                                    and existing_item.last_change != parsed_date
-                                ):
-                                    existing_item.last_change = parsed_date
-                                    update_fields.append("last_change")
-
-                            if update_fields:
-                                # logger.debug(
-                                #    f"[STAGED][UPDATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updating fields {update_fields}"
-                                # )
-                                await existing_item.save(update_fields=update_fields)
+                        if not existing_item:
+                            new_item = await copyright_item_from_dict(item_dict)
+                            if new_item:
+                                session.add(new_item)
                                 smid = safe_int(mid)
                                 if smid is not None:
                                     batch_processed_ids.append(smid)
-                                # logger.info(
-                                #    f"[STAGED][SUCCESS] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updated existing item"
-                                # )
+                            else:
+                                ...
+                        else:
+                            mergeable_fields = get_mergeable_fields()
+                            has_complex_fields = False
+                            for field in mergeable_fields:
+                                if item_dict.get(field) is not None:
+                                    has_complex_fields = True
+                                    break
 
-                except Exception as e:
-                    err_msg = str(e)
-                    getattr(staged_item, "material_id", None)
-                    getattr(staged_item, "faculty", None)
-                    # logger.error(
-                    #    f"[STAGED][ERROR] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {err_msg}"
-                    # )
-                    # logger.debug(
-                    #    f"[STAGED][TRACE] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: {traceback.format_exc()}"
-                    # )
-                    # Record failure in the DB for later inspection/retry
-                    try:
+                            if has_complex_fields:
+                                complex_item_dicts.append(item_dict)
+                                smid = safe_int(mid)
+                                if smid is not None:
+                                    batch_processed_ids.append(smid)
+                            else:
+                                update_fields = []
+                                status_val = item_dict.get("status")
+                                if status_val:
+                                    new_status = safe_enum(Status, status_val)
+                                    if new_status and existing_item.status != new_status.value:
+                                        existing_item.status = new_status.value
+                                        update_fields.append("status")
+
+                                lc_val = item_dict.get("last_change")
+                                if lc_val:
+                                    parsed_date = None
+                                    if isinstance(lc_val, datetime):
+                                        parsed_date = lc_val.date()
+                                    elif isinstance(lc_val, date):
+                                        parsed_date = lc_val
+                                    elif isinstance(lc_val, str):
+                                        try:
+                                            parsed_dt = datetime.fromisoformat(lc_val)
+                                            parsed_date = parsed_dt.date()
+                                        except Exception:
+                                            for fmt in (
+                                                "%Y-%m-%d %H:%M:%S%z",
+                                                "%Y-%m-%d %H:%M:%S",
+                                                "%Y-%m-%d",
+                                            ):
+                                                try:
+                                                    parsed_dt = datetime.strptime(
+                                                        lc_val, fmt
+                                                    )
+                                                    parsed_date = parsed_dt.date()
+                                                    break
+                                                except Exception:
+                                                    continue
+                                    if (
+                                        parsed_date
+                                        and existing_item.last_change != parsed_date
+                                    ):
+                                        existing_item.last_change = parsed_date
+                                        update_fields.append("last_change")
+
+                                if update_fields:
+                                    session.add(existing_item)
+                                    smid = safe_int(mid)
+                                    if smid is not None:
+                                        batch_processed_ids.append(smid)
+
+                    except Exception as e:
+                        err_msg = str(e)
                         payload = {
                             f: getattr(staged_item, f, None) for f in staged_fields
                         }
-                        await StagedProcessingFailure.create(
+                        failure = StagedProcessingFailure(
                             material_id=safe_int(
                                 getattr(staged_item, "material_id", None)
                             ),
                             staged_payload=payload,
                             error_message=err_msg[:1900],
                         )
-                        # logger.info(
-                        #    f"[STAGED][RECORDED] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Failure recorded in StagedProcessingFailure"
-                        # )
-                    except Exception:
-                        # logger.error(
-                        #    f"[STAGED][RECORD_FAIL] material_id={mid_val}, faculty={faculty_val}, stage=raw_data: Could not record failure: {record_error}"
-                        # )
-                        ...
-                    # Do not re-raise; keep other rows processing. Failed staged rows remain for manual inspection.
+                        session.add(failure)
 
-        # Process complex merges outside transaction since update_copyright_items does its own operations
+                await session.commit()
+
+            except Exception as e:
+                await session.rollback()
+                logger.exception(f"Error processing staged data batch: {e}")
+
         if complex_item_dicts:
             logger.info(
                 f"Processing {len(complex_item_dicts)} complex merges for batch {batch_idx}"
@@ -1106,22 +1062,21 @@ async def process_staged_raw_data(settings: Settings) -> None:
                 )
             except Exception as e:
                 logger.exception(f"Error processing complex merges: {e}")
-                # Don't fail the whole batch, just log the error
 
-        # After successful transaction, remove successfully processed staged rows
         if batch_processed_ids:
-            try:
-                await StagedCopyrightItem.filter(
-                    material_id__in=batch_processed_ids
-                ).delete()
-                logger.info(
-                    f"Cleared {len(batch_processed_ids)} processed staged rows."
-                )
-                processed_ids.extend(batch_processed_ids)
-            except Exception as e:
-                logger.exception(
-                    f"Error deleting staged rows {batch_processed_ids}: {e}"
-                )
+            async for session in get_session():
+                try:
+                    await session.execute(delete(StagedCopyrightItem).where(StagedCopyrightItem.material_id.in_(batch_processed_ids)))
+                    await session.commit()
+                    logger.info(
+                        f"Cleared {len(batch_processed_ids)} processed staged rows."
+                    )
+                    processed_ids.extend(batch_processed_ids)
+                except Exception as e:
+                    await session.rollback()
+                    logger.exception(
+                        f"Error deleting staged rows {batch_processed_ids}: {e}"
+                    )
 
     logger.info(
         f"Finished processing staged raw data. Successfully processed {len(processed_ids)} rows."
@@ -1158,103 +1113,76 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
         return mapping.get(lower)
 
     await ensure_db_inited(settings)
-    staged_updates = await StagedFacultyUpdate.all()
+    async for session in get_session():
+        result = await session.execute(select(StagedFacultyUpdate))
+        staged_updates = result.scalars().all()
+
     if not staged_updates:
         logger.info("No staged faculty updates to process.")
         return
 
     logger.info(f"Processing {len(staged_updates)} staged faculty updates...")
 
-    # Process staged faculty updates in batches inside transactions; delete only processed rows
     processed_updates: list[int] = []
     for batch in batched(staged_updates, 100):
         batch_processed: list[int] = []
-        async with in_transaction():
-            for update in batch:
-                try:
-                    mid = update.material_id
-                    # logger.debug(
-                    #    f"[STAGED][PROCESS] material_id={mid}, stage=faculty_update: Starting processing"
-                    # )
+        async for session in get_session():
+            try:
+                for update in batch:
+                    try:
+                        mid = update.material_id
+                        result = await session.execute(select(CopyrightItem).where(CopyrightItem.material_id == mid))
+                        item = result.scalar_one_or_none()
+                        if not item:
+                            continue
 
-                    item = await CopyrightItem.get_or_none(material_id=mid)
-                    if not item:
-                        # logger.warning(
-                        #    f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: Item not found in database"
-                        # )
-                        continue
+                        update_fields = []
+                        if (
+                            update.manual_classification
+                            and item.manual_classification != update.manual_classification
+                        ):
+                            item.manual_classification = update.manual_classification
+                            update_fields.append("manual_classification")
 
-                    update_fields = []
-                    if (
-                        update.manual_classification
-                        and item.manual_classification != update.manual_classification
-                    ):
-                        item.manual_classification = update.manual_classification
-                        update_fields.append("manual_classification")
-                        # logger.debug(
-                        #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating manual_classification"
-                        # )
+                        if update.remarks and item.remarks != update.remarks:
+                            item.remarks = update.remarks
+                            update_fields.append("remarks")
 
-                    if update.remarks and item.remarks != update.remarks:
-                        item.remarks = update.remarks
-                        update_fields.append("remarks")
-                        # logger.debug(
-                        #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating remarks"
-                        # )
+                        if update.workflow_status:
+                            normalized = _normalize_wf(update.workflow_status)
+                            if normalized:
+                                wf_st = safe_enum(WorkflowStatus, normalized)
+                                if wf_st and item.workflow_status != wf_st.value:
+                                    item.workflow_status = wf_st.value
+                                    update_fields.append("workflow_status")
 
-                    if update.workflow_status:
-                        # Accept explicit workflow status choices made by faculty users.
-                        # Normalize common variants so things like "inbox", "in_progress",
-                        # "inprogress", "todo" (case-insensitive) are mapped to the
-                        # canonical enum values. If a recognizable value is found, always
-                        # apply it (this represents an explicit user choice).
+                        if update_fields:
+                            session.add(item)
+                            smid = safe_int(mid)
+                            if smid is not None:
+                                batch_processed.append(smid)
+                        else:
+                            ...
 
-                        normalized = _normalize_wf(update.workflow_status)
-                        if normalized:
-                            wf_st = safe_enum(WorkflowStatus, normalized)
-                            if wf_st and item.workflow_status != wf_st:
-                                item.workflow_status = wf_st
-                                update_fields.append("workflow_status")
-                            # logger.debug(
-                            #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status"
-                            # )
+                    except Exception as e:
+                        logger.error(f"Error processing staged faculty update: {e}")
 
-                    if update_fields:
-                        await item.save(update_fields=update_fields)
-                        smid = safe_int(mid)
-                        if smid is not None:
-                            batch_processed.append(smid)
-                        # logger.info(
-                        #    f"[STAGED][SUCCESS] material_id={mid}, stage=faculty_update: Updated fields {update_fields}"
-                        # )
-                    else:
-                        # logger.debug(
-                        #    f"[STAGED][SKIP] material_id={mid}, stage=faculty_update: No fields to update"
-                        # )
-                        ...
-
-                except Exception:
-                    getattr(update, "material_id", None)
-                    # logger.error(
-                    #    f"[STAGED][ERROR] material_id={mid_val}, stage=faculty_update: {str(e)}"
-                    # )
-                    # logger.debug(
-                    #    f"[STAGED][TRACE] material_id={mid_val}, stage=faculty_update: {traceback.format_exc()}"
-                    # )
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.exception(f"Error processing staged faculty updates batch: {e}")
 
         if batch_processed:
-            try:
-                await StagedFacultyUpdate.filter(
-                    material_id__in=batch_processed
-                ).delete()
-                # logger.info(
-                #    f"Cleared {len(batch_processed)} processed staged faculty updates."
-                # )
-                processed_updates.extend(batch_processed)
-            except Exception:
-                logger.exception(
-                    f"Error deleting processed staged faculty updates: {batch_processed}"
-                )
+            async for session in get_session():
+                try:
+                    await session.execute(delete(StagedFacultyUpdate).where(StagedFacultyUpdate.material_id.in_(batch_processed)))
+                    await session.commit()
+                    processed_updates.extend(batch_processed)
+                except Exception as e:
+                    await session.rollback()
+                    logger.exception(
+                        f"Error deleting processed staged faculty updates: {batch_processed}"
+                    )
 
     logger.info(
         f"Finished processing staged faculty updates. Successfully processed {len(processed_updates)} rows."
@@ -1323,233 +1251,181 @@ async def calculate_derived_fields(settings: Settings) -> None:
 
 async def persist_courses(
     courses_data: dict[int, dict],
-    *,
-    CourseModel=Course,
-    PersonModel=Person,
-    FacultyModel=Faculty,
 ) -> None:
-    """Persist (upsert) course records and teacher relations.
-
-    Accepts dependency-injected models so tests patching objects in the
-    enrichment.osiris module still work when that wrapper forwards its
-    patched classes here.
-    """
+    """Persist (upsert) course records and teacher relations."""
     if not courses_data:
         logger.info("No course data to persist")
         return
 
-    # Split create/update
-    existing = await CourseModel.filter(cursuscode__in=list(courses_data.keys()))
-    existing_codes = {c.cursuscode for c in existing}
-
-    to_create: list[dict] = []
-    to_update: list[dict] = []
-
-    # Preprocess each course dict
-    allowed_course_fields = {
-        "cursuscode",
-        "internal_id",
-        "year",
-        "name",
-        "short_name",
-        "ec",
-        "programme",
-        "notes",
-        "category",
-        "faculty_id",
-    }
-
-    for code, data in courses_data.items():
-        if not isinstance(data, dict):
-            logger.warning(f"Skipping invalid course data for {code}: not a dict")
-            continue
-        # Shallow copy so we can mutate safely
-        cd = dict(data)
-
-        # Handle faculty FK (stored by abbreviation). Use faculty_id convention.
-        faculty_abbr = cd.pop("faculty", None)
-        if faculty_abbr:
-            faculty_obj = await FacultyModel.get_or_none(abbreviation=faculty_abbr)
-            if faculty_obj:
-                cd["faculty_id"] = faculty_obj.abbreviation
-            else:
-                logger.debug(
-                    f"Faculty '{faculty_abbr}' not found for course {code}; leaving FK null"
-                )
-
-        # Drop unsupported keys (e.g. faculty_long, language, etc.)
-        cd = {
-            k: v
-            for k, v in cd.items()
-            if k in allowed_course_fields or k.startswith("_")
-        }
-
-        if "ec" in cd:
-            if "," in str(cd["ec"]):
-                cd["ec"] = cd["ec"].replace(",", ".")
-            try:
-                cd["ec"] = float(cd["ec"])
-            except (ValueError, TypeError):
-                cd["ec"] = None
-        if code in existing_codes:
-            to_update.append(cd | {"cursuscode": code})
-        else:
-            # Required minimal fields guard
-            missing_req = [
-                k for k in ["cursuscode", "internal_id", "year", "name"] if k not in cd
-            ]
-            if missing_req:
-                logger.warning(
-                    f"Skipping create for course {code}: missing {missing_req}"
-                )
-                continue
-            cd["cursuscode"] = code
-            to_create.append(cd)
-
-    # Create
-    for cd in to_create:
+    async for session in get_session():
         try:
-            await CourseModel.create(**cd)
-        except Exception as exc:  # pragma: no cover (defensive)
-            logger.error(f"Error creating course {cd.get('cursuscode')}: {exc}")
-            continue
+            existing_codes = set((await session.execute(select(Course.cursuscode).where(Course.cursuscode.in_(list(courses_data.keys()))))).scalars())
 
-    # Update existing (exclude PK)
-    for ud in to_update:
-        code = ud.pop("cursuscode")
-        try:
-            await CourseModel.filter(cursuscode=code).update(**ud)
-        except Exception as exc:  # pragma: no cover
-            logger.error(f"Error updating course {code}: {exc}")
+            to_create: list[dict] = []
+            to_update: list[dict] = []
+
+            allowed_course_fields = {
+                "cursuscode",
+                "internal_id",
+                "year",
+                "name",
+                "short_name",
+                "ec",
+                "programme",
+                "notes",
+                "category",
+                "faculty_id",
+            }
+
+            for code, data in courses_data.items():
+                if not isinstance(data, dict):
+                    logger.warning(f"Skipping invalid course data for {code}: not a dict")
+                    continue
+                cd = dict(data)
+
+                faculty_abbr = cd.pop("faculty", None)
+                if faculty_abbr:
+                    faculty_obj_result = await session.execute(select(Faculty).where(Faculty.abbreviation == faculty_abbr))
+                    faculty_obj = faculty_obj_result.scalar_one_or_none()
+                    if faculty_obj:
+                        cd["faculty_id"] = faculty_obj.abbreviation
+                    else:
+                        logger.debug(
+                            f"Faculty '{faculty_abbr}' not found for course {code}; leaving FK null"
+                        )
+
+                cd = {
+                    k: v
+                    for k, v in cd.items()
+                    if k in allowed_course_fields or k.startswith("_")
+                }
+
+                if "ec" in cd:
+                    if "," in str(cd["ec"]):
+                        cd["ec"] = cd["ec"].replace(",", ".")
+                    try:
+                        cd["ec"] = float(cd["ec"])
+                    except (ValueError, TypeError):
+                        cd["ec"] = None
+                if code in existing_codes:
+                    to_update.append(cd | {"cursuscode": code})
+                else:
+                    missing_req = [
+                        k for k in ["cursuscode", "internal_id", "year", "name"] if k not in cd
+                    ]
+                    if missing_req:
+                        logger.warning(
+                            f"Skipping create for course {code}: missing {missing_req}"
+                        )
+                        continue
+                    cd["cursuscode"] = code
+                    to_create.append(cd)
+
+            for cd in to_create:
+                try:
+                    session.add(Course(**cd))
+                except Exception as exc:
+                    logger.error(f"Error creating course {cd.get('cursuscode')}: {exc}")
+                    continue
+
+            for ud in to_update:
+                code = ud.pop("cursuscode")
+                try:
+                    await session.execute(update(Course).where(Course.cursuscode == code).values(**ud))
+                except Exception as exc:
+                    logger.error(f"Error updating course {code}: {exc}")
+
+            await session.commit()
+
+        except Exception as e:
+            await session.rollback()
+            logger.exception(f"Error persisting courses: {e}")
 
     logger.info(f"Successfully persisted {len(courses_data)} courses")
 
 
-async def _apply_course_teacher_relations(course_obj, rel_payload: dict, PersonModel):
-    """Handle teacher/person many-to-many assignments for a course.
-
-    We unify all available role sets into a single collection for now; role-specific
-    data could be added by creating CourseEmployee entries with a role value.
-    """
-    if not course_obj or not rel_payload:
-        return
-    # Aggregate teacher-like sets
-    teacher_sets = []
-    for key in [
-        "teachers",
-        "contacts",
-        "docenten",
-        "examinators",
-        "unknown_role",
-        "tutors",
-    ]:
-        val = rel_payload.get(key)
-        if isinstance(val, set | list | tuple):
-            teacher_sets.append(set(val))
-    if not teacher_sets:
-        return
-    all_teachers = set.union(*teacher_sets)
-    for name in sorted(all_teachers):
-        if not name or not str(name).strip():
-            continue
-        person_obj, _created = await PersonModel.get_or_create(
-            input_name=str(name).strip(), defaults={"main_name": None}
-        )
-        try:
-            await course_obj.teachers.add(person_obj)
-        except Exception as exc:  # pragma: no cover
-            logger.debug(
-                f"Could not add teacher '{name}' to course {course_obj.cursuscode}: {exc}"
-            )
-
-
 async def persist_persons(
     persons_data: dict[str, dict],
-    *,
-    PersonModel=Person,
-    FacultyModel=Faculty,
-    OrganizationModel=Organization,
 ) -> None:
-    """Persist (upsert) person records and their organization relations.
-
-    Drops keys that don't map to Person columns; handles FK + M2M after base create/update.
-    """
+    """Persist (upsert) person records and their organization relations."""
     if not persons_data:
         logger.info("No person data to persist")
         return
 
-    existing = await PersonModel.filter(input_name__in=list(persons_data.keys()))
-    existing_names = {p.input_name for p in existing}
-
-    to_create: list[dict] = []
-    to_update: list[dict] = []
-
-    # Allowed direct columns (excluding M2M + unserialized fields)
-    direct_fields = {
-        "input_name",
-        "main_name",
-        "match_confidence",
-        "first_name",
-        "email",
-        "people_page_url",
-    }
-
-    for input_name, pdata in persons_data.items():
-        if not isinstance(pdata, dict):
-            logger.warning(f"Skipping invalid person data for {input_name}: not a dict")
-            continue
-        pd = dict(pdata)
-        faculty_abbr = pd.pop("faculty", None)
-        if faculty_abbr:
-            faculty_obj = await FacultyModel.get_or_none(abbreviation=faculty_abbr)
-            if faculty_obj:
-                pd["faculty_id"] = faculty_obj.abbreviation
-            else:
-                logger.debug(
-                    f"Faculty '{faculty_abbr}' not found for person {input_name}"
-                )
-        # Stash org info
-        orgs_payload = pd.pop("orgs", [])
-        pd["_orgs_payload"] = orgs_payload
-        # Drop unsupported keys
-        cleaned = {
-            k: v
-            for k, v in pd.items()
-            if k in direct_fields or k.endswith("_id") or k.startswith("_")
-        }
-        cleaned["input_name"] = input_name  # ensure primary identifier present
-        if input_name in existing_names:
-            to_update.append(cleaned)
-        else:
-            to_create.append(cleaned)
-
-    # Create
-    for cd in to_create:
-        orgs_payload = cd.pop("_orgs_payload", [])
+    async for session in get_session():
         try:
-            person_obj = await PersonModel.create(
-                **{k: v for k, v in cd.items() if not k.startswith("_")}
-            )
-        except Exception as exc:  # pragma: no cover
-            logger.error(f"Error creating person {cd.get('input_name')}: {exc}")
-            continue
-        await _apply_person_org_relations(person_obj, orgs_payload, OrganizationModel)
+            existing_names = set((await session.execute(select(Person.input_name).where(Person.input_name.in_(list(persons_data.keys()))))).scalars())
 
-    # Update
-    for ud in to_update:
-        orgs_payload = ud.pop("_orgs_payload", [])
-        input_name = ud.pop("input_name")
-        try:
-            await PersonModel.filter(input_name=input_name).update(
-                **{k: v for k, v in ud.items() if not k.startswith("_")}
-            )
-            person_obj = await PersonModel.get_or_none(input_name=input_name)
-            if person_obj:
-                await _apply_person_org_relations(
-                    person_obj, orgs_payload, OrganizationModel
-                )
-        except Exception as exc:  # pragma: no cover
-            logger.error(f"Error updating person {input_name}: {exc}")
+            to_create: list[dict] = []
+            to_update: list[dict] = []
+
+            direct_fields = {
+                "input_name",
+                "main_name",
+                "match_confidence",
+                "first_name",
+                "email",
+                "people_page_url",
+            }
+
+            for input_name, pdata in persons_data.items():
+                if not isinstance(pdata, dict):
+                    logger.warning(f"Skipping invalid person data for {input_name}: not a dict")
+                    continue
+                pd = dict(pdata)
+                faculty_abbr = pd.pop("faculty", None)
+                if faculty_abbr:
+                    faculty_obj_result = await session.execute(select(Faculty).where(Faculty.abbreviation == faculty_abbr))
+                    faculty_obj = faculty_obj_result.scalar_one_or_none()
+                    if faculty_obj:
+                        pd["faculty_id"] = faculty_obj.abbreviation
+                    else:
+                        logger.debug(
+                            f"Faculty '{faculty_abbr}' not found for person {input_name}"
+                        )
+                orgs_payload = pd.pop("orgs", [])
+                pd["_orgs_payload"] = orgs_payload
+                cleaned = {
+                    k: v
+                    for k, v in pd.items()
+                    if k in direct_fields or k.endswith("_id") or k.startswith("_")
+                }
+                cleaned["input_name"] = input_name
+                if input_name in existing_names:
+                    to_update.append(cleaned)
+                else:
+                    to_create.append(cleaned)
+
+            for cd in to_create:
+                orgs_payload = cd.pop("_orgs_payload", [])
+                try:
+                    person_obj = Person(**{k: v for k, v in cd.items() if not k.startswith("_")})
+                    session.add(person_obj)
+                    await session.flush()
+                    await _apply_person_org_relations(person_obj, orgs_payload, session)
+                except Exception as exc:
+                    logger.error(f"Error creating person {cd.get('input_name')}: {exc}")
+                    continue
+
+            for ud in to_update:
+                orgs_payload = ud.pop("_orgs_payload", [])
+                input_name = ud.pop("input_name")
+                try:
+                    await session.execute(update(Person).where(Person.input_name == input_name).values(**{k: v for k, v in ud.items() if not k.startswith("_")}))
+                    person_obj_result = await session.execute(select(Person).where(Person.input_name == input_name))
+                    person_obj = person_obj_result.scalar_one_or_none()
+                    if person_obj:
+                        await _apply_person_org_relations(
+                            person_obj, orgs_payload, session
+                        )
+                except Exception as exc:
+                    logger.error(f"Error updating person {input_name}: {exc}")
+
+            await session.commit()
+
+        except Exception as e:
+            await session.rollback()
+            logger.exception(f"Error persisting persons: {e}")
 
     logger.info(f"Successfully persisted {len(persons_data)} persons")
 
@@ -1557,7 +1433,7 @@ async def persist_persons(
 async def _apply_person_org_relations(
     person_obj: Person,
     orgs_payload: dict[str, str],
-    OrganizationModel: type[Organization],
+    session,
 ):
     if not person_obj or not orgs_payload:
         return
@@ -1568,27 +1444,24 @@ async def _apply_person_org_relations(
         name = org.get("name") or raw_abbr
         if not raw_abbr:
             continue
-        full_abbr = raw_abbr  # provided chain (e.g. ET-CEM-MD)
+        full_abbr = raw_abbr
         base_abbr = full_abbr.split("-")[-1] if full_abbr else full_abbr
         hierarchy_level = full_abbr.count("-") + 1 if full_abbr else 1
 
-        # Prefer lookup by full_abbreviation (unique); fallback to base abbreviation
-        org_obj = await OrganizationModel.get_or_none(full_abbreviation=full_abbr)
+        org_obj_result = await session.execute(select(Organization).where(Organization.full_abbreviation == full_abbr))
+        org_obj = org_obj_result.scalar_one_or_none()
+
         if not org_obj:
             try:
-                org_obj = await OrganizationModel.get_or_none(abbreviation=base_abbr)
+                org_obj_result = await session.execute(select(Organization).where(Organization.abbreviation == base_abbr))
+                org_obj = org_obj_result.scalar_one_or_none()
             except Exception:
-                # probably multiple with the same 'abbreviation'
-                # instead filter on abbreviation and hierarchy_level
-                org_obj_filtered = OrganizationModel.filter(
-                    full_abbreviation=full_abbr, name=name
-                )
-                num_found = await org_obj_filtered.count()
-                # if exactly one match, use it
-                if not num_found:
+                org_obj_filtered_result = await session.execute(select(Organization).where(Organization.full_abbreviation == full_abbr, Organization.name == name))
+                org_obj_filtered = org_obj_filtered_result.scalars().all()
+                if not org_obj_filtered:
                     org_obj = None
-                elif num_found == 1:
-                    org_obj = await org_obj_filtered.first()
+                elif len(org_obj_filtered) == 1:
+                    org_obj = org_obj_filtered[0]
                 else:
                     logger.error(
                         f"Found multiple organizations matching abbreviation='{base_abbr}', hierarchy_level={hierarchy_level}, name='{name}'; cannot disambiguate, skipping"
@@ -1596,18 +1469,18 @@ async def _apply_person_org_relations(
                     org_obj = None
         if not org_obj:
             try:
-                org_obj = await OrganizationModel.create(
+                org_obj = Organization(
                     parent_organization=None,
                     hierarchy_level=hierarchy_level,
                     name=name,
                     abbreviation=base_abbr,
                     full_abbreviation=full_abbr,
                 )
-            except Exception as exc:  # pragma: no cover
-                # Retry fetch in case of race creating same full_abbreviation
-                existing_retry = await OrganizationModel.get_or_none(
-                    full_abbreviation=full_abbr
-                )
+                session.add(org_obj)
+                await session.flush()
+            except Exception as exc:
+                existing_retry_result = await session.execute(select(Organization).where(Organization.full_abbreviation == full_abbr))
+                existing_retry = existing_retry_result.scalar_one_or_none()
                 if existing_retry:
                     org_obj = existing_retry
                 else:
@@ -1616,8 +1489,8 @@ async def _apply_person_org_relations(
                     )
                     continue
         try:
-            await person_obj.orgs.add(org_obj)
-        except Exception as exc:  # pragma: no cover
+            person_obj.orgs.append(org_obj)
+        except Exception as exc:
             logger.debug(
                 f"Could not add org '{full_abbr}' to person {person_obj.input_name}: {exc}"
             )
@@ -1630,71 +1503,80 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
     if a file does not exist, also set it to Done, etc.
     """
     await ensure_db_inited(settings)
-    # grab all items with non-Done workflow status
-    items = await CopyrightItem.filter(~Q(workflow_status=WorkflowStatus.Done)).all()
 
     DONE_MANUAL_CLASSIFICATIONS = [
-        Classification.OPEN_ACCESS.value,
-        Classification.EIGEN_MATERIAAL_POWERPOINT.value,
-        Classification.EIGEN_MATERIAAL_OVERIG.value,
-        Classification.EIGEN_MATERIAAL_TITELINDICATIE.value,
-        Classification.EIGEN_MATERIAAL.value,
+        Classification.OPEN_ACCESS.value.lower(),
+        Classification.EIGEN_MATERIAAL_POWERPOINT.value.lower(),
+        Classification.EIGEN_MATERIAAL_OVERIG.value.lower(),
+        Classification.EIGEN_MATERIAAL_TITELINDICATIE.value.lower(),
+        Classification.EIGEN_MATERIAAL.value.lower(),
     ]
 
-    if not items:
-        logger.info("No items to update workflow status for.")
-        return
-    logger.info(f"Updating workflow status for {len(items)} items...")
-    updated_count = 0
-    for item in items:
-        if item.file_exists is False:
-            item.workflow_status = WorkflowStatus.Done
-            await item.save(update_fields=["workflow_status"])
-            updated_count += 1
-            continue
-        if (
-            item.manual_classification
-            and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
-        ):
-            print(
-                f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
-            )
-            item.workflow_status = WorkflowStatus.Done
-            await item.save(update_fields=["workflow_status"])
-            updated_count += 1
-            continue
+    async for session in get_session():
+        result = await session.execute(
+            select(CopyrightItem).where(CopyrightItem.workflow_status != WorkflowStatus.Done.value)
+        )
+        items = result.scalars().all()
+
+        if not items:
+            logger.info("No items to update workflow status for.")
+            return
+
+        logger.info(f"Updating workflow status for {len(items)} items...")
+        updated_count = 0
+        for item in items:
+            if item.file_exists is False:
+                item.workflow_status = WorkflowStatus.Done.value
+                updated_count += 1
+                continue
+            if (
+                item.manual_classification
+                and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
+            ):
+                print(
+                    f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
+                )
+                item.workflow_status = WorkflowStatus.Done.value
+                updated_count += 1
+                continue
+
+        try:
+            await session.commit()
+        except Exception as exc:
+            logger.error(f"Failed to commit workflow status updates: {exc}")
+            await session.rollback()
+            return
+
+        logger.info(f"Updated workflow status for {updated_count} items.")
+
 
 async def map_v1_to_v2_classifications(settings: Settings) -> None:
     """
     uses the classification mapping to map manual_classification values from v1 items to v2 items
     for items that do not yet have a v2 classification.
-    Modify the code in `add_v2_classification` to work directly on the db through tortoise orm instead of the polars df.
     """
-    # select all items:
-    # - without a v2 classification (null or empty)
     await ensure_db_inited(settings)
-    selected_items = await CopyrightItem.filter(
-        Q(v2_manual_classification__isnull=True)
-        | Q(v2_manual_classification=ClassificationV2.ONBEKEND)
-    ).all().prefetch_related('v1_items', 'faculty')
-    logger.info(f"Mapping v1 to v2 classifications for {len(selected_items)} items...")
-    if not selected_items:
-        logger.info("No items to map v1 to v2 classifications for.")
-        return
-    # add mapping logic here, see add_v2_classification for reference
-    # relevant fields on CopyrightItem:
-    # - manual_classification (v1)
-    # - v2_manual_classification
-    # - v2_lengte
-    # - v2_overnamestatus
 
-    # perform mapping using the same lookup as the old DataFrame-based helper
     details = []
     mapped_count = 0
     failed_count = 0
     modified_count = 0
-    unlinked_upd = 0
-    async with in_transaction():
+
+    async for session in get_session():
+        result = await session.execute(
+            select(CopyrightItem).where(
+                (CopyrightItem.v2_manual_classification.is_(None))
+                | (CopyrightItem.v2_manual_classification == ClassificationV2.ONBEKEND.value)
+            )
+        )
+        selected_items = result.scalars().all()
+
+        if not selected_items:
+            logger.info("No items to map v1 to v2 classifications for.")
+            return
+
+        logger.info(f"Mapping v1 to v2 classifications for {len(selected_items)} items...")
+
         for item in selected_items:
             detaildict = {}
             try:
@@ -1709,64 +1591,30 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 if not current or current == "-":
                     current = "onbekend"
 
-                # normalize common variations to improve enum lookup
                 if isinstance(current, str):
                     current = current.strip().lower()
-                # try to coerce to the v1 Classification enum; fall back to ONBEKEND
-                # use a match case statement for this.
-                # 1. exact match to enum values
-                # 2. match ignoring case
-                # 3. match ignoring underscores, hyphens, spaces, and case
-                # 4. default to ONBEKEND
-                match current:
-                    case val if val in {e.value for e in Classification}:
-                        key = Classification(val)
-                    case val if val.lower() in {e.value.lower() for e in Classification}:
-                        key = Classification(
-                            next(
-                                e.value
-                                for e in Classification
-                                if e.value.lower() == val.lower()
-                            )
-                        )
-                    case val if re.sub(r"[\s_-]", "", val.lower()) in {
-                        re.sub(r"[\s_-]", "", e.value.lower())
-                        for e in Classification
-                    }:
-                        key = Classification(
-                            next(
-                                e.value
-                                for e in Classification
-                                if re.sub(r"[\s_-]", "", e.value.lower())
-                                == re.sub(r"[\s_-]", "", val.lower())
-                            )
-                        )
-                    case _:
-                        key = Classification.ONBEKEND
+
+                key = LOWER_TO_CLASSIFICATION.get(current)
+                if not key:
+                    normalized = _CLASSIFICATION_NORMALIZE_PATTERN.sub('', current)
+                    key = NORMALIZED_TO_CLASSIFICATION.get(normalized)
+
+                if not key:
+                    key = Classification.ONBEKEND
 
                 mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
                 if not mapped:
                     mapped = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
 
-                current_v2_classification = item.v2_manual_classification.value
+                current_v2_classification = item.v2_manual_classification
 
-                if item.v2_manual_classification != mapped.classification:
+                if item.v2_manual_classification != mapped.classification.value:
+                    item.v2_manual_classification = mapped.classification.value
+                    item.v2_lengte = mapped.length.value
+                    item.v2_overnamestatus = mapped.overname_status.value
 
-                    item.v2_manual_classification = mapped.classification
-                    item.v2_lengte = mapped.length
-                    item.v2_overnamestatus = mapped.overname_status
-                    faculty = item.faculty
-                    abbreviation = faculty.abbreviation
-                    v1_items = await item.v1_items.all()
-                    v1_id = None
-                    if v1_items:
-                        v1_id = v1_items[0].material_id
-                    if not v1_id:
-                        unlinked_upd += 1
                     detaildict = {
                         "material_id": item.material_id,
-                        "faculty": abbreviation,
-                        "v1_material_id": v1_id,
                         "found_v1_classification": input_val,
                         "v2_classification_before_update": current_v2_classification,
                         "used_v1_classification": key.value,
@@ -1776,14 +1624,8 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                     }
                     details.append(detaildict)
                     logger.debug(f"material_id {item.material_id}: [v1] {input_val} -> {current} -> {key.value} mapped to [v2] {mapped.classification}")
-                    await item.save(
-                        update_fields=[
-                            "v2_manual_classification",
-                            "v2_lengte",
-                            "v2_overnamestatus",
-                        ]
-                    )
                     modified_count += 1
+
                 mapped_count += 1
             except Exception as exc:
                 logger.error(
@@ -1791,8 +1633,15 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 )
                 failed_count += 1
 
+        try:
+            await session.commit()
+        except Exception as exc:
+            logger.error(f"Failed to commit v1->v2 classification mappings: {exc}")
+            await session.rollback()
+            return
+
     logger.info(
-        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count}, unlinked updates={unlinked_upd} (out of {len(selected_items)})"
+        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count} (out of {len(selected_items)})"
     )
     if len(details) > 0:
         logger.debug(f"Stored parsed/mapped details to csv for inspection")
