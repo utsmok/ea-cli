@@ -284,7 +284,7 @@ async def preprocess_input_data(
         # Candidate new items (may be partial if coming from faculty sheets)
         candidate_new_items = (
             data.with_columns(pl.col("material_id").cast(int))
-            .filter(~pl.col("material_id").is_in(list(existing_mat_ids)))
+            .filter(~pl.col("material_id").is_in(existing_mat_ids))
             .to_dicts()
         )
 
