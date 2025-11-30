@@ -1530,7 +1530,7 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
                 item.manual_classification
                 and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
             ):
-                print(
+                logger.info(
                     f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
                 )
                 item.workflow_status = WorkflowStatus.Done.value
