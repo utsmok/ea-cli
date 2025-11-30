@@ -1004,7 +1004,6 @@ async def process_staged_raw_data(settings: Settings) -> None:
                         new_item = await copyright_item_from_dict(item_dict)
                         if new_item:
                             session.add(new_item)
-                            await session.commit()
                             smid = safe_int(mid)
                             if smid is not None:
                                 batch_processed_ids.append(smid)
@@ -1083,7 +1082,6 @@ async def process_staged_raw_data(settings: Settings) -> None:
                                 # logger.debug(
                                 #    f"[STAGED][UPDATE] material_id={mid}, faculty={faculty_val}, stage=raw_data: Updating fields {update_fields}"
                                 # )
-                                await session.commit()
                                 smid = safe_int(mid)
                                 if smid is not None:
                                     batch_processed_ids.append(smid)
@@ -1124,6 +1122,15 @@ async def process_staged_raw_data(settings: Settings) -> None:
                         # )
                         ...
                     # Do not re-raise; keep other rows processing. Failed staged rows remain for manual inspection.
+
+            # Commit all new items and updates from this batch
+            try:
+                await session.commit()
+                logger.info(f"Committed batch {batch_idx} changes to database")
+            except Exception as e:
+                logger.exception(f"Error committing batch {batch_idx}: {e}")
+                await session.rollback()
+                # Continue to next batch despite error
 
             # Process complex merges outside transaction since update_copyright_items does its own operations
             if complex_item_dicts:
@@ -1767,72 +1774,53 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
     ]
 
     async for session in get_session():
-        result = await session.execute(
+        # Build list of classification values for SQL IN clause
+        done_classifications = ", ".join(
+            f"'{cls}'" for cls in DONE_MANUAL_CLASSIFICATIONS
+        )
+
+        # Perform bulk update for items where file_exists is False
+        result1 = await session.execute(
             text(
                 """
-                SELECT material_id, period, department, course_code, course_name, url, filename, title, owner, filetype, classification, ml_prediction, manual_classification, manual_identifier, v2_manual_classification, v2_overnamestatus, v2_lengte, scope, remarks, auditor, last_change, status, isbn, doi, in_collection, pagecount, wordcount, picturecount, author, publisher, reliability, pages_x_students, count_students_registered, filehash, last_scan_date_university, last_scan_date_course, retrieved_from_copyright_on, workflow_status, possible_fine, infringement, file_exists, last_canvas_check, canvas_course_id, faculty_id, is_duplicate
-                FROM copyright_data
+                UPDATE copyright_data
+                SET workflow_status = 'Done'
                 WHERE workflow_status != 'Done'
+                  AND file_exists = FALSE
                 """
             )
         )
-        items = result.fetchall()
+        file_exists_count = result1.rowcount
 
-        if not items:
-            logger.info("No items to update workflow status for.")
-            return
-        logger.info(f"Updating workflow status for {len(items)} items...")
-        updated_count = 0
-        for row in items:
-            # Access columns by index from the raw SQL result
-            material_id = row[0]  # material_id is first column
-            file_exists = row[40]  # file_exists column index
-            manual_classification = row[12]  # manual_classification column index
-
-            if file_exists is False:
-                # Update using raw SQL
-                await session.execute(
-                    text(
-                        """
-                        UPDATE copyright_data
-                        SET workflow_status = 'Done'
-                        WHERE material_id = :material_id
-                        """
-                    ),
-                    {"material_id": material_id},
-                )
-                updated_count += 1
-                continue
-            if (
-                manual_classification
-                and manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
-            ):
-                print(
-                    f"Updating item {material_id} to Done based on manual_classification '{manual_classification}'"
-                )
-                # Update using raw SQL
-                await session.execute(
-                    text(
-                        """
-                        UPDATE copyright_data
-                        SET workflow_status = 'Done'
-                        WHERE material_id = :material_id
-                        """
-                    ),
-                    {"material_id": material_id},
-                )
-                updated_count += 1
-                continue
+        # Perform bulk update for items with done manual classifications
+        result2 = await session.execute(
+            text(
+                f"""
+                UPDATE copyright_data
+                SET workflow_status = 'Done'
+                WHERE workflow_status != 'Done'
+                  AND LOWER(manual_classification) IN ({done_classifications})
+                """
+            )
+        )
+        classification_count = result2.rowcount
 
         # Commit all changes at once
         try:
             await session.commit()
+            total_updated = file_exists_count + classification_count
+            if total_updated > 0:
+                logger.info(
+                    f"Updated workflow status for {total_updated} items "
+                    f"({file_exists_count} due to file_exists=False, "
+                    f"{classification_count} due to manual_classification)."
+                )
+            else:
+                logger.info("No items to update workflow status for.")
         except Exception as exc:
             logger.error(f"Failed to commit workflow status updates: {exc}")
             await session.rollback()
             return
-
-        logger.info(f"Updated workflow status for {updated_count} items.")
 
 
 async def map_v1_to_v2_classifications(settings: Settings) -> None:

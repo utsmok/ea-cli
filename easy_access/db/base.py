@@ -68,8 +68,15 @@ def init_engine(settings: Settings) -> Engine:
     This is used by retrieve.py for read-heavy operations with polars.
     For ORM operations, use the async session from session.py instead.
     """
-    db_file_path = settings.db_path
-    return create_engine(f"sqlite:///{str(db_file_path)}")
+    from easy_access.db.session import get_database_url
+    
+    # Get the async PostgreSQL database URL via Settings
+    async_db_url = get_database_url(settings)
+    
+    # Convert async URL (postgresql+asyncpg://) to sync URL (postgresql+psycopg2://)
+    sync_url = async_db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    
+    return create_engine(sync_url)
 
 
 async def init(settings: Settings) -> bool | None:
@@ -84,29 +91,18 @@ async def init(settings: Settings) -> bool | None:
 
     from easy_access.db.models_base import Base
 
-    db_file_path = settings.db_path
-    create_tables = False
-
-    if not db_file_path.exists():
-        create_tables = True
-
-    # Check if models have been modified since last DB modification
-    models_py_path = Path("easy_access/db/sa_models.py")
-    if models_py_path.exists() and db_file_path.exists():
-        models_py_mod_time = models_py_path.stat().st_mtime
-        db_mod_time = db_file_path.stat().st_mtime
-        if models_py_mod_time > db_mod_time:
-            create_tables = True
-
-    # Initialize the async engine
+    # Initialize the async engine for PostgreSQL
     init_db(settings)
 
-    if create_tables:
-        # Create all tables using the engine directly
-        engine = get_engine()
-        if engine:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+    # For PostgreSQL, we use Alembic migrations to manage schema
+    # Check if we need to create tables (primarily for tests or fresh installs)
+    # In production, Alembic migrations should handle schema changes
+    engine = get_engine()
+    if engine:
+        # Optionally create tables if they don't exist
+        # Note: In production, use Alembic migrations instead
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
         # Also create the default faculties
         await init_faculties(settings)
