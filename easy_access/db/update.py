@@ -10,9 +10,6 @@ from itertools import batched
 from typing import Any
 
 import polars as pl
-from loguru import logger
-from sqlalchemy import delete, select, text, update
-
 from easy_access.db.base import (
     close_connections,
     copyright_item_from_dict,
@@ -37,7 +34,6 @@ from easy_access.db.sa_models import (
     StagedFacultyUpdate,
     StagedProcessingFailure,
 )
-from easy_access.db.session import get_session_factory
 from easy_access.merge_rules import (
     build_merge_rules_from_settings,
     get_mergeable_fields,
@@ -50,6 +46,8 @@ from easy_access.utils import (
     safe_int,
     standardize_dataframe,
 )
+from loguru import logger
+from sqlalchemy import delete, select, text, update
 
 
 # Custom exceptions for better error handling
@@ -1825,84 +1823,75 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
 
 async def map_v1_to_v2_classifications(settings: Settings) -> None:
     """
-    uses the classification mapping to map manual_classification values from v1 items to v2 items
-    for items that do not yet have a v2 classification.
-    Modify the code in `add_v2_classification` to work directly on the db through tortoise orm instead of the polars df.
+    Maps v1 manual_classification to v2 fields for items that lack v2 data.
     """
-    # select all items:
-    # - without a v2 classification (null or empty)
     await ensure_db_inited(settings)
+    # Import Enums locally to avoid circular imports if necessary, or ensure they are imported at top
+    from easy_access.db.enums import (
+        CLASSIFICATION_MAPPING_V1_TO_V2,
+        Classification,
+        ClassificationV2,
+    )
 
-    # perform mapping using the same lookup as the old DataFrame-based helper
-    from easy_access.db.enums import CLASSIFICATION_MAPPING_V1_TO_V2, Classification
+    # Select items where V2 classification is missing or 'onbekend'
+    stmt = select(CopyrightItem).where(
+        (CopyrightItem.v2_manual_classification.is_(None))
+        | (CopyrightItem.v2_manual_classification == ClassificationV2.ONBEKEND)
+    )
 
     mapped_count = 0
-    failed_count = 0
 
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            text(
-                """
-                SELECT material_id, period, department, course_code, course_name, url, filename, title, owner, filetype, classification, ml_prediction, manual_classification, manual_identifier, v2_manual_classification, v2_overnamestatus, v2_lengte, scope, remarks, auditor, last_change, status, isbn, doi, in_collection, pagecount, wordcount, picturecount, author, publisher, reliability, pages_x_students, count_students_registered, filehash, last_scan_date_university, last_scan_date_course, retrieved_from_copyright_on, workflow_status, possible_fine, infringement, file_exists, last_canvas_check, canvas_course_id, faculty_id, is_duplicate
-                FROM copyright_data
-                WHERE v2_manual_classification IS NULL OR v2_manual_classification = 'Onbekend'
-                """
-            )
-        )
-        rows = result.fetchall()
-        selected_items = []
-        for row in rows:
-            # Convert row to CopyrightItem-like object
-            item = type("CopyrightItem", (), {})()
-            for i, col in enumerate(result.keys()):
-                setattr(item, col, row[i])
-            selected_items.append(item)
+    async for session in get_session():
+        result = await session.execute(stmt)
+        items = result.scalars().all()
 
-        if not selected_items:
+        if not items:
             logger.info("No items to map v1 to v2 classifications for.")
             return
 
-        for item in selected_items:
+        logger.info(f"Mapping v1 to v2 classifications for {len(items)} items...")
+
+        for item in items:
+            # 1. Normalize current V1 classification
+            current_raw = item.manual_classification
+            current_str = "onbekend"
+
+            if hasattr(current_raw, "value"):  # It's an Enum
+                current_str = current_raw.value
+            elif (
+                isinstance(current_raw, str)
+                and current_raw.strip()
+                and current_raw != "-"
+            ):
+                current_str = current_raw.strip().lower()
+
+            # 2. Find the matching V1 Enum
+            key = Classification.ONBEKEND
             try:
-                current = item.manual_classification or "onbekend"
-                if not current or current == "-":
-                    current = "onbekend"
+                key = Classification(current_str)
+            except ValueError:
+                # Fallback search
+                for e in Classification:
+                    if e.value.lower() == current_str:
+                        key = e
+                        break
 
-                # normalize common variations to improve enum lookup
-                if isinstance(current, str):
-                    current = current.strip().lower()
+            # 3. Map to V2 Data
+            mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
+            if not mapped:
+                mapped = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
 
-                # try to coerce to the v1 Classification enum; fall back to ONBEKEND
-                try:
-                    key = Classification(current)
-                except Exception:
-                    key = Classification.ONBEKEND
-
-                mapped = CLASSIFICATION_MAPPING_V1_TO_V2.get(key)
-                if not mapped:
-                    mapped = CLASSIFICATION_MAPPING_V1_TO_V2[Classification.ONBEKEND]
-
+            # 4. Update the object (SQLAlchemy handles type casting automatically)
+            if item.v2_manual_classification != mapped.classification:
                 item.v2_manual_classification = mapped.classification
                 item.v2_lengte = mapped.length
                 item.v2_overnamestatus = mapped.overname_status
-
-                # Don't commit here - we'll commit all changes at once
                 mapped_count += 1
-            except Exception as exc:
-                logger.error(
-                    f"Failed to map v1->v2 classification for material_id={getattr(item, 'material_id', None)}: {exc}"
-                )
-                failed_count += 1
 
-        # Commit all changes at once
+        # Commit the transaction
         try:
             await session.commit()
-        except Exception as exc:
-            logger.error(f"Failed to commit v1->v2 classification mappings: {exc}")
+            logger.info(f"Successfully mapped {mapped_count} items.")
+        except Exception as e:
+            logger.error(f"Database commit failed during v2 mapping: {e}")
             await session.rollback()
-            return
-
-    logger.info(
-        f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count} (out of {len(selected_items)})"
-    )

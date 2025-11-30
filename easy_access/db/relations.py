@@ -531,7 +531,7 @@ async def match_v1_to_copyright_items(
     }
 
     all_matched_df = pl.DataFrame()
-
+    logger.info(f"Starting matching process between {v1_df.height} v1 items and {current_df.height} current items...")
     for tier, fields in compare_fields.items():
         if v1_df.height == 0 or current_df.height == 0:
             break
