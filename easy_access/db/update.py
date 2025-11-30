@@ -966,7 +966,9 @@ async def process_staged_raw_data(settings: Settings) -> None:
                                 if smid is not None:
                                     batch_processed_ids.append(smid)
                             else:
-                                ...
+                                logger.error(
+                                    f"Failed to create CopyrightItem from dict for material_id={mid}: {item_dict}"
+                                )
                         else:
                             mergeable_fields = get_mergeable_fields()
                             has_complex_fields = False
@@ -1114,13 +1116,11 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
     async for session in get_session():
         result = await session.execute(select(StagedFacultyUpdate))
         staged_updates = result.scalars().all()
-
-    if not staged_updates:
-        logger.info("No staged faculty updates to process.")
-        return
-
-    logger.info(f"Processing {len(staged_updates)} staged faculty updates...")
-
+        if not staged_updates:
+            logger.info("No staged faculty updates to process.")
+            return
+        logger.info(f"Processing {len(staged_updates)} staged faculty updates...")
+        break  # staged_updates loaded, exit session loop
     processed_updates: list[int] = []
     for batch in batched(staged_updates, 100):
         batch_processed: list[int] = []
@@ -1159,8 +1159,7 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                             smid = safe_int(mid)
                             if smid is not None:
                                 batch_processed.append(smid)
-                        else:
-                            ...
+                        
 
                     except Exception as e:
                         logger.error(f"Error processing staged faculty update: {e}")
