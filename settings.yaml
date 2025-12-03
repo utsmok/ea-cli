@@ -33,14 +33,13 @@ data_settings:
   data_entry_cols:
     - name: "material_id"
     - name: "period"
-    - name: "is_duplicate"
     - name: "url"
       is_url: true
     - name: "file_exists"
       style:
         activate_on: ['"No"']
-        text_color: "olive"
-        bg_color: "palevioletred"
+        text_color: "darkolivegreen"
+        bg_color: "lightpink"
         border_color: "orange"
     - name: "last_canvas_check"
       new_name: "latest_filecheck_date"
@@ -52,7 +51,7 @@ data_settings:
       style:
         activate_on: ['"ToDo"']
         text_color: "darkkhaki"
-        bg_color: "palegoldenrod"
+        bg_color: "skyblue"
         bold: true
         border_color: "oldlace"
     - name: "manual_classification"
@@ -146,7 +145,7 @@ data_settings:
     course_code,
     course_name,
     url,
-    canvas_course_id,
+    course_link,
     file_exists,
     last_canvas_check,
     filename,
@@ -439,6 +438,9 @@ university:
           programme_type: b
         - abbreviation: M-SE
           name: Spatial Engineering
+          programme_type: m
+        - abbreviation: M-HE
+          name: Humanitarian Engineering
           programme_type: m
     - name: Unmapped
       abbreviation: UNM
