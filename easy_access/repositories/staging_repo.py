@@ -22,7 +22,12 @@ class StagingRepository:
     """Repository for staging table operations."""
 
     def __init__(self, settings: Settings):
-        """Initialize the repository with settings."""
+        """
+        Create a StagingRepository configured with application settings.
+        
+        Parameters:
+            settings (Settings): Application settings that configure database access and repository behavior; stored for use by repository methods.
+        """
         self.settings = settings
 
     async def ensure_initialized(self) -> None:
@@ -44,27 +49,26 @@ class StagingRepository:
         self, offset: int = 0, limit: int = 500
     ) -> list[StagedCopyrightItem]:
         """
-        Get a batch of staged copyright items.
-
-        Args:
-            offset: Starting offset
-            limit: Maximum number of items to return
-
+        Return a page of staged copyright items.
+        
+        Parameters:
+            offset (int): Number of records to skip before the returned batch.
+            limit (int): Maximum number of records to return.
+        
         Returns:
-            List of StagedCopyrightItem instances
+            list[StagedCopyrightItem]: The staged copyright items for the requested page.
         """
         return await StagedCopyrightItem.all().offset(offset).limit(limit)
 
     async def clear_staged_items(self, material_ids: list[int] | None = None) -> int:
         """
         Clear staged copyright items.
-
-        Args:
-            material_ids: Optional list of material IDs to clear.
-                         If None, clears all staged items.
-
+        
+        Parameters:
+            material_ids (list[int] | None): Optional list of material IDs to delete; if None, deletes all staged items.
+        
         Returns:
-            Number of deleted items
+            int: Number of deleted staged items.
         """
         if material_ids:
             deleted = await StagedCopyrightItem.filter(
@@ -77,10 +81,10 @@ class StagingRepository:
 
     async def ingest_raw_data(self, data: pl.DataFrame) -> None:
         """
-        Load raw copyright data into the staging table.
-
-        Args:
-            data: Polars DataFrame with raw copyright data
+        Insert or update copyright records from the given DataFrame into the staging table.
+        
+        Parameters:
+            data (pl.DataFrame): Polars DataFrame containing copyright records with columns matching the staging model fields. Existing records with the same `material_id` will be updated (all staging fields except the primary key).
         """
         await self.ensure_initialized()
         items = standardize_dataframe(data).to_dicts()
@@ -134,10 +138,10 @@ class StagingRepository:
 
     async def get_all_staged_faculty_updates(self) -> list[StagedFacultyUpdate]:
         """
-        Get all staged faculty updates.
-
+        Retrieve all staged faculty update records.
+        
         Returns:
-            List of StagedFacultyUpdate instances
+            list[StagedFacultyUpdate]: All StagedFacultyUpdate instances from the staging table.
         """
         return await StagedFacultyUpdate.all()
 
@@ -145,14 +149,13 @@ class StagingRepository:
         self, material_ids: list[int] | None = None
     ) -> int:
         """
-        Clear staged faculty updates.
-
-        Args:
-            material_ids: Optional list of material IDs to clear.
-                         If None, clears all staged updates.
-
+        Clear staged faculty updates from the staging table.
+        
+        Parameters:
+            material_ids (list[int] | None): Optional list of material IDs to delete; if None, deletes all staged faculty updates.
+        
         Returns:
-            Number of deleted items
+            int: Number of deleted staged faculty updates.
         """
         if material_ids:
             deleted = await StagedFacultyUpdate.filter(
@@ -165,10 +168,12 @@ class StagingRepository:
 
     async def ingest_faculty_updates(self, data: pl.DataFrame) -> None:
         """
-        Load faculty updates into the staging table.
-
-        Args:
-            data: Polars DataFrame with faculty update data
+        Ingest faculty update records into the staging table, upserting by material_id.
+        
+        Only the columns `material_id`, `manual_classification`, `remarks`, and `workflow_status` are used from the provided Polars DataFrame; rows are inserted or updated on conflict by `material_id`, with `manual_classification`, `remarks`, and `workflow_status` overwritten on conflict.
+        
+        Parameters:
+            data (pl.DataFrame): Polars DataFrame containing faculty update records. Only the columns listed above are considered.
         """
         await self.ensure_initialized()
         data = data.select(
@@ -193,12 +198,14 @@ class StagingRepository:
         error_message: str,
     ) -> None:
         """
-        Record a processing failure for later inspection/retry.
-
-        Args:
-            material_id: Material ID of the failed item
-            staged_payload: The original staged data
-            error_message: The error message
+        Record a processing failure for later inspection or retry.
+        
+        Stores a StagedProcessingFailure using the given payload, converting `material_id` to an integer when possible and truncating `error_message` to 1900 characters to fit the database field.
+        
+        Parameters:
+            material_id (int | None): Identifier of the failed material; will be converted safely to an int or stored as None.
+            staged_payload (dict): The original staged record payload being processed.
+            error_message (str): Error text describing the failure; only the first 1900 characters are persisted.
         """
         await StagedProcessingFailure.create(
             material_id=safe_int(material_id),
@@ -210,13 +217,13 @@ class StagingRepository:
         self, material_ids: list[int] | None = None
     ) -> list[StagedProcessingFailure]:
         """
-        Get processing failures.
-
-        Args:
-            material_ids: Optional list of material IDs to filter by
-
+        Retrieve processing failures, optionally filtered by material IDs.
+        
+        Parameters:
+            material_ids (list[int] | None): Optional list of material IDs to restrict the returned failures to those materials. If None, all processing failures are returned.
+        
         Returns:
-            List of StagedProcessingFailure instances
+            list[StagedProcessingFailure]: List of matching StagedProcessingFailure instances.
         """
         if material_ids:
             return await StagedProcessingFailure.filter(
@@ -229,10 +236,10 @@ class StagingRepository:
     @staticmethod
     def get_staged_item_fields() -> list[str]:
         """
-        Get the list of fields on StagedCopyrightItem.
-
+        Provide the canonical list of field names for StagedCopyrightItem.
+        
         Returns:
-            List of field names
+            fields (list[str]): Field names in the canonical order used for staging records.
         """
         return [
             "material_id",
@@ -273,13 +280,13 @@ class StagingRepository:
 
     def staged_item_to_dict(self, staged_item: StagedCopyrightItem) -> dict:
         """
-        Convert a StagedCopyrightItem to a dictionary.
-
-        Args:
-            staged_item: The staged item to convert
-
+        Convert a StagedCopyrightItem into a dictionary mapping its staged-field names to their values.
+        
+        Parameters:
+            staged_item (StagedCopyrightItem): The staged item to convert.
+        
         Returns:
-            Dictionary with item data
+            dict: A mapping from each staged item field name to its value (`None` if the attribute is missing).
         """
         item_dict = {}
         for field in self.get_staged_item_fields():

@@ -20,13 +20,23 @@ class OsirisRepository:
     """Repository for OSIRIS data operations."""
 
     def __init__(self, settings: Settings):
-        """Initialize the repository with settings."""
+        """
+        Create an OsirisRepository configured with the given application settings.
+        
+        Parameters:
+            settings: Configuration object providing database connection and related options required to initialize the repository.
+        """
         self.settings = settings
         self._engine: Engine | None = None
 
     @property
     def engine(self) -> Engine:
-        """Lazily initialize and return the SQLAlchemy engine."""
+        """
+        Lazily initialize and return the SQLAlchemy engine.
+        
+        Returns:
+            Engine: The initialized SQLAlchemy Engine instance.
+        """
         if self._engine is None:
             self._engine = init_engine(settings=self.settings)
         return self._engine
@@ -39,16 +49,18 @@ class OsirisRepository:
         self, material_ids: list[int] | int
     ) -> list[dict[str, Any]]:
         """
-        Retrieves copyright data and richly nested related data (faculty, courses,
-        persons, organizations) for the given material IDs using SQL JSON functions.
-
-        Args:
-            material_ids: A list of material IDs to retrieve data for.
-
+        Retrieve copyright items with nested faculty, course, person, and organization data for the given material IDs.
+        
+        Accepts a single material ID or a list of IDs. Each ID may be an integer or a numeric string; non-numeric values are skipped. If no valid IDs remain or if input is empty, an empty list is returned.
+        
+        Parameters:
+            material_ids (int | str | list[int | str]): Material ID or list of material IDs to query.
+        
         Returns:
-            A list of nested dictionaries, where each dictionary represents one
-            copyright item and its related data. Returns an empty list if
-            material_ids is empty or no data is found.
+            list[dict]: A list of dictionaries where each dictionary represents one copyright item enriched with related data.
+                Typical top-level keys:
+                - `faculty_data` (dict | None): Faculty object matched by abbreviation, or `None`.
+                - `courses` (list[dict]): List of course objects; each course dict contains `persons` (list) and each person may contain `organizations` (list).
         """
         if not material_ids:
             logger.warning("No material IDs provided. Returning empty list.")
@@ -83,13 +95,13 @@ class OsirisRepository:
 
     def _build_enriched_data_query(self, mat_id_query: str) -> str:
         """
-        Build the complex SQL query for enriched data retrieval.
-
-        Args:
-            mat_id_query: WHERE clause for filtering by material IDs
-
+        Constructs the SQL query used to retrieve enriched OSIRIS data with nested course, person, and organization JSON structures.
+        
+        Parameters:
+            mat_id_query (str): SQL WHERE clause fragment to filter by material IDs (e.g., "WHERE material_id = 123" or "WHERE material_id IN (...)").
+        
         Returns:
-            Complete SQL query string
+            str: A complete SQL query string ready for execution.
         """
         return f"""
 WITH RECURSIVE OrgHierarchyUp (id, name, abbreviation, parent_organization_id, path_ids, path_abbrs) AS (
@@ -205,13 +217,15 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
 
     def _execute_enriched_query(self, query: str) -> list[dict[str, Any]]:
         """
-        Execute the enriched data query and parse results.
-
-        Args:
-            query: SQL query to execute
-
+        Execute the given SQL query against the repository engine and parse row results into Python structures.
+        
+        Parses top-level JSON columns `faculty_data` (to dict or None) and `courses` (to list). For each course, parses `persons` (to list) and for each person parses `organizations` (to list). On JSON decoding failures, replaces invalid `faculty_data` with None, invalid `courses`/`persons`/`organizations` with empty lists, and ensures missing `persons`/`organizations` become empty lists. If a database error occurs, the error and traceback are logged and the method returns any results parsed before the failure.
+        
+        Parameters:
+            query (str): SQL query string to execute.
+        
         Returns:
-            List of parsed dictionaries
+            list[dict[str, Any]]: A list of row dictionaries with parsed JSON fields (`faculty_data`, `courses`, nested `persons` and `organizations`).
         """
         results = []
         try:
