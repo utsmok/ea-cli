@@ -11,6 +11,10 @@ from dagster import AssetExecutionContext, AssetIn, asset
 
 from ea_dagster.resources import TortoiseDBResource
 
+# Table names created by dlt (follows naming convention: {dataset}__{table_name})
+STAGING_RAW_COPYRIGHT_TABLE = "staging__raw_copyright_items"
+STAGING_FACULTY_UPDATES_TABLE = "staging__faculty_updates"
+
 
 @asset(
     group_name="processing",
@@ -52,16 +56,16 @@ async def processed_copyright_items(
             CopyrightItem,
             ItemUpdate,
         )
+        from easy_access.merge_rules import build_merge_rules_from_settings
         from easy_access.services.merge import calculate_changes
+        from easy_access.settings import SETTINGS
 
         # 1. Read Raw Data from the dlt staging table
-        # dlt normalizes names: 'staging' dataset + 'raw_copyright_items' table
-        # becomes 'staging__raw_copyright_items' in SQLite
         conn = Tortoise.get_connection("default")
 
         try:
             rows = await conn.execute_query_dict(
-                "SELECT * FROM staging__raw_copyright_items"
+                f"SELECT * FROM {STAGING_RAW_COPYRIGHT_TABLE}"
             )
             context.log.info(f"Fetched {len(rows)} rows from staging.")
         except Exception as e:
@@ -123,41 +127,8 @@ async def processed_copyright_items(
         updated_count = 0
         changelog_entries = []
 
-        # Define fields that can be changed/added
-        # These would typically come from settings but we use sensible defaults
-        changeable_fields = {
-            "period",
-            "department",
-            "course_code",
-            "course_name",
-            "url",
-            "filename",
-            "title",
-            "owner",
-            "filetype",
-            "classification",
-            "manual_classification",
-            "manual_identifier",
-            "scope",
-            "remarks",
-            "auditor",
-            "last_change",
-            "status",
-            "isbn",
-            "doi",
-            "in_collection",
-            "pagecount",
-            "wordcount",
-            "picturecount",
-            "author",
-            "publisher",
-            "reliability",
-            "pages_x_students",
-            "count_students_registered",
-            "workflow_status",
-        }
-
-        added_fields = {"retrieved_from_copyright_on"}
+        # Get merge rules from settings (proper dict format with priority lists)
+        added_fields, changeable_fields = build_merge_rules_from_settings(SETTINGS)
 
         for row in update_items_data:
             mat_id = int(row.get("material_id"))
@@ -180,8 +151,10 @@ async def processed_copyright_items(
 
             if changes:
                 # Apply changes to the item
-                for field, new_val in changes.items():
+                for field, change_info in changes.items():
                     if hasattr(current_item, field):
+                        # changes dict contains {field: {old: X, new: Y}}
+                        new_val = change_info.get("new") if isinstance(change_info, dict) else change_info
                         setattr(current_item, field, new_val)
 
                 await current_item.save()
@@ -206,7 +179,7 @@ async def processed_copyright_items(
         faculty_updates_count = 0
         try:
             faculty_rows = await conn.execute_query_dict(
-                "SELECT * FROM staging__faculty_updates"
+                f"SELECT * FROM {STAGING_FACULTY_UPDATES_TABLE}"
             )
             context.log.info(f"Fetched {len(faculty_rows)} faculty update rows")
 

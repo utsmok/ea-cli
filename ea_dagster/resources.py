@@ -7,10 +7,13 @@ This module provides:
 """
 
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING
 
-from dagster import ConfigurableResource, InitResourceContext
+from dagster import ConfigurableResource
 from loguru import logger
+
+if TYPE_CHECKING:
+    from dagster import AssetExecutionContext, InitResourceContext
 
 
 class TortoiseDBResource(ConfigurableResource):
@@ -30,12 +33,14 @@ class TortoiseDBResource(ConfigurableResource):
     """
 
     @asynccontextmanager
-    async def yield_for_execution(self, context: InitResourceContext | Any = None):
+    async def yield_for_execution(
+        self, context: "InitResourceContext | AssetExecutionContext | None" = None
+    ):
         """
         Context manager that initializes Tortoise ORM and ensures cleanup.
 
         Args:
-            context: Dagster resource context (optional)
+            context: Dagster resource or asset execution context (optional)
 
         Yields:
             self: The resource instance for use in the asset

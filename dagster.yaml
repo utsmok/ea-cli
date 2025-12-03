@@ -4,11 +4,8 @@
 # 1. Limiting concurrent runs to 1 (prevents write conflicts)
 # 2. Using in-process execution (simplifies async handling)
 
-run_coordinator:
-  module: dagster.core.run_coordinator
-  class: QueuedRunCoordinator
-  config:
-    max_concurrent_runs: 1
+run_queue:
+  max_concurrent_runs: 1
 
 # Run storage configuration
 # Uses local SQLite for run history (separate from application db.sqlite)
