@@ -58,11 +58,25 @@ class OsirisRepository:
         if not isinstance(material_ids, list):
             material_ids = [material_ids]
 
-        # Build the WHERE clause for material_ids
-        if len(material_ids) == 1:
-            mat_id_query = f"WHERE cd.material_id = {material_ids[0]}"
+        # Validate that all material_ids are integers to prevent SQL injection
+        validated_ids = []
+        for mid in material_ids:
+            if isinstance(mid, int):
+                validated_ids.append(mid)
+            elif isinstance(mid, str) and mid.isdigit():
+                validated_ids.append(int(mid))
+            else:
+                logger.warning(f"Skipping invalid material_id: {mid}")
+        
+        if not validated_ids:
+            logger.warning("No valid material IDs after validation. Returning empty list.")
+            return []
+
+        # Build the WHERE clause for material_ids (using validated integer IDs only)
+        if len(validated_ids) == 1:
+            mat_id_query = f"WHERE cd.material_id = {validated_ids[0]}"
         else:
-            mat_id_query = f"WHERE cd.material_id IN ({', '.join(map(str, material_ids))})"
+            mat_id_query = f"WHERE cd.material_id IN ({', '.join(map(str, validated_ids))})"
 
         query = self._build_enriched_data_query(mat_id_query)
         return self._execute_enriched_query(query)

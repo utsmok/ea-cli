@@ -257,8 +257,34 @@ class CopyrightItemRepository:
         if additional_cols:
             select_cols.update(additional_cols)
 
+        # Whitelist of allowed column names to prevent SQL injection
+        # These are the known columns in the copyright_data table
+        allowed_columns = {
+            "material_id", "period", "department", "course_code", "course_name",
+            "url", "filename", "title", "owner", "filetype", "classification",
+            "ml_prediction", "manual_classification", "manual_identifier",
+            "v2_manual_classification", "v2_overnamestatus", "v2_lengte",
+            "scope", "remarks", "auditor", "last_change", "status",
+            "isbn", "doi", "in_collection", "pagecount", "wordcount", "picturecount",
+            "author", "publisher", "reliability", "pages_x_students",
+            "count_students_registered", "filehash", "last_scan_date_university",
+            "last_scan_date_course", "retrieved_from_copyright_on", "workflow_status",
+            "possible_fine", "infringement", "file_exists", "last_canvas_check",
+            "canvas_course_id", "faculty_id", "is_duplicate", "created_at", "modified_at",
+            "faculty_id AS faculty",  # Allow this specific alias
+        }
+        
+        # Validate and filter columns
+        validated_cols = {col for col in select_cols if col in allowed_columns}
+        if len(validated_cols) != len(select_cols):
+            invalid_cols = select_cols - allowed_columns
+            logger.warning(f"Removed invalid column names: {invalid_cols}")
+
+        if not validated_cols:
+            validated_cols = {"material_id"}  # Default to just material_id
+
         try:
-            query = "SELECT " + ", ".join(select_cols) + " FROM copyright_data cd"
+            query = "SELECT " + ", ".join(validated_cols) + " FROM copyright_data cd"
             query_start = time()
             df = pl.read_database(
                 query=query, connection=self.engine.connect(), infer_schema_length=None
