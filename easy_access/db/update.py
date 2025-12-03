@@ -1756,7 +1756,9 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                     item.v2_lengte = mapped.length
                     item.v2_overnamestatus = mapped.overname_status
                     faculty = item.faculty
+                    print(faculty, type(faculty))
                     abbreviation = faculty.abbreviation
+                    print(abbreviation, type(abbreviation))
                     v1_items = await item.v1_items.all()
                     v1_id = None
                     if v1_items:

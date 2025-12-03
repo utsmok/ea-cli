@@ -568,8 +568,8 @@ def print_details(combined_df: pl.DataFrame):
         print(
             f"    {len(unique)} unique ({(len(unique) * 100 / combined_df.height):.2f}%) |   {nulls} nulls ({(nulls * 100 / combined_df.height):.2f}%)    "
         )
-        logger.info("Samples:")
-        logger.info(unique[:5])
+        print("Samples:")
+        print(unique[:5])
 
     # now print the count of each value in 'manual_classification' col
     if "manual_classification" in combined_df.columns:

@@ -339,11 +339,11 @@ def update_from_v1(
         map_v1_to_v2_classifications,
         update_workflow_status_from_db,
     )
-    from easy_access.maintenance.v1_items import ingest_v1_data
+    from easy_access.maintenance.v1_items import add_v1_hashes, ingest_v1_data
 
     async def run_ingest_pipeline(settings: Settings, path: Path):
         await ingest_v1_data(settings, path, True)
-        # await add_v1_hashes(settings)
+        #await add_v1_hashes(settings)
         await match_v1_to_copyright_items(settings)
         await map_v1_to_v2_classifications(settings)
         await update_workflow_status_from_db(settings)
@@ -360,6 +360,7 @@ def update_from_v1(
 
         logger.info("Closing database connections...")
         return run_sync(close_connections())
+
 
     logger.success("v1 to v2 update pipeline completed.")
     typer.Exit()
