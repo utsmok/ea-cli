@@ -120,13 +120,20 @@ async def preprocess_input_data(
     data: pl.DataFrame | list[dict],
 ) -> tuple[list[dict], list[dict]]:
     """
-    Preprocess input data by standardizing and separating new items from existing items.
-
-    Args:
-        data: Input data as DataFrame or list of dicts
-
+    Standardize input and split it into items to create and items to update.
+    
+    When given a Polars DataFrame, the frame is standardized, existing material_ids are looked up,
+    rows whose material_id does not exist are validated for required creation fields and returned
+    as `new_items`, and rows whose material_id exists are returned as `update_items`.
+    When given a list of dicts, the list is treated as `update_items`. Skipped candidate creations
+    (with missing required fields) are logged and not returned.
+    
+    Parameters:
+        data (pl.DataFrame | list[dict]): Input records as a Polars DataFrame or a list of dictionaries.
+    
     Returns:
-        Tuple of (new_items, update_items)
+        tuple[list[dict], list[dict]]: A tuple (new_items, update_items) where `new_items` are dicts
+        suitable for creating new records and `update_items` are dicts for updating existing records.
     """
     new_items = []
     update_items = []
@@ -396,15 +403,18 @@ async def execute_bulk_database_operations(
     settings: Settings,
 ) -> None:
     """
-    Execute bulk database operations including updates and changelog creation.
-
-    Args:
-        changelist: List of modified CopyrightItem objects
-        updates: Dictionary of change details keyed by material_id
-        cur_user: Current user information
-        new_objects: List of newly created CopyrightItem objects
-        update_relations: Whether to update relations after processing
-        settings: Application settings
+    Execute queued database writes for changed and newly created items and record item-level change logs.
+    
+    Parameters:
+        changelist (list[CopyrightItem]): CopyrightItem objects with pending field changes.
+        updates (dict): Mapping from `material_id` to a dict of changed field values (must include `material_id` and `update_time` keys; other keys are treated as changed fields).
+        cur_user (str | dict | None): Current user identifier — either an email string or a dict containing an `"email"` key; used to populate `modified_by` on change records when present.
+        new_objects (list[CopyrightItem]): Newly created CopyrightItem objects that may require relation updates.
+        update_relations (bool): If true, schedule relation updates for affected items after applying changes.
+        settings (Settings): Application settings / configuration context used by the operation.
+    
+    Returns:
+        None
     """
     if changelist:
         # get all values from 'updates'
@@ -1319,9 +1329,12 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
 
 async def map_v1_to_v2_classifications(settings: Settings) -> None:
     """
-    uses the classification mapping to map manual_classification values from v1 items to v2 items
-    for items that do not yet have a v2 classification.
-    Modify the code in `add_v2_classification` to work directly on the db through tortoise orm instead of the polars df.
+    Map v1 manual classification values to v2 classification fields for items that lack a v2 classification.
+    
+    Selects CopyrightItem rows whose `v2_manual_classification` is null or `ONBEKEND`, normalizes their existing v1 `manual_classification` values, looks up the corresponding v2 mapping via CLASSIFICATION_MAPPING_V1_TO_V2, and updates the item's `v2_manual_classification`, `v2_lengte`, and `v2_overnamestatus` when a mapped value differs from the current v2 fields. Operates directly on the database using Tortoise ORM within a transaction, records per-item mapping details for optional export, and logs summary counts of mapped, modified, failed, and unlinked items.
+    
+    Parameters:
+        settings (Settings): Application settings used to ensure the database is initialized and to drive ORM interactions.
     """
     # select all items:
     # - without a v2 classification (null or empty)

@@ -26,7 +26,12 @@ class CopyrightItemRepository:
     """Repository for CopyrightItem database operations."""
 
     def __init__(self, settings: Settings):
-        """Initialize the repository with settings."""
+        """
+        Create a repository bound to the given application settings for lazy engine initialization.
+        
+        Parameters:
+            settings (Settings): Application configuration used to initialize the database engine and control repository behavior.
+        """
         self.settings = settings
         self._engine: Engine | None = None
 
@@ -38,7 +43,11 @@ class CopyrightItemRepository:
         return self._engine
 
     async def ensure_initialized(self) -> None:
-        """Ensure the database is initialized."""
+        """
+        Ensure the underlying database is initialized so the repository can operate.
+        
+        Prepares database schemas and connections according to the repository settings.
+        """
         await ensure_db_inited(self.settings)
 
     # ----- Single Item Operations -----
@@ -57,16 +66,13 @@ class CopyrightItemRepository:
 
     async def get(self, material_id: int) -> CopyrightItem:
         """
-        Get a CopyrightItem by its material_id (raises if not found).
-
-        Args:
-            material_id: The primary key of the item
-
+        Retrieve a CopyrightItem by its material_id.
+        
         Returns:
-            CopyrightItem instance
-
+            CopyrightItem: The matching CopyrightItem.
+        
         Raises:
-            DoesNotExist: If item is not found
+            DoesNotExist: If no item with the given material_id exists.
         """
         return await CopyrightItem.get(material_id=material_id)
 
@@ -74,11 +80,11 @@ class CopyrightItemRepository:
         self, item: CopyrightItem, update_fields: list[str] | None = None
     ) -> None:
         """
-        Save a CopyrightItem to the database.
-
-        Args:
-            item: The CopyrightItem to save
-            update_fields: Optional list of fields to update
+        Persist a CopyrightItem, optionally restricting which fields are updated.
+        
+        Parameters:
+            item (CopyrightItem): The item to persist.
+            update_fields (list[str] | None): Specific field names to update on the existing record; if None, all fields are saved.
         """
         if update_fields:
             await item.save(update_fields=update_fields)
@@ -89,13 +95,13 @@ class CopyrightItemRepository:
 
     async def get_all(self, filter_dict: dict | None = None) -> list[CopyrightItem]:
         """
-        Get all CopyrightItems, optionally filtered.
-
-        Args:
-            filter_dict: Optional dictionary of filter conditions
-
+        Retrieve all CopyrightItem records, optionally applying simple equality filters.
+        
+        Parameters:
+            filter_dict (dict | None): Optional mapping of field names to values used as equality filters (passed as kwargs to the query).
+        
         Returns:
-            List of CopyrightItem instances
+            list[CopyrightItem]: List of matching CopyrightItem instances.
         """
         if filter_dict:
             return await CopyrightItem.filter(**filter_dict).all()
@@ -103,10 +109,10 @@ class CopyrightItemRepository:
 
     async def get_existing_material_ids(self) -> set[int]:
         """
-        Get all existing material IDs in the database.
-
+        Return the set of material IDs present in the database, converted to integers where possible.
+        
         Returns:
-            Set of existing material IDs
+            set[int]: Material IDs as integers; any values that cannot be converted or are None are excluded.
         """
         existing = await CopyrightItem.all().values("material_id")
         existing_ids = {safe_int(m["material_id"]) for m in existing}
@@ -128,13 +134,13 @@ class CopyrightItemRepository:
 
     async def bulk_create(self, items: list[CopyrightItem]) -> None:
         """
-        Bulk create CopyrightItems.
-
-        Args:
-            items: List of CopyrightItem instances to create
-
+        Create multiple CopyrightItem records; if the bulk insert fails, attempt to save each item individually.
+        
+        Parameters:
+            items (list[CopyrightItem]): CopyrightItem instances to create.
+        
         Raises:
-            Exception: If bulk creation fails
+            Exception: If creation fails for some items after the per-item fallback; exception message includes the list of failed `material_id` values.
         """
         if not items:
             return
@@ -165,12 +171,12 @@ class CopyrightItemRepository:
         self, items: list[CopyrightItem], fields: list[str], batch_size: int = 500
     ) -> None:
         """
-        Bulk update CopyrightItems.
-
-        Args:
-            items: List of CopyrightItem instances to update
-            fields: List of field names to update
-            batch_size: Number of items per batch
+        Update multiple CopyrightItem records in batches.
+        
+        Parameters:
+            items (list[CopyrightItem]): CopyrightItem instances to update.
+            fields (list[str]): Attribute names to update on each item.
+            batch_size (int): Maximum number of items to process per batch.
         """
         if not items:
             return
@@ -189,12 +195,12 @@ class CopyrightItemRepository:
         batch_size: int = 500,
     ) -> None:
         """
-        Create changelog entries for updates.
-
-        Args:
-            updates: Dictionary mapping material_id to changes dict
-            user_email: Optional user email to record
-            batch_size: Number of entries per batch
+        Create changelog entries and associate them with the corresponding CopyrightItem records.
+        
+        Parameters:
+            updates (dict[int, dict]): Mapping from material_id to a dict of change details; each dict becomes the `change_details` for a new ItemUpdate.
+            user_email (str | None): If provided, added to each change dict under the key `"modified_by"` to record who made the change.
+            batch_size (int): Number of updates to process per batch when creating ItemUpdate records.
         """
         if not updates:
             return
@@ -231,13 +237,16 @@ class CopyrightItemRepository:
 
     def get_dataframe(self, additional_cols: list[str] | None = None) -> pl.DataFrame:
         """
-        Retrieve copyright items as a Polars DataFrame.
-
-        Args:
-            additional_cols: Optional additional columns to include
-
+        Return a Polars DataFrame containing copyright items.
+        
+        Parameters:
+            additional_cols (list[str] | None): Optional extra columns to include. Column names not in the repository's allowed whitelist are ignored and a warning is logged. The alias "faculty_id AS faculty" is permitted.
+        
         Returns:
-            Polars DataFrame with copyright items
+            pl.DataFrame: DataFrame with the requested columns (or only `material_id` if no requested columns are valid).
+        
+        Raises:
+            Exception: If retrieving the data fails.
         """
         from time import time
 
@@ -315,13 +324,13 @@ class CopyrightItemRepository:
 
     async def create_from_dicts(self, items: list[dict]) -> list[CopyrightItem]:
         """
-        Create multiple CopyrightItem instances from dictionaries.
-
-        Args:
-            items: List of dictionaries with item data
-
+        Create CopyrightItem objects from a list of dictionaries.
+        
+        Parameters:
+        	items (list[dict]): Dictionaries representing item data to convert into CopyrightItem instances.
+        
         Returns:
-            List of CopyrightItem instances (excluding None results)
+        	created_items (list[CopyrightItem]): List of created CopyrightItem instances; dictionaries that could not be converted are omitted.
         """
         new_objects = []
         for item_dict in items:
@@ -336,13 +345,22 @@ class CopyrightItemRepository:
         self, data: pl.DataFrame | list[dict]
     ) -> tuple[list[dict], list[dict]]:
         """
-        Preprocess input data by standardizing and separating new items from existing items.
-
-        Args:
-            data: Input data as DataFrame or list of dicts
-
+        Split input into new items to create and existing items to update.
+        
+        When given a Polars DataFrame, the function standardizes the frame, determines which rows
+        correspond to material_ids already present in the database, and separates rows into:
+        - new_items: rows with material_id not in the database and that contain the required
+          creation fields (`period`, `department`, `course_code`, `course_name`).
+        - update_items: rows whose material_id exists in the database.
+        
+        When given a list of dictionaries, the list is treated as update_items and returned unchanged.
+        
+        Parameters:
+            data (pl.DataFrame | list[dict]): Input data as a Polars DataFrame or a list of record dicts.
+        
         Returns:
-            Tuple of (new_items, update_items)
+            tuple[list[dict], list[dict]]: A tuple (new_items, update_items) where each element is a list of
+            dictionaries representing records to create and records to update, respectively.
         """
         new_items = []
         update_items = []

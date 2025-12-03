@@ -440,20 +440,17 @@ def retrieve_osiris_data(
     material_ids: list[int] | int, settings: Settings | None = None
 ) -> list[dict[str, Any]]:
     """
-    Retrieves copyright data and richly nested related data (faculty, courses,
-    persons, organizations) for the given material IDs using SQL JSON functions.
-
-    NOTE: This function delegates to OsirisRepository.fetch_enriched_data().
-          Use the repository directly for new code.
-
-    Args:
-        material_ids: A list of material IDs to retrieve data for.
-        settings: The application settings.
-
+    Retrieve richly nested Osiris data (faculty, courses, persons, organizations) for the specified material IDs.
+    
+    Parameters:
+        material_ids (int | list[int]): A material ID or list of material IDs to fetch.
+        settings (Settings): Application settings; required.
+    
     Returns:
-        A list of nested dictionaries, where each dictionary represents one
-        copyright item and its related data. Returns an empty list if
-        material_ids is empty or no data is found.
+        list[dict[str, Any]]: A list of nested dictionaries where each dictionary represents one copyright item and its related data. Returns an empty list if no data is found or if `material_ids` is empty.
+    
+    Raises:
+        ValueError: If `settings` is not provided.
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_osiris_data")
@@ -467,14 +464,20 @@ async def retrieve_item_history(
     material_ids: list[int], settings: Settings | None = None
 ) -> list[ItemUpdate]:  # Added settings
     """
-    Retrieves the history of changes for the given material IDs.
-
-    Args:
-        material_ids: A list of material IDs to retrieve history for.
-        settings: The application settings.
-
+    Retrieve ItemUpdate history entries for the specified material IDs.
+    
+    Parameters:
+    	material_ids (list[int] | int): Material ID or list of material IDs to fetch history for. If empty, an empty list is returned.
+    	settings (Settings): Application settings; required and must be provided.
+    
     Returns:
-        A list of dictionaries, where each dictionary represents one history entry.
+    	list[ItemUpdate]: List of ItemUpdate instances matching the provided material IDs (may be empty).
+    
+    Raises:
+    	ValueError: If `settings` is not provided.
+    
+    Side effects:
+    	Closes Tortoise ORM connections before returning.
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_item_history")
