@@ -1656,7 +1656,7 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
             item.manual_classification
             and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
         ):
-            print(
+            logger.info(
                 f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
             )
             item.workflow_status = WorkflowStatus.Done
@@ -1756,9 +1756,7 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                     item.v2_lengte = mapped.length
                     item.v2_overnamestatus = mapped.overname_status
                     faculty = item.faculty
-                    print(faculty, type(faculty))
                     abbreviation = faculty.abbreviation
-                    print(abbreviation, type(abbreviation))
                     v1_items = await item.v1_items.all()
                     v1_id = None
                     if v1_items:
