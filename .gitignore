@@ -4,6 +4,10 @@ dashboard/*.*
 .kreuzberg/
 node_modules/
 .github/old
+
+# Dagster artifacts
+.dagster/
+*.dagster_logs
 # datafiles
 *.xls
 *.xlsx

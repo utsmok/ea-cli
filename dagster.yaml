@@ -1,0 +1,21 @@
+# Dagster configuration for Easy Access pipeline
+# 
+# This configuration ensures safe SQLite operation by:
+# 1. Limiting concurrent runs to 1 (prevents write conflicts)
+# 2. Using in-process execution (simplifies async handling)
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 1
+
+# Run storage configuration
+# Uses local SQLite for run history (separate from application db.sqlite)
+storage:
+  sqlite:
+    base_dir: .dagster
+
+# Telemetry configuration
+telemetry:
+  enabled: false
