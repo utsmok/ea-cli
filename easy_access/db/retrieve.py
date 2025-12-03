@@ -1,5 +1,8 @@
 """
 Functions to retrieve data from the database.
+
+NOTE: This module delegates complex queries to repositories where appropriate.
+      Use repositories directly for new code.
 """
 
 import json
@@ -19,6 +22,9 @@ from tortoise.expressions import Q
 from easy_access.db.base import ensure_db_inited, init_engine
 from easy_access.db.models import PDF, CopyrightItem, ItemUpdate
 from easy_access.settings import Settings  # Import Settings for type hint
+
+# Import repository for delegating complex queries
+from easy_access.repositories.osiris_repo import OsirisRepository
 
 engine: Engine | None = None
 
@@ -432,222 +438,46 @@ def retrieve_full_data_original(
 
 def retrieve_osiris_data(
     material_ids: list[int] | int, settings: Settings | None = None
-) -> list[dict[str, Any]]:  # Added settings
+) -> list[dict[str, Any]]:
     """
-    Retrieves copyright data and richly nested related data (faculty, courses,
-    persons, organizations) for the given material IDs using SQL JSON functions.
-
-    Args:
-        material_ids: A list of material IDs to retrieve data for.
-        settings: The application settings.
-
+    Retrieve richly nested Osiris data (faculty, courses, persons, organizations) for the specified material IDs.
+    
+    Parameters:
+        material_ids (int | list[int]): A material ID or list of material IDs to fetch.
+        settings (Settings): Application settings; required.
+    
     Returns:
-        A list of nested dictionaries, where each dictionary represents one
-        copyright item and its related data. Returns an empty list if
-        material_ids is empty or no data is found.
+        list[dict[str, Any]]: A list of nested dictionaries where each dictionary represents one copyright item and its related data. Returns an empty list if no data is found or if `material_ids` is empty.
+    
+    Raises:
+        ValueError: If `settings` is not provided.
     """
-    global engine
     if not settings:
         raise ValueError("Settings must be provided to retrieve_osiris_data")
-    if not engine:
-        engine = init_engine(settings=settings)  # Pass settings
-    if not material_ids:
-        logger.warning("No material IDs provided. Returning empty list.")
-        return []
-    if not isinstance(material_ids, Iterable):
-        material_ids = [material_ids]  # Convert to list if not already
-    if len(material_ids) == 1:
-        mat_id_query = f"WHERE cd.material_id = {material_ids[0]}"
-    else:
-        mat_id_query = f"WHERE cd.material_id IN ({', '.join(map(str, material_ids))})"
-
-    query: str = f"""
-WITH RECURSIVE OrgHierarchyUp (id, name, abbreviation, parent_organization_id, path_ids, path_abbrs) AS (
-      -- Base case: Start with all organizations
-      SELECT id, name, abbreviation, parent_organization_id,
-             CAST(id AS TEXT), CAST(abbreviation AS TEXT)
-      FROM organization_data
-      -- Removed WHERE clause to handle orgs with NULL parent_organization_id correctly in base case
-
-      UNION ALL
-
-      -- Recursive step: Go up one level (Join child's parent_id to parent's id)
-      SELECT
-        child.id, child.name, child.abbreviation, parent.parent_organization_id,
-        parent.id || '/' || child.path_ids,
-        parent.abbreviation || '/' || child.path_abbrs -- Build path bottom-up
-      FROM organization_data parent -- This should be the parent
-      JOIN OrgHierarchyUp child ON child.parent_organization_id = parent.id -- Join condition connects child UP to parent
-      -- No WHERE clause needed here, recursion stops naturally when parent.id has no match (or parent_organization_id is NULL in the parent)
-),
--- Corrected FullOrgPaths CTE using standard SQL ROW_NUMBER()
-FullOrgPaths AS (
-  SELECT id, path_ids, path_abbrs
-  FROM (
-      SELECT
-        id,
-        path_ids,
-        path_abbrs,
-        ROW_NUMBER() OVER (PARTITION BY id ORDER BY LENGTH(path_ids) DESC) as rn
-      FROM
-        OrgHierarchyUp
-  ) AS RankedPaths
-  WHERE rn = 1
-),
--- Pre-aggregate organizations linked to persons, including hierarchy info
-PersonOrgs AS (
-  SELECT
-    pdod.person_data_id,
-    JSON_GROUP_ARRAY(
-      JSON_OBJECT(
-        'id', org.id,
-        'name', org.name,
-        'abbreviation', org.abbreviation,
-        'full_abbreviation', org.full_abbreviation,
-        'hierarchy_level', org.hierarchy_level,
-        'parent_organization_id', org.parent_organization_id,
-        'full_parent_abbreviations', fop.path_abbrs -- Include the full path of abbreviations
-      )
-    ) AS organizations_json
-  FROM person_data_organization_data pdod
-  JOIN organization_data org ON pdod.organization_id = org.id
-  LEFT JOIN FullOrgPaths fop ON org.id = fop.id -- Join the full path CTE
-  GROUP BY pdod.person_data_id
-),
--- Pre-aggregate persons linked to courses
-CoursePersons AS (
-  SELECT
-    ce.course_id,
-    JSON_GROUP_ARRAY(
-      JSON_OBJECT(
-        'id', p.id,
-        'main_name', p.main_name,
-        'email', p.email,
-        'first_name', p.first_name,
-        'people_page_url', p.people_page_url,
-        'faculty_id', p.faculty_id,
-        'role', ce.role,
-        'organizations', JSON(po.organizations_json) -- Embed organizations
-      ) ORDER BY p.main_name
-    ) AS persons_json
-  FROM course_employee ce
-  JOIN person_data p ON ce.person_id = p.id
-  LEFT JOIN PersonOrgs po ON p.id = po.person_data_id
-  GROUP BY ce.course_id
-),
--- Pre-aggregate courses linked to copyright items
-CopyrightCourses AS (
-  SELECT
-    cdcd.copyright_data_id,
-    JSON_GROUP_ARRAY(
-       JSON_OBJECT(
-        'cursuscode', crs.cursuscode,
-        'internal_id', crs.internal_id,
-        'name', crs.name,
-        'short_name', crs.short_name,
-        'year', crs.year,
-        'programme', crs.programme,
-        'ec', crs.ec,
-        'faculty_id', crs.faculty_id,
-        'persons', JSON(cp.persons_json)
-       ) ORDER BY crs.name
-    ) AS courses_json
-  FROM copyright_data_course_data cdcd
-  JOIN course_data crs ON cdcd.course_id = crs.cursuscode
-  LEFT JOIN CoursePersons cp ON crs.cursuscode = cp.course_id
-  GROUP BY cdcd.copyright_data_id
-)
--- Final Select statement
-SELECT
-  cd.*, -- Select all from copyright_data
-  (
-    SELECT JSON_OBJECT(
-             'abbreviation', f.abbreviation,
-             'name', f.name,
-             'full_abbreviation', f.full_abbreviation
-           )
-    FROM faculty f
-    WHERE f.abbreviation = cd.faculty_id
-  ) AS faculty_data,
-  JSON(cc.courses_json) AS courses
-FROM copyright_data cd
-LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
-{mat_id_query}
-
-    """
-    results = []
-    try:
-        with engine.connect() as conn:
-            db_result = conn.execute(text(query)).fetchall()
-            # ... (rest of the JSON parsing logic remains the same) ...
-            for row_mapping in db_result:
-                row_mapping = row_mapping._mapping
-                item_dict = dict(row_mapping)  # Convert Row to dict
-                # Parse top-level JSON
-                for key in ["faculty_data", "courses"]:
-                    json_string = item_dict.get(key)
-                    if isinstance(json_string, str):
-                        try:
-                            item_dict[key] = json.loads(json_string)
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                f"Warning: Could not decode JSON for key '{key}' in material_id {item_dict.get('material_id')}. Value: {json_string}"
-                            )
-                            item_dict[key] = None
-                    elif json_string is None:
-                        # Handle case where subquery returned NULL (e.g., no courses)
-                        item_dict[key] = [] if key == "courses" else None
-                if item_dict.get("courses"):
-                    for course in item_dict["courses"]:
-                        if (
-                            course
-                            and "persons" in course
-                            and isinstance(course["persons"], str)
-                        ):
-                            try:
-                                course["persons"] = json.loads(course["persons"])
-                                if course.get("persons"):
-                                    for person in course["persons"]:
-                                        if (
-                                            person
-                                            and "organizations" in person
-                                            and isinstance(person["organizations"], str)
-                                        ):
-                                            try:
-                                                person["organizations"] = json.loads(
-                                                    person["organizations"]
-                                                )
-                                            except json.JSONDecodeError:
-                                                person["organizations"] = []
-                                        elif person and "organizations" not in person:
-                                            person["organizations"] = []
-                            except json.JSONDecodeError:
-                                course["persons"] = []
-                        elif course and "persons" not in course:
-                            course["persons"] = []
-                results.append(item_dict)
-
-    except Exception as e:
-        logger.error(f"Database query failed: {e}")
-        logger.error(traceback.format_exc())
-    finally:
-        pass
-
-    return results
+    
+    # Delegate to repository
+    repo = OsirisRepository(settings)
+    return repo.fetch_enriched_data(material_ids)
 
 
 async def retrieve_item_history(
     material_ids: list[int], settings: Settings | None = None
 ) -> list[ItemUpdate]:  # Added settings
     """
-    Retrieves the history of changes for the given material IDs.
-
-    Args:
-        material_ids: A list of material IDs to retrieve history for.
-        settings: The application settings.
-
+    Retrieve ItemUpdate history entries for the specified material IDs.
+    
+    Parameters:
+    	material_ids (list[int] | int): Material ID or list of material IDs to fetch history for. If empty, an empty list is returned.
+    	settings (Settings): Application settings; required and must be provided.
+    
     Returns:
-        A list of dictionaries, where each dictionary represents one history entry.
+    	list[ItemUpdate]: List of ItemUpdate instances matching the provided material IDs (may be empty).
+    
+    Raises:
+    	ValueError: If `settings` is not provided.
+    
+    Side effects:
+    	Closes Tortoise ORM connections before returning.
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_item_history")

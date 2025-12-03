@@ -1,9 +1,18 @@
 import asyncio
 
-from easy_access.pipeline import _run_sync
+from easy_access.utils import run_sync as _run_sync
 
 
 async def _sample_coro(x: int) -> int:
+    """
+    Compute the successor of an integer after yielding control to the event loop.
+    
+    Parameters:
+        x (int): The input integer.
+    
+    Returns:
+        int: The value of x + 1.
+    """
     await asyncio.sleep(0)
     return x + 1
 

@@ -3,8 +3,7 @@ from datetime import date, datetime
 import pytest
 
 from easy_access.db.models import Status
-from easy_access.db.update import safe_compare_greater, safe_enum, safe_float, safe_int
-from easy_access.utils import safe_date
+from easy_access.utils import safe_compare_greater, safe_date, safe_enum, safe_float, safe_int
 
 
 def test_safe_int():
