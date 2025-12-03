@@ -28,7 +28,7 @@ class CopyrightItemRepository:
     def __init__(self, settings: Settings):
         """
         Create a repository bound to the given application settings for lazy engine initialization.
-        
+
         Parameters:
             settings (Settings): Application configuration used to initialize the database engine and control repository behavior.
         """
@@ -45,7 +45,7 @@ class CopyrightItemRepository:
     async def ensure_initialized(self) -> None:
         """
         Ensure the underlying database is initialized so the repository can operate.
-        
+
         Prepares database schemas and connections according to the repository settings.
         """
         await ensure_db_inited(self.settings)
@@ -67,10 +67,10 @@ class CopyrightItemRepository:
     async def get(self, material_id: int) -> CopyrightItem:
         """
         Retrieve a CopyrightItem by its material_id.
-        
+
         Returns:
             CopyrightItem: The matching CopyrightItem.
-        
+
         Raises:
             DoesNotExist: If no item with the given material_id exists.
         """
@@ -81,7 +81,7 @@ class CopyrightItemRepository:
     ) -> None:
         """
         Persist a CopyrightItem, optionally restricting which fields are updated.
-        
+
         Parameters:
             item (CopyrightItem): The item to persist.
             update_fields (list[str] | None): Specific field names to update on the existing record; if None, all fields are saved.
@@ -96,10 +96,10 @@ class CopyrightItemRepository:
     async def get_all(self, filter_dict: dict | None = None) -> list[CopyrightItem]:
         """
         Retrieve all CopyrightItem records, optionally applying simple equality filters.
-        
+
         Parameters:
             filter_dict (dict | None): Optional mapping of field names to values used as equality filters (passed as kwargs to the query).
-        
+
         Returns:
             list[CopyrightItem]: List of matching CopyrightItem instances.
         """
@@ -110,7 +110,7 @@ class CopyrightItemRepository:
     async def get_existing_material_ids(self) -> set[int]:
         """
         Return the set of material IDs present in the database, converted to integers where possible.
-        
+
         Returns:
             set[int]: Material IDs as integers; any values that cannot be converted or are None are excluded.
         """
@@ -135,10 +135,10 @@ class CopyrightItemRepository:
     async def bulk_create(self, items: list[CopyrightItem]) -> None:
         """
         Create multiple CopyrightItem records; if the bulk insert fails, attempt to save each item individually.
-        
+
         Parameters:
             items (list[CopyrightItem]): CopyrightItem instances to create.
-        
+
         Raises:
             Exception: If creation fails for some items after the per-item fallback; exception message includes the list of failed `material_id` values.
         """
@@ -172,7 +172,7 @@ class CopyrightItemRepository:
     ) -> None:
         """
         Update multiple CopyrightItem records in batches.
-        
+
         Parameters:
             items (list[CopyrightItem]): CopyrightItem instances to update.
             fields (list[str]): Attribute names to update on each item.
@@ -196,7 +196,7 @@ class CopyrightItemRepository:
     ) -> None:
         """
         Create changelog entries and associate them with the corresponding CopyrightItem records.
-        
+
         Parameters:
             updates (dict[int, dict]): Mapping from material_id to a dict of change details; each dict becomes the `change_details` for a new ItemUpdate.
             user_email (str | None): If provided, added to each change dict under the key `"modified_by"` to record who made the change.
@@ -238,13 +238,13 @@ class CopyrightItemRepository:
     def get_dataframe(self, additional_cols: list[str] | None = None) -> pl.DataFrame:
         """
         Return a Polars DataFrame containing copyright items.
-        
+
         Parameters:
             additional_cols (list[str] | None): Optional extra columns to include. Column names not in the repository's allowed whitelist are ignored and a warning is logged. The alias "faculty_id AS faculty" is permitted.
-        
+
         Returns:
             pl.DataFrame: DataFrame with the requested columns (or only `material_id` if no requested columns are valid).
-        
+
         Raises:
             Exception: If retrieving the data fails.
         """
@@ -269,20 +269,56 @@ class CopyrightItemRepository:
         # Whitelist of allowed column names to prevent SQL injection
         # These are the known columns in the copyright_data table
         allowed_columns = {
-            "material_id", "period", "department", "course_code", "course_name",
-            "url", "filename", "title", "owner", "filetype", "classification",
-            "ml_prediction", "manual_classification", "manual_identifier",
-            "v2_manual_classification", "v2_overnamestatus", "v2_lengte",
-            "scope", "remarks", "auditor", "last_change", "status",
-            "isbn", "doi", "in_collection", "pagecount", "wordcount", "picturecount",
-            "author", "publisher", "reliability", "pages_x_students",
-            "count_students_registered", "filehash", "last_scan_date_university",
-            "last_scan_date_course", "retrieved_from_copyright_on", "workflow_status",
-            "possible_fine", "infringement", "file_exists", "last_canvas_check",
-            "canvas_course_id", "faculty_id", "is_duplicate", "created_at", "modified_at",
+            "material_id",
+            "period",
+            "department",
+            "course_code",
+            "course_name",
+            "url",
+            "filename",
+            "title",
+            "owner",
+            "filetype",
+            "classification",
+            "ml_prediction",
+            "manual_classification",
+            "manual_identifier",
+            "v2_manual_classification",
+            "v2_overnamestatus",
+            "v2_lengte",
+            "scope",
+            "remarks",
+            "auditor",
+            "last_change",
+            "status",
+            "isbn",
+            "doi",
+            "in_collection",
+            "pagecount",
+            "wordcount",
+            "picturecount",
+            "author",
+            "publisher",
+            "reliability",
+            "pages_x_students",
+            "count_students_registered",
+            "filehash",
+            "last_scan_date_university",
+            "last_scan_date_course",
+            "retrieved_from_copyright_on",
+            "workflow_status",
+            "possible_fine",
+            "infringement",
+            "file_exists",
+            "last_canvas_check",
+            "canvas_course_id",
+            "faculty_id",
+            "is_duplicate",
+            "created_at",
+            "modified_at",
             "faculty_id AS faculty",  # Allow this specific alias
         }
-        
+
         # Validate and filter columns
         validated_cols = {col for col in select_cols if col in allowed_columns}
         if len(validated_cols) != len(select_cols):
@@ -299,7 +335,9 @@ class CopyrightItemRepository:
                 query=query, connection=self.engine.connect(), infer_schema_length=None
             )
             end = time()
-            logger.info(f"CopyrightItemRepository.get_dataframe returned {len(df)} rows")
+            logger.info(
+                f"CopyrightItemRepository.get_dataframe returned {len(df)} rows"
+            )
             logger.info(f"query took {end - query_start} seconds")
             logger.info(f"full function took {end - full_start} seconds")
         except Exception as e:
@@ -325,12 +363,12 @@ class CopyrightItemRepository:
     async def create_from_dicts(self, items: list[dict]) -> list[CopyrightItem]:
         """
         Create CopyrightItem objects from a list of dictionaries.
-        
+
         Parameters:
-        	items (list[dict]): Dictionaries representing item data to convert into CopyrightItem instances.
-        
+                items (list[dict]): Dictionaries representing item data to convert into CopyrightItem instances.
+
         Returns:
-        	created_items (list[CopyrightItem]): List of created CopyrightItem instances; dictionaries that could not be converted are omitted.
+                created_items (list[CopyrightItem]): List of created CopyrightItem instances; dictionaries that could not be converted are omitted.
         """
         new_objects = []
         for item_dict in items:
@@ -346,18 +384,18 @@ class CopyrightItemRepository:
     ) -> tuple[list[dict], list[dict]]:
         """
         Split input into new items to create and existing items to update.
-        
+
         When given a Polars DataFrame, the function standardizes the frame, determines which rows
         correspond to material_ids already present in the database, and separates rows into:
         - new_items: rows with material_id not in the database and that contain the required
           creation fields (`period`, `department`, `course_code`, `course_name`).
         - update_items: rows whose material_id exists in the database.
-        
+
         When given a list of dictionaries, the list is treated as update_items and returned unchanged.
-        
+
         Parameters:
             data (pl.DataFrame | list[dict]): Input data as a Polars DataFrame or a list of record dicts.
-        
+
         Returns:
             tuple[list[dict], list[dict]]: A tuple (new_items, update_items) where each element is a list of
             dictionaries representing records to create and records to update, respectively.

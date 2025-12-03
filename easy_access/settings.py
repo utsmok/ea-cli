@@ -385,15 +385,18 @@ class SettingsFaculty:
     abbreviation: str = ""
     programmes: list[SettingsProgramme] = field(default_factory=list)
 
+
 @dataclass
 class WebResource:
     """
     Holds settings related to a web resource like an LMS, course catalogue, etc.
     """
-    name: str = "" # name of the LMS
+
+    name: str = ""  # name of the LMS
     url: str = ""  # public base url, e.g. https://canvas.utwente.nl
     api: str = ""  # API base URL, e.g. https://utwente.instructure.com/api/v1. Used for resources that have actual APIs.
     query_url: str = ""  # URL template for queries, e.g. https://canvas.utwente.nl/courses/{course_id}. Used for resources without APIs but structured URLs (e.g. from a search system).
+
 
 @dataclass
 class UniversitySettings:
@@ -615,8 +618,12 @@ class Settings:
         employee_catalogue = self._parse_dict_safely(value, "employee_catalogue")
 
         self.university_settings.lms = WebResource(**lms) if lms else WebResource()
-        self.university_settings.course_catalogue = WebResource(**course_catalogue) if course_catalogue else WebResource()
-        self.university_settings.employee_catalogue = WebResource(**employee_catalogue) if employee_catalogue else WebResource()
+        self.university_settings.course_catalogue = (
+            WebResource(**course_catalogue) if course_catalogue else WebResource()
+        )
+        self.university_settings.employee_catalogue = (
+            WebResource(**employee_catalogue) if employee_catalogue else WebResource()
+        )
 
         manual_mappings = value.get("manual_department_mappings", {})
         if isinstance(manual_mappings, dict):

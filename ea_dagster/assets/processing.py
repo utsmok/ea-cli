@@ -7,7 +7,15 @@ This module replaces `pipeline.process_data_async` by:
 3. Updating the main CopyrightItem table using Tortoise ORM
 """
 
-from dagster import AssetExecutionContext, AssetIn, asset
+from dagster import (
+    AssetExecutionContext,
+    AssetIn,
+    MetadataValue,
+    Output,
+    TableColumn,
+    TableSchema,
+    asset,
+)
 
 from ea_dagster.resources import TortoiseDBResource
 
@@ -28,7 +36,7 @@ async def processed_copyright_items(
     db: TortoiseDBResource,
     raw_data: str,
     faculty_data: str,
-) -> str:
+) -> Output:
     """
     Reads from dlt staging tables, runs merge logic, and updates main CopyrightItem table.
 
@@ -76,7 +84,7 @@ async def processed_copyright_items(
 
         if not rows:
             context.log.info("No staged data to process")
-            return "No staged data to process"
+            return Output(value="No staged data to process")
 
         # 2. Get existing items for comparison
         existing_items_list = await CopyrightItem.all()
@@ -154,7 +162,11 @@ async def processed_copyright_items(
                 for field, change_info in changes.items():
                     if hasattr(current_item, field):
                         # changes dict contains {field: {old: X, new: Y}}
-                        new_val = change_info.get("new") if isinstance(change_info, dict) else change_info
+                        new_val = (
+                            change_info.get("new")
+                            if isinstance(change_info, dict)
+                            else change_info
+                        )
                         setattr(current_item, field, new_val)
 
                 await current_item.save()
@@ -221,4 +233,15 @@ async def processed_copyright_items(
             f"{faculty_updates_count} faculty updates applied"
         )
         context.log.info(result_msg)
-        return result_msg
+
+        # Metadata
+        columns = [TableColumn(name=f) for f in CopyrightItem._meta.fields]
+        schema = TableSchema(columns=columns)
+        metadata = {
+            "table_name": "copyrightitem",
+            "table_schema": MetadataValue.table_schema(schema),
+            "created_count": created_count,
+            "updated_count": updated_count,
+            "faculty_updates_count": faculty_updates_count,
+        }
+        return Output(value=result_msg, metadata=metadata)

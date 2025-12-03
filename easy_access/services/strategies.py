@@ -1,8 +1,8 @@
 """
 Field comparison strategies for merge operations.
 
-These strategies implement the Strategy pattern for comparing fields 
-during copyright item updates. Each strategy defines its own logic 
+These strategies implement the Strategy pattern for comparing fields
+during copyright item updates. Each strategy defines its own logic
 for determining whether a field should be updated.
 
 NOTE: This module contains pure logic with NO database dependencies.
@@ -28,12 +28,12 @@ class FieldComparisonStrategy:
     ) -> tuple[bool, str]:
         """
         Decide whether a field value should be replaced during a merge.
-        
+
         Parameters:
             new_value: The incoming candidate value.
             old_value: The existing value to compare against.
             ordering: Optional ordering or ranking information used by some strategies (type and meaning depend on strategy).
-        
+
         Returns:
             tuple(bool, str): `True` if the field should be updated, `False` otherwise; second element is a short reason for the decision or an empty string.
         """
@@ -48,12 +48,12 @@ class RankedFieldStrategy(FieldComparisonStrategy):
     ) -> tuple[bool, str]:
         """
         Determine whether a field should be updated based on a ranked ordering where lower index indicates higher priority.
-        
+
         Parameters:
             new_value (Any): Candidate value to consider for update.
             old_value (Any): Existing value to compare against.
             ordering (list): List representing value priority (index 0 = highest priority). If not a list, no update is performed.
-        
+
         Returns:
             tuple[bool, str]: `True` and a short reason if `new_value` has higher priority than `old_value` according to `ordering`; `False` and an empty string otherwise. When a value is not present in `ordering`, a default rank is used.
         """
@@ -82,12 +82,12 @@ class StringFieldStrategy(FieldComparisonStrategy):
     ) -> tuple[bool, str]:
         """
         Determine whether a string field should be updated by preferring longer trimmed strings.
-        
+
         Parameters:
             new_value (Any): Candidate value; update is considered only if this is a string.
             old_value (Any): Existing value; update is considered only if this is a string.
             ordering (Any): Unused by this strategy.
-        
+
         Returns:
             tuple[bool, str]: `True` and reason "new len > old len" if the trimmed `new_value` is longer than the trimmed `old_value`, `False` and an empty string otherwise.
         """
@@ -111,14 +111,14 @@ class NumericFieldStrategy(FieldComparisonStrategy):
     ) -> tuple[bool, str]:
         """
         Decides whether the new value should replace the old value by checking if the new value is greater.
-        
+
         Uses safe_compare_greater to compare numeric or date-like values; comparison errors are logged and treated as not updateable.
-        
+
         Parameters:
             new_value: The candidate value to consider for update.
             old_value: The existing value to compare against.
             ordering: Ignored by this strategy (present for API compatibility).
-        
+
         Returns:
             A tuple where the first element is `True` and the second is "new > old" if `new_value` is greater than `old_value`, `False` and an empty string otherwise.
         """
@@ -139,12 +139,12 @@ class DateFieldStrategy(FieldComparisonStrategy):
     ) -> tuple[bool, str]:
         """
         Decides whether a date/datetime field should be updated based on which value is later.
-        
+
         Parameters:
             new_value (date | datetime): The incoming candidate date/time value.
             old_value (date | datetime): The existing stored date/time value.
             ordering (Any): Ignored for date comparisons.
-        
+
         Returns:
             tuple[bool, str]: `True` and the reason "new date > old date" if `new_value` is later than `old_value`, `False` and an empty string otherwise. If either value is not a `date` or `datetime`, returns `False` and an empty string.
         """
@@ -169,14 +169,14 @@ class EnumFieldStrategy(FieldComparisonStrategy):
         # If ordering is provided, use ranked comparison
         """
         Determine whether an enum-like new_value should replace old_value based on a provided ranking.
-        
+
         Parameters:
             new_value: The candidate value to consider for update.
             old_value: The current value to compare against.
             ordering (list | Any): A list defining preferred values in priority order (lower index = higher priority).
                 If `ordering` is not a non-empty list, ranking is not applied.
                 Values not present in `ordering` are treated as having the default rank.
-        
+
         Returns:
             tuple[bool, str]: `True` and a short reason if `new_value` has higher priority (lower rank) than `old_value`, `False` and an empty string otherwise.
         """
@@ -203,7 +203,7 @@ class FileExistsStrategy(FieldComparisonStrategy):
     ) -> tuple[bool, str]:
         """
         Always require an update when a file existence indication is provided.
-        
+
         Returns:
             tuple[bool, str]: First element is `True` indicating the field should be updated; second element is a human-readable reason string explaining the update decision.
         """
@@ -215,11 +215,11 @@ def get_comparison_strategy(
 ) -> FieldComparisonStrategy:
     """
     Selects a FieldComparisonStrategy appropriate for the given field and optional database item.
-    
+
     Parameters:
         field (str): Name of the field to choose a comparison strategy for.
         db_item (Any | None): Optional object whose current attribute value will be inspected to infer the most suitable strategy; if the attribute is missing or db_item is None, inference is skipped.
-    
+
     Returns:
         FieldComparisonStrategy: An instance suitable for comparing/merging values for the specified field (e.g., a file-existence strategy for "file_exists", or a strategy inferred from the current attribute type when db_item is provided).
     """

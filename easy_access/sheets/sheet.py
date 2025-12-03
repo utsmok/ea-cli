@@ -223,7 +223,6 @@ class DataEntrySheet:
                         if item == "" or not item:
                             col_data[item_num] = col.default_val
 
-
             curr_col: Cell = self.sheet.cell(1, colnum)  # type: ignore
             curr_col.value = col_name
             for row, cell_data in enumerate(col_data, start=2):
@@ -233,9 +232,9 @@ class DataEntrySheet:
                     continue
 
                 if col.is_url:
-                    #if "/" not in cell_data:
+                    # if "/" not in cell_data:
                     #    cur_cell.value = cell_data
-                    #else:
+                    # else:
                     #    cur_cell.value = ".../" + cell_data.split("/")[-1]
                     cur_cell.value = cell_data
                     cur_cell.hyperlink = cell_data
@@ -257,7 +256,6 @@ class DataEntrySheet:
         ]
 
         for idx, col in enumerate(self.cols):
-
             # use column position (order in self.cols) to determine target column
             col_index_1based = idx + 1
             target_col_letter = header_col_letters[idx]

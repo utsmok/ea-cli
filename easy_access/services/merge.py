@@ -82,11 +82,11 @@ def record_field_change(
 def _cast_datetime_value(value: Any) -> datetime | None:
     """
     Parse a value into a timezone-aware datetime using common date/time formats.
-    
+
     Parameters:
         value (Any): The input to parse; expected to be a string in one of these formats:
             "YYYY-MM-DD HH:MM:SS±ZZZZ", "YYYY-MM-DD HH:MM:SS", or "YYYY-MM-DD".
-    
+
     Returns:
         datetime | None: A `datetime` with UTC tzinfo if parsing succeeds, otherwise `None`.
     """
@@ -107,11 +107,11 @@ def _cast_datetime_value(value: Any) -> datetime | None:
 def _cast_numeric_value(value: Any, target_type: type) -> int | float | None:
     """
     Convert a value to an integer or float suitable for comparison.
-    
+
     Parameters:
         value (Any): The input to be parsed as a numeric value.
         target_type (type): Desired numeric type; expected to be `int` or `float`.
-    
+
     Returns:
         int | float | None: An `int` when `target_type` is `int` and parsing succeeds; a `float` rounded to two decimal places when `target_type` is `float` and parsing succeeds; `None` if parsing fails or `target_type` is unsupported.
     """
@@ -127,10 +127,10 @@ def _cast_numeric_value(value: Any, target_type: type) -> int | float | None:
 def _normalize_file_exists(value: Any) -> bool | None:
     """
     Normalize various truthy/falsey representations for the `file_exists` field to `True`, `False`, or `None`.
-    
+
     Parameters:
         value (Any): Input value that may be a boolean, integer, string, None, or empty string.
-    
+
     Returns:
         bool | None: `True` for common truthy values (`True`, `1`, `"1"`, `"true"`, `"True"`),
         `False` for common falsey values (`False`, `0`, `"0"`, `"false"`, `"False"`), and `None` for `None`, empty string, or unrecognized values.
@@ -149,11 +149,11 @@ def _normalize_file_exists(value: Any) -> bool | None:
 def _cast_enum_value(value: Any, enum_class: type) -> Any:
     """
     Retrieve the underlying value when given an enum instance, otherwise leave the input unchanged.
-    
+
     Parameters:
         value (Any): The value to inspect; may be an instance of `enum_class`.
         enum_class (type): The Enum class to check against.
-    
+
     Returns:
         Any: The enum member's `.value` if `value` is an instance of `enum_class`, otherwise `value` unchanged.
     """
@@ -167,16 +167,16 @@ def _cast_values_for_comparison(
 ) -> tuple[bool, Any, Any]:
     """
     Prepare and normalize new and old values for field comparison according to the old value's type.
-    
+
     Parameters:
         field (str): Field name (used for context in error messages).
         new_value (Any): Candidate new value to be cast for comparison.
         old_value (Any): Existing value whose type determines casting rules.
         db_item (Any): Optional context object (unused by most casts but available for type resolution).
-    
+
     Returns:
         tuple: (success, new_value, old_value) where `success` is `True` on successful casting, `new_value` is the cast/normalized new value, and `old_value` is the normalized old value suitable for comparison.
-    
+
     Raises:
         TypeCastError: If converting `new_value` to the type implied by `old_value` fails.
     """
@@ -205,15 +205,15 @@ def compare_and_update_fields(
 ) -> tuple[dict, Any]:
     """
     Compare fields from a new item against an existing item, apply allowed updates, and record any changes.
-    
+
     Per-field comparison uses type-aware casting and a pluggable comparison strategy to decide whether to update. The function mutates the provided `db_item` when updates are applied and records each change in `changes`. If `changes` is empty, it is initialized with `material_id` from `new_item` and a generated `update_time`. The function also performs special handling for `file_exists` normalization and enforces a canonical upgrade-only rule for `workflow_status`.
-    
+
     Parameters:
         new_item (dict): Source data with proposed field values.
         db_item (Any): Existing item instance to compare against and update when changes are accepted.
         fielddict (dict): Mapping of field names to ordering/rules used by comparison strategies.
         changes (dict): Accumulator for recorded changes; returned and updated in-place.
-    
+
     Returns:
         tuple: (`changes` dict with recorded field changes, updated `db_item` instance)
     """
@@ -302,20 +302,20 @@ def compare_and_update_fields(
 
 
 def calculate_changes(
-    new_data: dict, 
-    current_item: Any, 
+    new_data: dict,
+    current_item: Any,
     added_fields: dict,
     changeable_fields: dict,
 ) -> tuple[dict, Any]:
     """
     Compute and apply field-level updates for added and changeable fields, returning recorded changes and the updated item.
-    
+
     Parameters:
         new_data (dict): Incoming data with candidate field values.
         current_item (Any): Existing item object to compare against and optionally update.
         added_fields (dict): Mapping of fields and their ordering rules to treat as newly added.
         changeable_fields (dict): Mapping of fields and their ordering rules eligible for updates.
-    
+
     Returns:
         tuple[dict, Any]: A tuple containing the changes dictionary (field -> {old, new, reason}) and the potentially updated item.
     """

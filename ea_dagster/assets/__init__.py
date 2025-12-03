@@ -8,7 +8,7 @@ This package contains:
 - export: Excel report generation wrapper
 """
 
-from ea_dagster.assets.enrichment import osiris_enrichment
+from ea_dagster.assets.enrichment import file_existence_check, osiris_enrichment
 from ea_dagster.assets.export import excel_reports
 from ea_dagster.assets.ingestion import faculty_updates_data, raw_copyright_data
 from ea_dagster.assets.processing import processed_copyright_items
@@ -18,5 +18,6 @@ __all__ = [
     "faculty_updates_data",
     "processed_copyright_items",
     "osiris_enrichment",
+    "file_existence_check",
     "excel_reports",
 ]

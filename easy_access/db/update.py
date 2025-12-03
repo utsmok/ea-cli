@@ -108,7 +108,7 @@ MIN_CHANGES_THRESHOLD = 3
 
 # NOTE: The following functions are imported from easy_access/services/merge.py:
 # - record_field_change
-# - compare_and_update_fields  
+# - compare_and_update_fields
 # - _cast_datetime_value
 # - _cast_numeric_value
 # - _normalize_file_exists
@@ -121,16 +121,16 @@ async def preprocess_input_data(
 ) -> tuple[list[dict], list[dict]]:
     """
     Standardize input and split it into items to create and items to update.
-    
+
     When given a Polars DataFrame, the frame is standardized, existing material_ids are looked up,
     rows whose material_id does not exist are validated for required creation fields and returned
     as `new_items`, and rows whose material_id exists are returned as `update_items`.
     When given a list of dicts, the list is treated as `update_items`. Skipped candidate creations
     (with missing required fields) are logged and not returned.
-    
+
     Parameters:
         data (pl.DataFrame | list[dict]): Input records as a Polars DataFrame or a list of dictionaries.
-    
+
     Returns:
         tuple[list[dict], list[dict]]: A tuple (new_items, update_items) where `new_items` are dicts
         suitable for creating new records and `update_items` are dicts for updating existing records.
@@ -404,7 +404,7 @@ async def execute_bulk_database_operations(
 ) -> None:
     """
     Execute queued database writes for changed and newly created items and record item-level change logs.
-    
+
     Parameters:
         changelist (list[CopyrightItem]): CopyrightItem objects with pending field changes.
         updates (dict): Mapping from `material_id` to a dict of changed field values (must include `material_id` and `update_time` keys; other keys are treated as changed fields).
@@ -412,7 +412,7 @@ async def execute_bulk_database_operations(
         new_objects (list[CopyrightItem]): Newly created CopyrightItem objects that may require relation updates.
         update_relations (bool): If true, schedule relation updates for affected items after applying changes.
         settings (Settings): Application settings / configuration context used by the operation.
-    
+
     Returns:
         None
     """
@@ -1327,22 +1327,27 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
             updated_count += 1
             continue
 
+
 async def map_v1_to_v2_classifications(settings: Settings) -> None:
     """
     Map v1 manual classification values to v2 classification fields for items that lack a v2 classification.
-    
+
     Selects CopyrightItem rows whose `v2_manual_classification` is null or `ONBEKEND`, normalizes their existing v1 `manual_classification` values, looks up the corresponding v2 mapping via CLASSIFICATION_MAPPING_V1_TO_V2, and updates the item's `v2_manual_classification`, `v2_lengte`, and `v2_overnamestatus` when a mapped value differs from the current v2 fields. Operates directly on the database using Tortoise ORM within a transaction, records per-item mapping details for optional export, and logs summary counts of mapped, modified, failed, and unlinked items.
-    
+
     Parameters:
         settings (Settings): Application settings used to ensure the database is initialized and to drive ORM interactions.
     """
     # select all items:
     # - without a v2 classification (null or empty)
     await ensure_db_inited(settings)
-    selected_items = await CopyrightItem.filter(
-        Q(v2_manual_classification__isnull=True)
-        | Q(v2_manual_classification=ClassificationV2.ONBEKEND)
-    ).all().prefetch_related('v1_items', 'faculty')
+    selected_items = (
+        await CopyrightItem.filter(
+            Q(v2_manual_classification__isnull=True)
+            | Q(v2_manual_classification=ClassificationV2.ONBEKEND)
+        )
+        .all()
+        .prefetch_related("v1_items", "faculty")
+    )
     logger.info(f"Mapping v1 to v2 classifications for {len(selected_items)} items...")
     if not selected_items:
         logger.info("No items to map v1 to v2 classifications for.")
@@ -1387,7 +1392,9 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 match current:
                     case val if val in {e.value for e in Classification}:
                         key = Classification(val)
-                    case val if val.lower() in {e.value.lower() for e in Classification}:
+                    case val if val.lower() in {
+                        e.value.lower() for e in Classification
+                    }:
                         key = Classification(
                             next(
                                 e.value
@@ -1396,8 +1403,7 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                             )
                         )
                     case val if re.sub(r"[\s_-]", "", val.lower()) in {
-                        re.sub(r"[\s_-]", "", e.value.lower())
-                        for e in Classification
+                        re.sub(r"[\s_-]", "", e.value.lower()) for e in Classification
                     }:
                         key = Classification(
                             next(
@@ -1417,7 +1423,6 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                 current_v2_classification = item.v2_manual_classification.value
 
                 if item.v2_manual_classification != mapped.classification:
-
                     item.v2_manual_classification = mapped.classification
                     item.v2_lengte = mapped.length
                     item.v2_overnamestatus = mapped.overname_status
@@ -1441,7 +1446,9 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                         "mapped_v2_overname_status": mapped.overname_status.value,
                     }
                     details.append(detaildict)
-                    logger.debug(f"material_id {item.material_id}: [v1] {input_val} -> {current} -> {key.value} mapped to [v2] {mapped.classification}")
+                    logger.debug(
+                        f"material_id {item.material_id}: [v1] {input_val} -> {current} -> {key.value} mapped to [v2] {mapped.classification}"
+                    )
                     await item.save(
                         update_fields=[
                             "v2_manual_classification",
@@ -1463,11 +1470,15 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
     if len(details) > 0:
         logger.debug("Stored parsed/mapped details to csv for inspection")
         try:
-            pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
+            pl.DataFrame(details).write_csv(
+                "v1_to_v2_classification_mapping_details.csv"
+            )
         except Exception:
-            details = [{a:str(b) for a,b in d.items()} for d in details]
+            details = [{a: str(b) for a, b in d.items()} for d in details]
             try:
-                pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
+                pl.DataFrame(details).write_csv(
+                    "v1_to_v2_classification_mapping_details.csv"
+                )
             except Exception as exc2:
                 logger.error(f"Could not write mapping details to csv: {exc2}")
                 if len(details) < 20:

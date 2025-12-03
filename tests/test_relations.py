@@ -144,7 +144,9 @@ class TestUpdateRelationsAsync:
 
         with (
             patch("easy_access.db.relations.link_courses") as mock_link_courses,
-            patch("easy_access.db.relations.match_v1_to_copyright_items") as mock_match_v1,
+            patch(
+                "easy_access.db.relations.match_v1_to_copyright_items"
+            ) as mock_match_v1,
         ):
             await update_relations_async(settings)
 
@@ -158,7 +160,9 @@ class TestUpdateRelationsAsync:
 
         with (
             patch("easy_access.db.relations.link_courses") as mock_link_courses,
-            patch("easy_access.db.relations.match_v1_to_copyright_items") as mock_match_v1,
+            patch(
+                "easy_access.db.relations.match_v1_to_copyright_items"
+            ) as mock_match_v1,
         ):
             mock_link_courses.side_effect = Exception("Test error")
 

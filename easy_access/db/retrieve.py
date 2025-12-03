@@ -5,7 +5,6 @@ NOTE: This module delegates complex queries to repositories where appropriate.
       Use repositories directly for new code.
 """
 
-import json
 import traceback
 from collections.abc import Iterable
 from time import time
@@ -21,10 +20,10 @@ from tortoise.expressions import Q
 
 from easy_access.db.base import ensure_db_inited, init_engine
 from easy_access.db.models import PDF, CopyrightItem, ItemUpdate
-from easy_access.settings import Settings  # Import Settings for type hint
 
 # Import repository for delegating complex queries
 from easy_access.repositories.osiris_repo import OsirisRepository
+from easy_access.settings import Settings  # Import Settings for type hint
 
 engine: Engine | None = None
 
@@ -441,20 +440,20 @@ def retrieve_osiris_data(
 ) -> list[dict[str, Any]]:
     """
     Retrieve richly nested Osiris data (faculty, courses, persons, organizations) for the specified material IDs.
-    
+
     Parameters:
         material_ids (int | list[int]): A material ID or list of material IDs to fetch.
         settings (Settings): Application settings; required.
-    
+
     Returns:
         list[dict[str, Any]]: A list of nested dictionaries where each dictionary represents one copyright item and its related data. Returns an empty list if no data is found or if `material_ids` is empty.
-    
+
     Raises:
         ValueError: If `settings` is not provided.
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_osiris_data")
-    
+
     # Delegate to repository
     repo = OsirisRepository(settings)
     return repo.fetch_enriched_data(material_ids)
@@ -465,19 +464,19 @@ async def retrieve_item_history(
 ) -> list[ItemUpdate]:  # Added settings
     """
     Retrieve ItemUpdate history entries for the specified material IDs.
-    
+
     Parameters:
-    	material_ids (list[int] | int): Material ID or list of material IDs to fetch history for. If empty, an empty list is returned.
-    	settings (Settings): Application settings; required and must be provided.
-    
+        material_ids (list[int] | int): Material ID or list of material IDs to fetch history for. If empty, an empty list is returned.
+        settings (Settings): Application settings; required and must be provided.
+
     Returns:
-    	list[ItemUpdate]: List of ItemUpdate instances matching the provided material IDs (may be empty).
-    
+        list[ItemUpdate]: List of ItemUpdate instances matching the provided material IDs (may be empty).
+
     Raises:
-    	ValueError: If `settings` is not provided.
-    
+        ValueError: If `settings` is not provided.
+
     Side effects:
-    	Closes Tortoise ORM connections before returning.
+        Closes Tortoise ORM connections before returning.
     """
     if not settings:
         raise ValueError("Settings must be provided to retrieve_item_history")

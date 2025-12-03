@@ -22,7 +22,7 @@ class OsirisRepository:
     def __init__(self, settings: Settings):
         """
         Create an OsirisRepository configured with the given application settings.
-        
+
         Parameters:
             settings: Configuration object providing database connection and related options required to initialize the repository.
         """
@@ -33,7 +33,7 @@ class OsirisRepository:
     def engine(self) -> Engine:
         """
         Lazily initialize and return the SQLAlchemy engine.
-        
+
         Returns:
             Engine: The initialized SQLAlchemy Engine instance.
         """
@@ -50,12 +50,12 @@ class OsirisRepository:
     ) -> list[dict[str, Any]]:
         """
         Retrieve copyright items with nested faculty, course, person, and organization data for the given material IDs.
-        
+
         Accepts a single material ID or a list of IDs. Each ID may be an integer or a numeric string; non-numeric values are skipped. If no valid IDs remain or if input is empty, an empty list is returned.
-        
+
         Parameters:
             material_ids (int | str | list[int | str]): Material ID or list of material IDs to query.
-        
+
         Returns:
             list[dict]: A list of dictionaries where each dictionary represents one copyright item enriched with related data.
                 Typical top-level keys:
@@ -79,16 +79,20 @@ class OsirisRepository:
                 validated_ids.append(int(mid))
             else:
                 logger.warning(f"Skipping invalid material_id: {mid}")
-        
+
         if not validated_ids:
-            logger.warning("No valid material IDs after validation. Returning empty list.")
+            logger.warning(
+                "No valid material IDs after validation. Returning empty list."
+            )
             return []
 
         # Build the WHERE clause for material_ids (using validated integer IDs only)
         if len(validated_ids) == 1:
             mat_id_query = f"WHERE cd.material_id = {validated_ids[0]}"
         else:
-            mat_id_query = f"WHERE cd.material_id IN ({', '.join(map(str, validated_ids))})"
+            mat_id_query = (
+                f"WHERE cd.material_id IN ({', '.join(map(str, validated_ids))})"
+            )
 
         query = self._build_enriched_data_query(mat_id_query)
         return self._execute_enriched_query(query)
@@ -96,10 +100,10 @@ class OsirisRepository:
     def _build_enriched_data_query(self, mat_id_query: str) -> str:
         """
         Constructs the SQL query used to retrieve enriched OSIRIS data with nested course, person, and organization JSON structures.
-        
+
         Parameters:
             mat_id_query (str): SQL WHERE clause fragment to filter by material IDs (e.g., "WHERE material_id = 123" or "WHERE material_id IN (...)").
-        
+
         Returns:
             str: A complete SQL query string ready for execution.
         """
@@ -218,12 +222,12 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
     def _execute_enriched_query(self, query: str) -> list[dict[str, Any]]:
         """
         Execute the given SQL query against the repository engine and parse row results into Python structures.
-        
+
         Parses top-level JSON columns `faculty_data` (to dict or None) and `courses` (to list). For each course, parses `persons` (to list) and for each person parses `organizations` (to list). On JSON decoding failures, replaces invalid `faculty_data` with None, invalid `courses`/`persons`/`organizations` with empty lists, and ensures missing `persons`/`organizations` become empty lists. If a database error occurs, the error and traceback are logged and the method returns any results parsed before the failure.
-        
+
         Parameters:
             query (str): SQL query string to execute.
-        
+
         Returns:
             list[dict[str, Any]]: A list of row dictionaries with parsed JSON fields (`faculty_data`, `courses`, nested `persons` and `organizations`).
         """
@@ -278,8 +282,7 @@ LEFT JOIN CopyrightCourses cc ON cd.material_id = cc.copyright_data_id
                                                 except json.JSONDecodeError:
                                                     person["organizations"] = []
                                             elif (
-                                                person
-                                                and "organizations" not in person
+                                                person and "organizations" not in person
                                             ):
                                                 person["organizations"] = []
                                 except json.JSONDecodeError:

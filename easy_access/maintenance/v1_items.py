@@ -152,9 +152,13 @@ def clean_and_cast_cols(
         # Possible values:
         # - Classification.[CATEGORY] (so the enum class+key as string, e.g. "Classification.ONBEKEND")
         # - anders and/or Classification.ANDERS: do not exist in this enum, translate to "onbekend"
-        logger.info(f"Before translation: {df.select(col).group_by(col).len().sort('len', descending=True)}")
+        logger.info(
+            f"Before translation: {df.select(col).group_by(col).len().sort('len', descending=True)}"
+        )
         # store pairs of material_id and col value for logging later
-        material_col_pairs['before']= df.select("material_id", col).with_columns(pl.col(col).alias('before'))
+        material_col_pairs["before"] = df.select("material_id", col).with_columns(
+            pl.col(col).alias("before")
+        )
         ALLOWED_VALUES = {c.value.lower(): c.value for c in Classification}
         TRANSLATIONS = {
             "anders": "onbekend",
@@ -196,8 +200,12 @@ def clean_and_cast_cols(
         df = df.with_columns(
             pl.col(col).replace(TRANSLATIONS, default="onbekend").alias(col)
         )
-        logger.info(f"After translation: {df.select(col).group_by(col).len().sort('len', descending=True)}")
-        material_col_pairs['after'] = df.select("material_id", col).with_columns(pl.col(col).alias('after'))
+        logger.info(
+            f"After translation: {df.select(col).group_by(col).len().sort('len', descending=True)}"
+        )
+        material_col_pairs["after"] = df.select("material_id", col).with_columns(
+            pl.col(col).alias("after")
+        )
         # check if any values are not in the allowed values
         values = (df[col]).to_list()
         invalid_values = {
@@ -206,13 +214,14 @@ def clean_and_cast_cols(
         if invalid_values:
             logger.warning(f"Invalid values in {col}: {invalid_values}")
 
-        changes = material_col_pairs["after"].join(
-            material_col_pairs["before"], on="material_id"
-        ).filter(pl.col("before") != pl.col("after"))
-        grouped = changes.group_by('before', 'after').len().sort('len', descending=True)
+        changes = (
+            material_col_pairs["after"]
+            .join(material_col_pairs["before"], on="material_id")
+            .filter(pl.col("before") != pl.col("after"))
+        )
+        grouped = changes.group_by("before", "after").len().sort("len", descending=True)
         logger.info(f"Found {len(changes)} changes in {col} values after translation.")
         logger.info(f"Changes summary:\n{grouped}")
-
 
     for col_entry, col_base in conflict_cols:
         if col_base not in df.columns:
@@ -366,7 +375,9 @@ def process_v1_sheet(
             ~pl.col("material_id").is_in(existing_item_ids)
         )
         if combined_df.is_empty():
-            logger.warning(f'empty combined df after filtering existing item_ids for {filename}')
+            logger.warning(
+                f"empty combined df after filtering existing item_ids for {filename}"
+            )
             return combined_df
     # Col selection
     cols_to_keep = []
@@ -433,6 +444,7 @@ def process_v1_sheets(
     all_changes = pl.concat(changes.values()) if changes else pl.DataFrame()
     return res, all_changes
 
+
 def merge_all_sheets(
     processed_sheets: dict[str, pl.DataFrame],
 ) -> pl.DataFrame:
@@ -487,7 +499,9 @@ async def ingest_v1_items(df: pl.DataFrame) -> None:
         await v1_CopyrightItem.update_or_create(**row)
 
 
-async def ingest_v1_data(settings: Settings, base_dir: Path, delete: bool=False) -> None:
+async def ingest_v1_data(
+    settings: Settings, base_dir: Path, delete: bool = False
+) -> None:
     """
     given a base directory with subdirectories for each faculty containing v1 sheets,
     ingest all data into the database.
@@ -498,7 +512,6 @@ async def ingest_v1_data(settings: Settings, base_dir: Path, delete: bool=False)
     existing_v1_item_ids: list[int] = await v1_CopyrightItem.all().values_list(
         "material_id", flat=True
     )  # type: ignore
-
 
     individual_results = {}
     processed_results = {}
@@ -511,19 +524,25 @@ async def ingest_v1_data(settings: Settings, base_dir: Path, delete: bool=False)
             result = import_v1_sheets(subdir)
             individual_results[subdir.name] = result
             final, changes = process_v1_sheets(result, existing_v1_item_ids)
-            changes_results = pl.concat([changes_results, changes]) if not changes.is_empty() else changes_results
+            changes_results = (
+                pl.concat([changes_results, changes])
+                if not changes.is_empty()
+                else changes_results
+            )
             if not final:
                 logger.info(f"No new items to process for {subdir.name}. Skipping.")
                 continue
             processed_results[subdir.name] = final
             main = merge_all_sheets(final)
             final_results[subdir.name] = main
-    grouped = changes_results.group_by(['before', 'after']).len().sort('len', descending=True)
+    grouped = (
+        changes_results.group_by(["before", "after"]).len().sort("len", descending=True)
+    )
     logger.info(f"Total of {len(changes_results)} value changes across all sheets.")
     logger.info(f"Changes summary:\n{grouped}")
     changes_results.write_csv("v1_sheet_value_changes.csv")
     grouped.write_csv("v1_sheet_value_changes_summary.csv")
-    logger.info(f"Saved all value changes to v1_sheet_value_changes.csv")
+    logger.info("Saved all value changes to v1_sheet_value_changes.csv")
 
     for _faculty, df in final_results.items():
         await ingest_v1_items(df)

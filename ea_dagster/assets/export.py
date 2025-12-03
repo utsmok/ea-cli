@@ -5,7 +5,7 @@ This module provides a Dagster asset that wraps the existing
 export functionality in `easy_access.sheets.export`.
 """
 
-from dagster import AssetExecutionContext, AssetIn, asset
+from dagster import AssetExecutionContext, AssetIn, Output, asset
 
 from ea_dagster.resources import TortoiseDBResource
 from easy_access.settings import SETTINGS
@@ -19,7 +19,7 @@ async def excel_reports(
     context: AssetExecutionContext,
     db: TortoiseDBResource,
     enrichment: str,
-) -> str:
+) -> Output:
     """
     Exports processed data to Excel reports (faculty sheets, programme sheets, etc.).
 
@@ -48,22 +48,37 @@ async def excel_reports(
 
             if not faculty_data:
                 context.log.warning("No faculty data to export")
-                return "No faculty data to export"
+                return Output(value="No faculty data to export")
 
             # Export using workflow files (inbox/in_progress/done structure)
-            style_iter = 9  # Default style iteration
-            await export_faculty_workflow_files(SETTINGS, faculty_data, style_iter)
+            res = await export_faculty_workflow_files(
+                SETTINGS, faculty_data, return_filenames=True
+            )
+            if isinstance(res, tuple):
+                style_iter, filenames = res
+            else:
+                filenames = []
 
             faculty_count = len(faculty_data)
             total_items = sum(len(df) for df in faculty_data.values())
 
             result_msg = (
                 f"Exported reports for {faculty_count} faculties, "
-                f"{total_items} total items"
+                f"{total_items} total items, "
+                f"with {len(filenames)} files generated."
             )
             context.log.info(result_msg)
-            return result_msg
+            return Output(
+                value=result_msg,
+                metadata={
+                    "faculties_exported": faculty_count,
+                    "total_items": total_items,
+                    "exported_files": filenames,
+                },
+            )
 
         except Exception as e:
             context.log.error(f"Excel export failed: {e}")
-            return f"Excel export failed: {e}"
+            return Output(
+                value=f"Excel export failed: {e}", metadata={"export_status": "failed"}
+            )

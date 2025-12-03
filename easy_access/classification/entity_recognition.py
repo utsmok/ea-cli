@@ -71,7 +71,7 @@ async def gliner_entity_recognition(model: GLiNER, labels: list[str], pdf: PDF):
     }
 
     # merge counts and average scores into single dict for labels and entities
-    label_results = {
+    {
         label: {
             "count": count,
             "avg_score": avg_scores_per_label.get(label, 0),
@@ -79,7 +79,7 @@ async def gliner_entity_recognition(model: GLiNER, labels: list[str], pdf: PDF):
         }
         for label, count in label_counts.items()
     }
-    entity_results = {
+    {
         entity: {
             "count": count,
             "avg_score": avg_scores_per_entity.get(entity, 0),

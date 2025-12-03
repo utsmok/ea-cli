@@ -178,7 +178,8 @@ async def export_faculty_sheets(
 
     return style_iter
 
-def add_table(fh: TextIOWrapper, update_stats:dict[str, dict[str, int]]) -> None:
+
+def add_table(fh: TextIOWrapper, update_stats: dict[str, dict[str, int]]) -> None:
     """
     Helper function to write parsed update data into a formatted table in a text file.
     Used by export_faculty_workflow_files.
@@ -194,9 +195,13 @@ def add_table(fh: TextIOWrapper, update_stats:dict[str, dict[str, int]]) -> None
         )
     fh.write(f"\n{f'{"-" * 12}-{"-" * 5}-{"-" * 5}-{"-" * 5}':{' '}^{40}}\n")
 
+
 async def export_faculty_workflow_files(
-    settings: Settings, faculty_data: dict[str, pl.DataFrame], style_iter: int = 9
-) -> int:
+    settings: Settings,
+    faculty_data: dict[str, pl.DataFrame],
+    style_iter: int = 9,
+    return_filenames: bool = False,
+) -> int | tuple[int, list[str]]:
     """
     Export per-faculty files driven by the `workflow_status` column.
 
@@ -208,6 +213,7 @@ async def export_faculty_workflow_files(
     Existing files are moved into a timestamped backups folder next to the faculty dir.
     """
     logger.info("Exporting faculty workflow files (inbox/in_progress/done)...")
+    file_info = {}
 
     for faculty, data in faculty_data.items():
         if data.is_empty():
@@ -254,7 +260,6 @@ async def export_faculty_workflow_files(
             filename = bucket_name + ".xlsx"
 
             target_path = faculty_dir.full / filename
-
             # backup existing
             if target_path.exists():
                 try:
@@ -267,6 +272,7 @@ async def export_faculty_workflow_files(
                         manifest={"faculty": faculty, "bucket": bucket_name},
                     )
                     logger.info(f"Backed up existing {target_path.name} -> {moved}")
+
                 except Exception as e:
                     logger.warning(f"Failed to backup existing file {target_path}: {e}")
 
@@ -286,6 +292,7 @@ async def export_faculty_workflow_files(
                     style_iter=style_iter,
                 )
                 logger.info(f"Wrote {len(bucket_df)} rows to {target_path}")
+                file_info[str(target_path.parent / target_path.name)] = len(bucket_df)
             except Exception as e:
                 logger.error(f"Failed writing faculty workflow file {target_path}: {e}")
                 raise e
@@ -314,24 +321,30 @@ async def export_faculty_workflow_files(
         # append to file if it exists, otherwise create with header
         # only add rows if there was a change (delta != 0)
 
-        summary_file = settings.dirs[DirSetting.FACULTIES_DIR].full / "update_overview.csv"
+        summary_file = (
+            settings.dirs[DirSetting.FACULTIES_DIR].full / "update_overview.csv"
+        )
         mode = "a" if summary_file.exists() else "w"
         diff = False
         with summary_file.open(mode, newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             if mode == "w":
-                writer.writerow(["timestamp", "faculty", "bucket", "old", "new", "delta"])
+                writer.writerow(
+                    ["timestamp", "faculty", "bucket", "old", "new", "delta"]
+                )
             for bucket_name, stats in update_stats.items():
                 if stats["new"] - stats["old"] != 0:
                     diff = True
-                    writer.writerow([
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        faculty,
-                        bucket_name,
-                        stats["old"],
-                        stats["new"],
-                        stats["new"] - stats["old"],
-                    ])
+                    writer.writerow(
+                        [
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            faculty,
+                            bucket_name,
+                            stats["old"],
+                            stats["new"],
+                            stats["new"] - stats["old"],
+                        ]
+                    )
 
         # Text files
         # we always create a new file with the current timestamp in the name
@@ -364,43 +377,53 @@ async def export_faculty_workflow_files(
                 syncstr = f"[{datetime.now().strftime('%Y-%m-%d')}]"
                 skip2 = False
                 for line in file_contents:
-                    if skip and skip2: # we are in the list of syncdates without changes
-                        if line.strip() == syncstr.strip(): # today is already there
+                    if (
+                        skip and skip2
+                    ):  # we are in the list of syncdates without changes
+                        if line.strip() == syncstr.strip():  # today is already there
                             syncstr = ""  # only add once
                             fh.write(line)
                             continue
-                        if '[' in line: # another date line
-                            if syncstr: # add today's date line before the next date line
-                                fh.write(syncstr+"\n")
+                        if "[" in line:  # another date line
+                            if (
+                                syncstr
+                            ):  # add today's date line before the next date line
+                                fh.write(syncstr + "\n")
                                 syncstr = ""  # only add once
-                            fh.write(line) # write old date line
+                            fh.write(line)  # write old date line
                             continue
-                        else: # if no more date lines, we are done with this section
-                            if syncstr: # add sync line if not yet added
-                                fh.write(syncstr+"\n")
+                        else:  # if no more date lines, we are done with this section
+                            if syncstr:  # add sync line if not yet added
+                                fh.write(syncstr + "\n")
                             skip = False
                             skip2 = False
-                    if skip2: # header of list of syncs without changes
-                        fh.write(f"Syncs without changes:\n")
+                    if skip2:  # header of list of syncs without changes
+                        fh.write("Syncs without changes:\n")
                         skip = True
                         continue
-                    if skip: # this should be the last sync date with changes
+                    if skip:  # this should be the last sync date with changes
                         fh.write(line)
                         skip2 = True
                         skip = False
                         continue
                     if "Last sync with main database" in line:
-                        fh.write(line) # write that line and start processing, see above
+                        fh.write(
+                            line
+                        )  # write that line and start processing, see above
                         skip = True
                         continue
                     else:
                         fh.write(line)
             else:
-                fh.write(f"\n{'Update information for':{' '}^{40}}\n{faculty:{' '}^{40}}")
                 fh.write(
-                        f"\n{'Last sync with main database:':{' '}^{40}}\n{datetime.now().strftime('%Y-%m-%d -- %H:%M:%S'):{' '}^{40}}"
-                    )
+                    f"\n{'Update information for':{' '}^{40}}\n{faculty:{' '}^{40}}"
+                )
+                fh.write(
+                    f"\n{'Last sync with main database:':{' '}^{40}}\n{datetime.now().strftime('%Y-%m-%d -- %H:%M:%S'):{' '}^{40}}"
+                )
                 add_table(fh, update_stats)
+    if return_filenames:
+        return style_iter, file_info
     return style_iter
 
 
