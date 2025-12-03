@@ -16,7 +16,7 @@ from unittest import mock as _mock
 
 import httpx
 from loguru import logger
-from sqlalchemy import text, update
+from sqlalchemy import text
 
 from easy_access.db.base import close_connections, ensure_db_inited
 from easy_access.db.sa_models import CopyrightItem
@@ -416,13 +416,15 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
                 mappings = []
                 for result in results:
                     file_exists_int = 1 if result["file_exists"] else 0
-                    mappings.append({
-                        "material_id": result["material_id"],
-                        "file_exists": file_exists_int,
-                        "last_canvas_check": result["last_canvas_check"],
-                        "canvas_course_id": result["course_id"],
-                    })
-                
+                    mappings.append(
+                        {
+                            "material_id": result["material_id"],
+                            "file_exists": file_exists_int,
+                            "last_canvas_check": result["last_canvas_check"],
+                            "canvas_course_id": result["course_id"],
+                        }
+                    )
+
                 # Perform bulk update
                 await session.run_sync(
                     lambda sync_session: sync_session.bulk_update_mappings(
@@ -430,7 +432,9 @@ async def update_file_existence_batch(results: list[dict[str, Any]]) -> None:
                     )
                 )
                 await session.commit()
-            logger.info(f"Successfully updated {len(results)} items using bulk_update_mappings")
+            logger.info(
+                f"Successfully updated {len(results)} items using bulk_update_mappings"
+            )
             return
         except Exception as e:
             logger.error(f"Bulk update failed: {e}")

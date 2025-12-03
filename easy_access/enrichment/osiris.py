@@ -9,14 +9,14 @@ This module provides DB-centric enrichment functionality that:
 """
 
 import asyncio
-import contextlib
+from datetime import UTC, datetime
 
 import bs4
 import httpx
 import Levenshtein
 from bs4 import Tag
 from loguru import logger
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select, update
 from tqdm.asyncio import tqdm_asyncio
 
 from easy_access.db.base import close_connections, ensure_db_inited
@@ -357,98 +357,49 @@ async def fetch_and_parse_persons(
 async def persist_courses(courses_data: dict[int, dict]) -> None:
     """Persist courses.
 
-    Normal runtime: delegate to relation-safe implementation in db.update.
-    Test environment (where Course.create/filter are patched in this module):
-    fall back to legacy simple logic so mocks still observe calls with
-    minimal test fixture data (which omits required fields like year/internal_id).
+    Refactored for SQLAlchemy 2.0.
     """
-    # Detect if our Course methods are patched (AsyncMock etc.)
-    # Heuristic: if any provided course dict lacks internal_id or year, assume test/minimal data -> use legacy path
-    minimal = any(
-        not isinstance(d, dict) or any(k not in d for k in ("internal_id", "year"))
-        for d in courses_data.values()
-    )
-    if minimal:
-        logger.info(
-            f"[MinimalDataMode] Persisting {len(courses_data)} courses (legacy simple path)"
-        )
-        existing = await Course.filter(cursuscode__in=list(courses_data.keys()))
-        existing_codes = {c.cursuscode for c in existing}
-        from datetime import UTC, datetime
 
-        for code, data in courses_data.items():
-            if code in existing_codes:
-                try:
-                    await Course.filter(cursuscode=code).update(**data)
-                except Exception:
-                    logger.debug(f"Legacy update failed for course {code}")
-            else:
-                try:
-                    await Course.create(**data)
-                except Exception:
-                    logger.debug(f"Legacy create failed for course {code}")
-            # Bump modified_at regardless (ensures staleness reset even for no-op)
-            with contextlib.suppress(Exception):
-                await Course.filter(cursuscode=code).update(
-                    modified_at=datetime.now(UTC)
-                )
-        return
     from easy_access.db.update import persist_courses as _persist_courses_db
 
     await _persist_courses_db(courses_data)
-    # Bump modified_at for all processed courses (covers identical data)
-    try:
-        from datetime import datetime
 
-        await Course.filter(cursuscode__in=list(courses_data.keys())).update(
-            modified_at=datetime.utcnow()
-        )
-    except Exception:
-        pass
+    async for session in get_session():
+        try:
+            stmt = (
+                update(Course)
+                .where(Course.cursuscode.in_(courses_data.keys()))
+                .values(modified_at=datetime.now(UTC))
+            )
+
+            await session.execute(stmt)
+            await session.commit()
+        except Exception as e:
+            logger.warning(f"Failed to bump modified_at timestamps: {e}")
 
 
 async def persist_persons(persons_data: dict[str, dict]) -> None:
-    """Persist persons with test-aware delegation (see persist_courses)."""
-    from datetime import UTC, datetime
+    """Persist persons with test-aware delegation.
 
-    minimal = any(
-        not isinstance(d, dict) or "main_name" not in d for d in persons_data.values()
-    )
-    if minimal:
-        logger.info(
-            f"[MinimalDataMode] Persisting {len(persons_data)} persons (legacy simple path)"
-        )
-        existing = await Person.filter(input_name__in=list(persons_data.keys()))
-        existing_names = {p.input_name for p in existing}
-        for name, data in persons_data.items():
-            if name in existing_names:
-                try:
-                    await Person.filter(input_name=name).update(**data)
-                except Exception:
-                    logger.debug(f"Legacy update failed for person {name}")
-            else:
-                try:
-                    await Person.create(**data)
-                except Exception:
-                    logger.debug(f"Legacy create failed for person {name}")
-            # Always bump modified_at
-            with contextlib.suppress(Exception):
-                await Person.filter(input_name=name).update(
-                    modified_at=datetime.now(UTC)
-                )
-        return
+    Refactored for SQLAlchemy 2.0.
+    """
+    from easy_access.db.sa_models import Person
     from easy_access.db.update import persist_persons as _persist_persons_db
 
     await _persist_persons_db(persons_data)
-    # Bump modified_at post-persist
-    try:
-        from datetime import datetime
 
-        await Person.filter(input_name__in=list(persons_data.keys())).update(
-            modified_at=datetime.now(UTC)
-        )
-    except Exception:
-        pass
+    async for session in get_session():
+        try:
+            stmt = (
+                update(Person)
+                .where(Person.input_name.in_(persons_data.keys()))
+                .values(modified_at=datetime.now(UTC))
+            )
+
+            await session.execute(stmt)
+            await session.commit()
+        except Exception:
+            pass
 
 
 async def enrich_async(settings: Settings) -> None:

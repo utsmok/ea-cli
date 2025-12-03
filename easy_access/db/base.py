@@ -4,7 +4,6 @@ Base & util functions for db-related operations
 
 import traceback
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -69,13 +68,13 @@ def init_engine(settings: Settings) -> Engine:
     For ORM operations, use the async session from session.py instead.
     """
     from easy_access.db.session import get_database_url
-    
+
     # Get the async PostgreSQL database URL via Settings
     async_db_url = get_database_url(settings)
-    
+
     # Convert async URL (postgresql+asyncpg://) to sync URL (postgresql+psycopg2://)
     sync_url = async_db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    
+
     return create_engine(sync_url)
 
 

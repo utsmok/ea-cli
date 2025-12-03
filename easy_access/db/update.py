@@ -10,6 +10,9 @@ from itertools import batched
 from typing import Any
 
 import polars as pl
+from loguru import logger
+from sqlalchemy import delete, select, update
+
 from easy_access.db.base import (
     close_connections,
     copyright_item_from_dict,
@@ -46,8 +49,6 @@ from easy_access.utils import (
     safe_int,
     standardize_dataframe,
 )
-from loguru import logger
-from sqlalchemy import delete, select, text, update
 
 
 # Custom exceptions for better error handling
@@ -1757,56 +1758,64 @@ async def _apply_person_org_relations(
 
 async def update_workflow_status_from_db(settings: Settings) -> None:
     """
-    ensures that workflow status matches the current state of the item,
-    e.g. if a manual_classification is present that requires no actions, set workflow_status to Done,
-    if a file does not exist, also set it to Done, etc.
+    Ensures that workflow status matches the current state of the item.
+
+    Refactored to use SQLAlchemy Core for type safety and SQL injection prevention.
     """
     await ensure_db_inited(settings)
 
-    DONE_MANUAL_CLASSIFICATIONS = [
-        Classification.OPEN_ACCESS.value,
-        Classification.EIGEN_MATERIAAL_POWERPOINT.value,
-        Classification.EIGEN_MATERIAAL_OVERIG.value,
-        Classification.EIGEN_MATERIAAL_TITELINDICATIE.value,
-        Classification.EIGEN_MATERIAAL.value,
+    # Import necessary SQLAlchemy components
+    from sqlalchemy import func, update
+
+    from easy_access.db.sa_models import CopyrightItem
+
+    # List of classifications that automatically mark an item as 'Done'
+    DONE_ENUMS = [
+        Classification.OPEN_ACCESS,
+        Classification.EIGEN_MATERIAAL_POWERPOINT,
+        Classification.EIGEN_MATERIAAL_OVERIG,
+        Classification.EIGEN_MATERIAAL_TITELINDICATIE,
+        Classification.EIGEN_MATERIAAL,
     ]
 
+    # Normalize these to lowercase strings to match the logic of
+    # the original query: LOWER(manual_classification) IN (...)
+    done_values = [e.value.lower() for e in DONE_ENUMS]
+
     async for session in get_session():
-        # Build list of classification values for SQL IN clause
-        done_classifications = ", ".join(
-            f"'{cls}'" for cls in DONE_MANUAL_CLASSIFICATIONS
+        # 1. Update items where file does not exist
+        # Equivalent to: SET workflow_status = 'Done' WHERE workflow_status != 'Done' AND file_exists = FALSE
+        stmt_files = (
+            update(CopyrightItem)
+            .where(
+                CopyrightItem.workflow_status != "Done",
+                CopyrightItem.file_exists.is_(False),
+            )
+            .values(workflow_status="Done")
         )
 
-        # Perform bulk update for items where file_exists is False
-        result1 = await session.execute(
-            text(
-                """
-                UPDATE copyright_data
-                SET workflow_status = 'Done'
-                WHERE workflow_status != 'Done'
-                  AND file_exists = FALSE
-                """
-            )
-        )
+        result1 = await session.execute(stmt_files)
         file_exists_count = result1.rowcount
 
-        # Perform bulk update for items with done manual classifications
-        result2 = await session.execute(
-            text(
-                f"""
-                UPDATE copyright_data
-                SET workflow_status = 'Done'
-                WHERE workflow_status != 'Done'
-                  AND LOWER(manual_classification) IN ({done_classifications})
-                """
+        # 2. Update items with specific manual classifications
+        # Equivalent to: ... WHERE ... AND LOWER(manual_classification) IN (...)
+        stmt_class = (
+            update(CopyrightItem)
+            .where(
+                CopyrightItem.workflow_status != "Done",
+                func.lower(CopyrightItem.manual_classification).in_(done_values),
             )
+            .values(workflow_status="Done")
         )
+
+        result2 = await session.execute(stmt_class)
         classification_count = result2.rowcount
 
-        # Commit all changes at once
+        # Commit all changes
         try:
             await session.commit()
             total_updated = file_exists_count + classification_count
+
             if total_updated > 0:
                 logger.info(
                     f"Updated workflow status for {total_updated} items "
@@ -1815,6 +1824,7 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
                 )
             else:
                 logger.info("No items to update workflow status for.")
+
         except Exception as exc:
             logger.error(f"Failed to commit workflow status updates: {exc}")
             await session.rollback()
@@ -1829,7 +1839,6 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
     # Import Enums locally to avoid circular imports if necessary, or ensure they are imported at top
     from easy_access.db.enums import (
         CLASSIFICATION_MAPPING_V1_TO_V2,
-        Classification,
         ClassificationV2,
     )
 
