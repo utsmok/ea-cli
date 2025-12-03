@@ -1,5 +1,8 @@
 """
 functions to ingest new data into the database
+
+NOTE: Staging table operations are also available via StagingRepository.
+      Consider using the repository for new code requiring better testability.
 """
 
 import polars as pl

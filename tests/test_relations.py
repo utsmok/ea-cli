@@ -139,17 +139,17 @@ class TestUpdateRelationsAsync:
 
     @pytest.mark.asyncio
     async def test_update_relations_async_calls_both_functions(self):
-        """Test that update_relations_async calls both update_duplicates and link_courses."""
+        """Test that update_relations_async calls both link_courses and match_v1_to_copyright_items."""
         settings = Settings()
 
         with (
-            patch("easy_access.db.relations.update_duplicates") as mock_update_dup,
             patch("easy_access.db.relations.link_courses") as mock_link_courses,
+            patch("easy_access.db.relations.match_v1_to_copyright_items") as mock_match_v1,
         ):
             await update_relations_async(settings)
 
-            mock_update_dup.assert_called_once_with(settings)
             mock_link_courses.assert_called_once_with(settings)
+            mock_match_v1.assert_called_once_with(settings)
 
     @pytest.mark.asyncio
     async def test_update_relations_async_error_handling(self):
@@ -157,16 +157,16 @@ class TestUpdateRelationsAsync:
         settings = Settings()
 
         with (
-            patch("easy_access.db.relations.update_duplicates") as mock_update_dup,
             patch("easy_access.db.relations.link_courses") as mock_link_courses,
+            patch("easy_access.db.relations.match_v1_to_copyright_items") as mock_match_v1,
         ):
-            mock_update_dup.side_effect = Exception("Test error")
+            mock_link_courses.side_effect = Exception("Test error")
 
             # Should not raise exception, should log error
             await update_relations_async(settings)
 
-            mock_update_dup.assert_called_once_with(settings)
             mock_link_courses.assert_called_once_with(settings)
+            mock_match_v1.assert_called_once_with(settings)
 
 
 class TestRelationsBatchOperations:

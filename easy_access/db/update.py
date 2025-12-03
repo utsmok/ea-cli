@@ -1,12 +1,17 @@
 """
 functions to update existing data in the database
+
+This module serves as the orchestrator for update operations.
+It coordinates between services (business logic) and repositories (data access).
+
+NOTE: Strategy classes and merge logic have been moved to easy_access/services/.
+      They are re-exported here for backward compatibility.
 """
 
-import contextlib
 import re
 import traceback
-from datetime import UTC, date, datetime
-from enum import Enum, StrEnum
+from datetime import date, datetime
+from enum import StrEnum
 from itertools import batched
 from typing import Any
 
@@ -23,7 +28,6 @@ from easy_access.db.base import (
 from easy_access.db.enums import (
     CLASSIFICATION_MAPPING_V1_TO_V2,
     Classification,
-    ClassificationMapping,
     ClassificationV2,
 )
 from easy_access.db.models import (
@@ -44,35 +48,45 @@ from easy_access.merge_rules import (
     build_merge_rules_from_settings,
     get_mergeable_fields,
 )
+
+# Import repositories for use in orchestration
+from easy_access.repositories.item_repo import CopyrightItemRepository  # noqa: F401
+from easy_access.repositories.staging_repo import StagingRepository  # noqa: F401
+from easy_access.services.merge import (  # noqa: F401
+    MergeConflictError,
+    MergeError,
+    TypeCastError,
+    _cast_datetime_value,
+    _cast_enum_value,
+    _cast_numeric_value,
+    _cast_values_for_comparison,
+    _normalize_file_exists,
+    compare_and_update_fields,
+    record_field_change,
+)
+
+# Import from services for backward compatibility
+# These are the canonical implementations - use services directly for new code
+from easy_access.services.strategies import (  # noqa: F401
+    DEFAULT_RANK,
+    DateFieldStrategy,
+    EnumFieldStrategy,
+    FieldComparisonStrategy,
+    FileExistsStrategy,
+    NumericFieldStrategy,
+    RankedFieldStrategy,
+    StringFieldStrategy,
+    get_comparison_strategy,
+)
 from easy_access.settings import Settings
 from easy_access.utils import (
-    safe_compare_greater,
     safe_enum,
-    safe_float,
     safe_int,
     standardize_dataframe,
 )
 
 
-# Custom exceptions for better error handling
-class MergeError(Exception):
-    """Base exception for merge-related errors."""
-
-    pass
-
-
-class MergeConflictError(MergeError):
-    """Raised when there are conflicts during field merging."""
-
-    pass
-
-
-class TypeCastError(MergeError):
-    """Raised when type casting fails during field comparison."""
-
-    pass
-
-
+# Custom exceptions (re-exported from services, plus local ones)
 class DatabaseOperationError(MergeError):
     """Raised when database operations fail."""
 
@@ -85,168 +99,21 @@ class ValidationError(MergeError):
     pass
 
 
-# Constants for comparison logic
-DEFAULT_RANK = 20
+# Constants
 MIN_CHANGES_THRESHOLD = 3
 
 
-class FieldComparisonStrategy:
-    """Base class for field comparison strategies."""
+# NOTE: Strategy classes have been moved to easy_access/services/strategies.py
+# They are imported above for backward compatibility.
 
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: Any
-    ) -> tuple[bool, str]:
-        """
-        Determine if a field should be updated.
-
-        Args:
-            new_value: New value for the field
-            old_value: Current value in the database
-            ordering: Ordering rules for the field
-
-        Returns:
-            Tuple of (should_update, reason)
-        """
-        raise NotImplementedError
-
-
-class RankedFieldStrategy(FieldComparisonStrategy):
-    """Strategy for ranked fields (higher priority = lower index)."""
-
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: list
-    ) -> tuple[bool, str]:
-        if not isinstance(ordering, list):
-            return False, ""
-
-        new_rank = DEFAULT_RANK
-        old_rank = DEFAULT_RANK
-
-        if new_value in ordering:
-            new_rank = ordering.index(new_value)
-        if old_value in ordering:
-            old_rank = ordering.index(old_value)
-
-        if new_rank < old_rank:
-            return True, "new rank < old rank"
-
-        return False, ""
-
-
-class StringFieldStrategy(FieldComparisonStrategy):
-    """Strategy for string fields (longer strings take precedence)."""
-
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: Any
-    ) -> tuple[bool, str]:
-        if not (isinstance(new_value, str) and isinstance(old_value, str)):
-            return False, ""
-
-        new_value = new_value.strip()
-        old_value = old_value.strip()
-
-        if len(new_value) > len(old_value):
-            return True, "new len > old len"
-
-        return False, ""
-
-
-class NumericFieldStrategy(FieldComparisonStrategy):
-    """Strategy for numeric/date fields using safe comparison."""
-
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: Any
-    ) -> tuple[bool, str]:
-        try:
-            if safe_compare_greater(new_value, old_value):
-                return True, "new > old"
-        except Exception:
-            logger.debug(f"Could not compare values: {new_value} vs {old_value}")
-
-        return False, ""
-
-
-class DateFieldStrategy(FieldComparisonStrategy):
-    """Strategy for date/datetime fields (newer dates take precedence)."""
-
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: Any
-    ) -> tuple[bool, str]:
-        if not (
-            isinstance(new_value, date | datetime)
-            and isinstance(old_value, date | datetime)
-        ):
-            return False, ""
-
-        if new_value > old_value:
-            return True, "new date > old date"
-
-        return False, ""
-
-
-class EnumFieldStrategy(FieldComparisonStrategy):
-    """Strategy for enum fields (uses ranking if provided, otherwise no update)."""
-
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: Any
-    ) -> tuple[bool, str]:
-        # If ordering is provided, use ranked comparison
-        if isinstance(ordering, list) and ordering:
-            new_rank = DEFAULT_RANK
-            old_rank = DEFAULT_RANK
-
-            if new_value in ordering:
-                new_rank = ordering.index(new_value)
-            if old_value in ordering:
-                old_rank = ordering.index(old_value)
-
-            if new_rank < old_rank:
-                return True, "new enum rank < old enum rank"
-
-        return False, ""
-
-
-class FileExistsStrategy(FieldComparisonStrategy):
-    """Strategy for file_exists field (always update when received)."""
-
-    def should_update(
-        self, new_value: Any, old_value: Any, ordering: Any
-    ) -> tuple[bool, str]:
-        return True, "file_exists value received, always update"
-
-
-def get_comparison_strategy(
-    field: str, db_item: CopyrightItem | None = None
-) -> FieldComparisonStrategy:
-    """
-    Get the appropriate comparison strategy for a field.
-
-    Args:
-        field: Field name
-        db_item: Database item to check field types (optional)
-
-    Returns:
-        FieldComparisonStrategy instance
-    """
-    # Special cases for file_exists
-    if field == "file_exists":
-        return FileExistsStrategy()
-
-    # If we have a db_item, check the field type to determine strategy
-    if db_item is not None:
-        try:
-            old_value = getattr(db_item, field)
-            if isinstance(old_value, date | datetime):
-                return DateFieldStrategy()
-            elif isinstance(old_value, Enum):
-                return EnumFieldStrategy()
-            elif isinstance(old_value, str):
-                return StringFieldStrategy()
-        except AttributeError:
-            pass
-
-    # Default strategy for numeric fields
-    return NumericFieldStrategy()
+# NOTE: The following functions are imported from easy_access/services/merge.py:
+# - record_field_change
+# - compare_and_update_fields  
+# - _cast_datetime_value
+# - _cast_numeric_value
+# - _normalize_file_exists
+# - _cast_enum_value
+# - _cast_values_for_comparison
 
 
 async def preprocess_input_data(
@@ -595,228 +462,14 @@ async def execute_bulk_database_operations(
         logger.success("Updating relations for all CopyrightItems.")
 
 
-def record_field_change(
-    changes: dict,
-    field: str,
-    new_value: Any,
-    old_value: Any,
-    reason: str,
-    db_item: Any = None,
-) -> dict:
-    """
-    Record a field change in the changes dictionary and update the database item.
-
-    Args:
-        changes: Dictionary to record changes in
-        field: Field name being changed
-        new_value: New value for the field
-        old_value: Old value for the field
-        reason: Reason for the change
-        db_item: Database item to update (optional, for backward compatibility)
-
-    Returns:
-        Updated changes dictionary
-    """
-    if field == "file_exists" and db_item:
-        db_item.last_canvas_check = datetime.now()
-        changes["last_canvas_check"] = {
-            "old": str(old_value),
-            "new": str(new_value),
-        }
-    else:
-        logger.debug(
-            f"[{reason}] [{field}] {old_value} ({type(old_value)}) --> {new_value} ({type(new_value)})"
-        )
-    changes[field] = {"old": str(old_value), "new": str(new_value)}
-
-    if db_item:
-        setattr(db_item, field, new_value)
-    return changes
-
-
-def compare_and_update_fields(
-    new_item: dict, db_item: Any, fielddict: dict, changes: dict
-) -> tuple[dict, Any]:
-    """
-    Compare fields between new item and database item, updating the database item
-    and recording changes according to merge rules.
-
-    Args:
-        new_item: Dictionary with new field values
-        db_item: Existing database item
-        fielddict: Dictionary of field names to ordering rules
-        changes: Dictionary to record changes in
-
-    Returns:
-        Tuple of (changes dict, updated db_item)
-    """
-    if not changes:
-        changes = {
-            "material_id": new_item.get("material_id"),
-            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-    for field, ordering in fielddict.items():
-        new_value = new_item.get(field)
-        old_value = getattr(db_item, field)
-
-        # Early return: skip if new value is None
-        if new_value is None:
-            continue
-
-        # Special handling for file_exists
-        if field == "file_exists":
-            new_value = _normalize_file_exists(new_value)
-            if not isinstance(new_value, bool):
-                continue
-
-            changes = record_field_change(
-                changes,
-                field,
-                new_value,
-                old_value,
-                "file_exists value received, always update",
-                db_item,
-            )
-            continue
-
-        # Type casting for comparison
-        try:
-            cast_success, new_value, old_value = _cast_values_for_comparison(
-                field, new_value, old_value, db_item
-            )
-            if not cast_success:
-                continue
-        except TypeCastError as e:
-            logger.warning(f"Type casting failed for field '{field}': {e}")
-            continue
-
-        # Skip if values are the same after casting
-        if new_value == old_value:
-            continue
-
-        # Use strategy pattern for field-specific comparison
-        strategy = get_comparison_strategy(field, db_item)
-        should_update, reason = strategy.should_update(new_value, old_value, ordering)
-
-        # Hard safety net for workflow_status: never allow downgrade regardless of ordering.
-        if field == "workflow_status" and isinstance(ordering, list):
-            try:
-                # Canonical rank map (lower index = higher priority)
-                canonical = [
-                    WorkflowStatus.Done.value,
-                    WorkflowStatus.InProgress.value,
-                    WorkflowStatus.ToDo.value,
-                ]
-                if new_value in canonical and old_value in canonical:
-                    new_rank = canonical.index(new_value)
-                    old_rank = canonical.index(old_value)
-                    # Only update if new has higher priority (smaller index) or old is None
-                    if new_rank < old_rank:
-                        should_update = True
-                        reason = "workflow_status upgrade (canonical ordering)"
-                    elif new_rank >= old_rank and old_value is not None:
-                        should_update = False
-                        reason = "workflow_status downgrade prevented"
-            except Exception:
-                pass
-
-        # Handle null-to-value case
-        if new_value is not None and old_value is None:
-            should_update = True
-            reason = "no old value"
-
-        if should_update:
-            changes = record_field_change(
-                changes, field, new_value, old_value, reason, db_item
-            )
-
-    return changes, db_item
-
-
-def _cast_values_for_comparison(
-    field: str, new_value: Any, old_value: Any, db_item: CopyrightItem
-) -> tuple[bool, Any, Any]:
-    """
-    Cast values for comparison and return the modified values.
-
-    Args:
-        field: Field name
-        new_value: New value
-        old_value: Old value
-        db_item: Database item for context
-
-    Returns:
-        Tuple of (success, new_value, old_value)
-
-    Raises:
-        TypeCastError: When type casting fails
-    """
-    try:
-        if isinstance(old_value, datetime):
-            new_value = _cast_datetime_value(new_value)
-            old_value = old_value.replace(tzinfo=UTC) if old_value else old_value
-        elif isinstance(old_value, Enum):
-            new_value = _cast_enum_value(new_value, type(old_value))
-            old_value = old_value.value
-        elif isinstance(old_value, float):
-            new_value = _cast_numeric_value(new_value, float)
-            old_value = round(old_value, 2)
-        elif isinstance(old_value, int):
-            new_value = _cast_numeric_value(new_value, int)
-        return True, new_value, old_value
-    except Exception as e:
-        logger.debug(
-            f"Error {e} while typecasting data for field comparison of {field}"
-        )
-        raise TypeCastError(f"Failed to cast values for field '{field}': {e}") from e
-
-
-def _cast_datetime_value(value: Any) -> datetime | None:
-    """Cast a value to datetime with multiple format fallbacks."""
-    if not value:
-        return None
-
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S%z").replace(tzinfo=UTC)
-    except Exception:
-        try:
-            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        except Exception:
-            with contextlib.suppress(Exception):
-                return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
-    return None
-
-
-def _cast_numeric_value(value: Any, target_type: type) -> int | float | None:
-    """Cast a value to int or float with safe parsing."""
-    if target_type is int:
-        parsed = safe_int(value)
-        return parsed if parsed is not None else None
-    elif target_type is float:
-        parsed = safe_float(value)
-        return round(parsed, 2) if parsed is not None else None
-    return None
-
-
-def _normalize_file_exists(value: Any) -> bool | None:
-    """Normalize file_exists values to boolean."""
-    match value:
-        case True | 1 | "1" | "true" | "True":
-            return True
-        case False | 0 | "0" | "false" | "False":
-            return False
-        case None | "":
-            return None
-        case _:
-            return None
-
-
-def _cast_enum_value(value: Any, enum_class: type) -> Any:
-    """Cast a value to enum, returning the enum value."""
-    if isinstance(value, enum_class):
-        return value.value
-    return value
+# NOTE: The following functions have been moved to easy_access/services/merge.py:
+# - record_field_change (imported above)
+# - compare_and_update_fields (imported above)
+# - _cast_values_for_comparison (imported above)
+# - _cast_datetime_value (imported above)
+# - _cast_numeric_value (imported above)
+# - _normalize_file_exists (imported above)
+# - _cast_enum_value (imported above)
 
 
 class DataSource(StrEnum):
@@ -1795,10 +1448,10 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
         f"Finished mapping v1->v2 classifications: mapped={mapped_count}, failed={failed_count}, modified={modified_count}, unlinked updates={unlinked_upd} (out of {len(selected_items)})"
     )
     if len(details) > 0:
-        logger.debug(f"Stored parsed/mapped details to csv for inspection")
+        logger.debug("Stored parsed/mapped details to csv for inspection")
         try:
             pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")
-        except Exception as exc:
+        except Exception:
             details = [{a:str(b) for a,b in d.items()} for d in details]
             try:
                 pl.DataFrame(details).write_csv("v1_to_v2_classification_mapping_details.csv")

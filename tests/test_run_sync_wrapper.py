@@ -1,6 +1,6 @@
 import asyncio
 
-from easy_access.pipeline import _run_sync
+from easy_access.utils import run_sync as _run_sync
 
 
 async def _sample_coro(x: int) -> int:
