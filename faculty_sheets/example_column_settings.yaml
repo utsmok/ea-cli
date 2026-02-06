@@ -1,0 +1,314 @@
+
+# ------------------------------------------------------
+#       data_settings: Sheet column settings
+# ------------------------------------------------------
+#          Instructions, background, defaults
+
+
+#   In this section, you can configure the contents of the `Data entry` sheets in all the Excel sheets.
+#   These settings will apply to all sheets created in this directory.
+
+#   Under the `data_entry_cols` setting, you can specify which columns should be included in the `Data entry` sheet by including them in the list below.
+#   The columns will be included in the order they are listed here: reorder the list to change the order in the sheet.
+
+#   Please note that syntax like dashes, indendation (space/tabs), colons, brackets, quotes, etc. are all important in YAML files.
+#   Incorrect syntax will lead to errors when loading the settings file. The script will then fall back to default settings.
+
+#   Numerous columns are required, they are marked as `REQUIRED` in the actual list. They cannot be removed. However, you can change their:
+#   - order in the list
+#   - style (conditional formatting) -- see below
+#   - make them clickable URLs (if applicable) or not
+#   ---- Column settings ----
+#
+#   Each column can have various parameters; only `name` is required. The first few columns can be changed by users; the rest are set by the script and should not be changed -- but they are
+#   explained below for completeness.
+
+#     Changeable settings
+#    ---------------------
+#     - name: The name of the column in the raw data. REQUIRED. You can find a list of all available columns in the `final_data_col_order` list below -- these are the
+#             columns stored in the 'Complete data' sheet of each Excel file.
+#     - new_name: A new name for the column in the sheet. If not specified, the original name will be used.
+#     - is_url: If true, the column will be treated as a URL and will be clickable in the sheet. Default is false.
+#     - style: To set conditional formatting for the column, see the `Style settings` section below.
+
+#     Non-changeable settings (best to not touch these, as they might impact how the script works):
+#     -------------------------------
+#     - is_new: If true, the column is a new column that is not present in the raw data. Best to not touch this setting; as it might impact how the script works.
+#     - is_editable: Currently does not do anything. Intended to mark columns that should be editable in the sheet (with the other columns being read-only).
+#     - dropdown_options: If specified, the column will have a dropdown menu with the specified options. The options should be a comma-separated string, e.g. "option1,option2,option3".
+#                         You can also use 'ENUM:EnumName' to use the options from an enum defined in the 'enums' section of this file.
+#                         Again, best to not touch this setting for now, as it might impact how the script works, and it will definitely impact data integrity.
+#     - default_val: If specified, the column will have this value as the default value for new rows. I don't think this settings is used anymore; anyway, best to not touch it.
+
+#      ---- Style settings ----
+
+#      You can use the `style` parameter to define conditional formatting for any column you like. This will require some specific parameters entered in a specific way.
+#      Here is an example column with conditional formatting applied to it:
+#        - name: "this_is_the_column_name"
+#          style:
+#            activate_on: ['"Maybe"'', '"No"']   # REQUIRED!
+#            text_color: "olive"
+#            bg_color: "palevioletred"
+#            border_color: "orange"
+#            bold: true
+
+#      The `activate_on` parameter is REQUIRED for conditional formatting to be applied.
+#      It should be a list of strings, each string being a value that, when present in the cell, will trigger the conditional formatting.
+#      Note that the values should be strings, so they should be enclosed in double quotes, and the entire value should be enclosed in single quotes, as shown above.
+#      If you want to trigger on numeric values, you can also enter them without quotes, e.g. [10, 20, 30].
+#      For now, only exact matches are supported; and only one condition+style per
+
+#      Accepted colors for text_color, bg_color, and border_color are:
+#      - any hex values of exactly 6 characters, e.g. FF00AA,
+#      - Any CSS3 color name. For convience, all possiblities are shown at the end of this section (just scroll down until you see a big block of names).
+
+#  ---- Default settings for `data_entry_cols` ----
+#  At the bottom of the file, the default settings for the `data_entry_cols` are shown. This is what the `Data entry` sheet will look like if you do not change anything.
+#  Use this as a reference for making your own changes or restoring defaults.
+
+# ---- ACTUAL SETTINGS BEGIN HERE ----
+
+data_settings:
+  data_entry_cols:
+    - name: "material_id"
+    - name: "period"
+    - name: "url"
+      is_url: true
+    - name: "file_exists"
+      style:
+        activate_on: ['"No"']
+        text_color: "darkolivegreen"
+        bg_color: "lightpink"
+        border_color: "orange"
+    - name: "last_canvas_check"
+      new_name: "latest_filecheck_date"
+    - name: "workflow_status"
+      is_new: true
+      is_editable: true
+      dropdown_options: '"ToDo,Done,InProgress"'
+      default_val: "ToDo"
+      style:
+        activate_on: ['"ToDo"']
+        text_color: "darkkhaki"
+        bg_color: "skyblue"
+        bold: true
+        border_color: "oldlace"
+    - name: "manual_classification"
+      new_name: "v1_manual_classification"
+      is_editable: true
+      dropdown_options: '"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,onbekend"'
+    - name: "v2_manual_classification"
+      is_editable: true
+      dropdown_options: 'ENUM:ClassificationV2'
+    - name: "v2_overnamestatus"
+      is_editable: true
+      dropdown_options: 'ENUM:OvernameStatus'
+    - name: "v2_lengte"
+      is_editable: true
+      dropdown_options: 'ENUM:Lengte'
+      style:
+        activate_on: ['"Lang"']
+        text_color: "blueviolet"
+        bg_color: "darksalmon"
+        bold: true
+        border_color: "darkslategrey"
+    - name: "remarks"
+      is_editable: true
+    - name: "ml_prediction"
+    - name: "filename"
+      new_name: "pdf_filename"
+    - name: "title"
+      new_name: "pdf_title"
+    - name: 'owner'
+      new_name: "uploaded_by"
+    - name: "author"
+      new_name: "detected_pdf_author"
+    - name: "course_contacts_names"
+    - name: "course_contacts_emails"
+    - name: 'course_name'
+      new_name: "course_name_canvas"
+    - name: "course_names"
+      new_name: "course_names_osiris"
+    - name: "department"
+      new_name: "programme_canvas"
+    - name: "programmes"
+      new_name: "programmes_osiris"
+    # ------------------------------------------------
+    #  Columns below this line are not included by default, but can be added by uncommenting them:
+    #  just remove the `#` at the start of the line, or copy the line to the list above.
+    #  If you want to make more changes like conditional formatting & renaming, make sure to not just uncomment the line,
+    #  but create a block with the same structure as the other columns above (e.g. `- name: "department"`, etc).
+    #  They will be added on the next update.
+    # -------------------------------------------------
+    #- name: "is_duplicate"
+    #- name: "department"
+    #- name: "course_code"
+    #- name: "filetype"
+    #- name: "classification"
+    #- name: "type"
+    #- name: "manual_identifier"
+    #- name: "scope"
+    #- name: "auditor"
+    #- name: "last_change"
+    #- name: "status"
+    #- name: "isbn"
+    #- name: "doi"
+    #- name: "in_collection"
+    #- name: "pagecount"
+    #- name: "wordcount"
+    #- name: "picturecount"
+    #- name: "publisher"
+    #- name: "reliability"
+    #- name: "pages_x_students"
+    #- name: "count_students_registered"
+    #- name: "retrieved_from_copyright_on"
+    #- name: "faculty"
+    #- name: "course_contacts_faculties"
+    #- name: "course_contacts_organizations"
+    #- name: "cursuscodes"
+    #- name: "osiris_catalogue_url"
+    #- name: "filehash"
+    #- name: "last_scan_date_university"
+    #- name: "last_scan_date_course"
+
+
+
+# ---- Accepted CSS3 color names (for text_color, bg_color, border_color) ----
+
+#     'aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure', 'beige', 'bisque', 'black',
+#     'blanchedalmond', 'blue', 'blueviolet', 'brown', 'burlywood', 'cadetblue', 'chartreuse',
+#     'chocolate', 'coral', 'cornflowerblue', 'cornsilk', 'crimson', 'cyan', 'darkblue', 'darkcyan',
+#     'darkgoldenrod', 'darkgray', 'darkgreen', 'darkgrey', 'darkkhaki', 'darkmagenta', 'darkolivegreen',
+#     'darkorange', 'darkorchid', 'darkred', 'darksalmon', 'darkseagreen', 'darkslateblue',
+#     'darkslategray', 'darkslategrey', 'darkturquoise', 'darkviolet', 'deeppink', 'deepskyblue',
+#     'dimgray', 'dimgrey', 'dodgerblue', 'firebrick', 'floralwhite', 'forestgreen', 'fuchsia', 'gainsboro',
+#     'ghostwhite', 'gold', 'goldenrod', 'gray', 'green', 'greenyellow', 'grey', 'honeydew', 'hotpink',
+#     'indianred', 'indigo', 'ivory', 'khaki', 'lavender', 'lavenderblush', 'lawngreen', 'lemonchiffon',
+#     'lightblue', 'lightcoral', 'lightcyan', 'lightgoldenrodyellow', 'lightgray', 'lightgreen',
+#     'lightgrey', 'lightpink', 'lightsalmon', 'lightseagreen', 'lightskyblue', 'lightslategray',
+#     'lightslategrey', 'lightsteelblue', 'lightyellow', 'lime', 'limegreen', 'linen', 'magenta', 'maroon',
+#     'mediumaquamarine', 'mediumblue', 'mediumorchid', 'mediumpurple', 'mediumseagreen', 'mediumslateblue',
+#     'mediumspringgreen', 'mediumturquoise', 'mediumvioletred', 'midnightblue', 'mintcream', 'mistyrose',
+#     'moccasin', 'navajowhite', 'navy', 'oldlace', 'olive', 'olivedrab', 'orange', 'orangered', 'orchid',
+#     'palegoldenrod', 'palegreen', 'paleturquoise', 'palevioletred', 'papayawhip', 'peachpuff', 'peru',
+#     'pink', 'plum', 'powderblue', 'purple', 'red', 'rosybrown', 'royalblue', 'saddlebrown', 'salmon',
+#     'sandybrown', 'seagreen', 'seashell', 'sienna', 'silver', 'skyblue', 'slateblue', 'slategray',
+#     'slategrey', 'snow', 'springgreen', 'steelblue', 'tan', 'teal', 'thistle', 'tomato', 'turquoise',
+#     'violet', 'wheat', 'white', 'whitesmoke', 'yellow', 'yellowgreen'
+
+
+# ---- Contents of 'Complete data' sheet // all available columns ----
+
+#  final_data_col_order:  [
+#    material_id,
+#    period,
+#    department,
+#    course_code,
+#    course_name,
+#    url,
+#    file_exists,
+#    last_canvas_check,
+#    filename,
+#    title,
+#    owner,
+#    filetype,
+#    classification,
+#    type,
+#    ml_prediction,
+#    manual_classification,
+#    manual_identifier,
+#    scope,
+#    remarks,
+#    auditor,
+#    last_change,
+#    status,
+#    google_search_file,
+#    isbn,
+#    doi,
+#    in_collection,
+#    pagecount,
+#    wordcount,
+#    picturecount,
+#    author,
+#    publisher,
+#    reliability,
+#    pages_x_students,
+#    count_students_registered,
+#    retrieved_from_copyright_on,
+#    workflow_status,
+#    faculty,
+#    course_contacts_faculties,
+#    course_contacts_names,
+#    course_contacts_emails,
+#    course_contacts_organizations,
+#    course_names,
+#    cursuscodes,
+#    osiris_catalogue_url,
+#    programmes,
+#    filehash,
+#    last_scan_date_university,
+#    last_scan_date_course,
+#  ]
+
+
+# ---- Default settings for `data_entry_cols` ----
+#     data_settings:
+#       data_entry_cols:
+#         - name: "material_id"
+#         - name: "period"
+#         - name: "is_duplicate"
+#         - name: "url"
+#           is_url: true
+#         - name: "file_exists"
+#           style:
+#             activate_on: ['"No"']
+#             text_color: "olive"
+#             bg_color: "palevioletred"
+#             border_color: "orange"
+#         - name: "last_canvas_check"
+#           new_name: "latest_filecheck_date"
+#         - name: "workflow_status"
+#           is_new: true
+#           is_editable: true
+#           dropdown_options: '"ToDo,Done,InProgress"'
+#           default_val: "ToDo"
+#           style:
+#             activate_on: ['"ToDo"']
+#             text_color: "9C0006"
+#             bg_color: "FFC7CE"
+#             bold: true
+#             border_color: "FFE699"
+#         - name: "manual_classification"
+#           new_name: "v1_manual_classification"
+#           is_editable: true
+#           dropdown_options: '"open access,eigen materiaal - powerpoint,eigen materiaal - overig,lange overname,eigen materiaal - titelindicatie,anders,korte overname,middellange overname,onbekend"'
+#         - name: "v2_manual_classification"
+#           is_editable: true
+#           dropdown_options: 'ENUM:ClassificationV2'
+#         - name: "v2_overnamestatus"
+#           is_editable: true
+#           dropdown_options: 'ENUM:OvernameStatus'
+#         - name: "v2_lengte"
+#           is_editable: true
+#           dropdown_options: 'ENUM:Lengte'
+#         - name: "remarks"
+#           is_editable: true
+#         - name: "ml_prediction"
+#         - name: "filename"
+#           new_name: "pdf_filename"
+#         - name: "title"
+#           new_name: "pdf_title"
+#         - name: 'owner'
+#           new_name: "uploaded_by"
+#         - name: "author"
+#           new_name: "detected_pdf_author"
+#         - name: "course_contacts_names"
+#         - name: "course_contacts_emails"
+#         - name: 'course_name'
+#           new_name: "course_name_canvas"
+#         - name: "course_names"
+#           new_name: "course_names_osiris"
+#         - name: "department"
+#           new_name: "programme_canvas"
+#         - name: "programmes"
+#           new_name: "programmes_osiris"
