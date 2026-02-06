@@ -116,10 +116,10 @@ def import_v1_sheets(
                 "data_entry": _read_excel_quiet(file, sheet_name="Data entry"),
             }
         except Exception as e:
-            logger.error(f"Error reading {file.name}: {e}")
+            print(f"Error reading {file.name}: {e}")
             continue
         if "overview" in file.name:
-            logger.info(f"found overview sheet: {file.name}")
+            print(f"found overview sheet: {file.name}")
 
         else:
             weekly += 1
@@ -407,7 +407,7 @@ def process_v1_sheet(
 
     if details:
         logger.info(f"Details for {filename}:")
-        _details(combined_df)
+        print_details(combined_df)
     return combined_df, changes
 
 
@@ -538,7 +538,7 @@ async def add_v1_hashes(settings: Settings) -> None:
 
     await ensure_db_inited(settings)
     v1_items = await v1_CopyrightItem.filter(filehash=None).all()
-    logger.info(f"Found {len(v1_items)} v1 items without a filehash.")
+    print(f"Found {len(v1_items)} v1 items without a filehash.")
     items_as_dicts = [
         {"material_id": item.material_id, "url": item.url, "filename": item.filename}
         for item in v1_items
@@ -593,7 +593,7 @@ def inspect_fields(complete_df: pl.DataFrame, entry_df: pl.DataFrame) -> pl.Data
             entry_df, on="material_id", how="inner", suffix="_entry"
         )
     except Exception as e:
-        logger.error(f"Error merging dataframes: {e}")
+        print(f"Error merging dataframes: {e}")
         return pl.DataFrame()
 
     v1_fields_in_df: dict[str, (dict[str, list[str]] | list[str])] = {
@@ -636,6 +636,6 @@ def inspect_fields(complete_df: pl.DataFrame, entry_df: pl.DataFrame) -> pl.Data
         col for col, tagged in dfcols_tag.items() if not tagged
     ]
 
-    logger.info(v1_fields_in_df)
+    print(v1_fields_in_df)
 
     return combined_df

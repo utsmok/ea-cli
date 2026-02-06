@@ -25,6 +25,8 @@ from easy_access.db.enums import (
     Classification,
     ClassificationMapping,
     ClassificationV2,
+    Lengte,
+    OvernameStatus,
 )
 from easy_access.db.models import (
     CopyrightItem,
@@ -46,6 +48,8 @@ from easy_access.merge_rules import (
 )
 from easy_access.settings import Settings
 from easy_access.utils import (
+    normalize_file_exists,
+    normalize_workflow_status,
     safe_compare_greater,
     safe_enum,
     safe_float,
@@ -407,7 +411,13 @@ async def process_existing_items(
                     new_item, added_fields, changeable_fields
                 )
 
-            if len(list(changes.keys())) >= MIN_CHANGES_THRESHOLD:
+            # material_id and update_time are meta-fields. Count real field changes.
+            real_changes = [
+                k
+                for k in changes.keys()
+                if k not in ["material_id", "update_time", "modified_at"]
+            ]
+            if len(real_changes) > 0:
                 changes["modified_at"] = datetime.now()
                 updates[new_item.get("material_id")] = changes
                 changelist.append(db_item)
@@ -451,29 +461,62 @@ async def _process_item_overwrite(
 
         logger.debug(f"now in overwrite function for {new_item.get('material_id')}")
         for k in changeable_fields | added_fields:
-            logger.debug(f"checking field {k}")
-            logger.debug(f"new_item.get(k): {new_item.get(k)}")
-            logger.debug(f"getattr(db_item, k): {getattr(db_item, k)}")
-            if new_item.get(k) is None:
+            new_value = new_item.get(k)
+            old_value = getattr(db_item, k)
+
+            if new_value is None:
                 continue
-            if new_item.get(k) != getattr(db_item, k):
-                if str(new_item.get(k)) == getattr(db_item, k):
-                    # if the new value is the same as the old value, skip it
+
+            # Safety net and normalization for workflow_status even in overwrite mode
+            if k == "workflow_status":
+                new_value = normalize_workflow_status(new_value)
+                old_value = normalize_workflow_status(old_value)
+                # Canonical rank map (lower index = higher priority)
+                canonical = [
+                    WorkflowStatus.Done.value,
+                    WorkflowStatus.InProgress.value,
+                    WorkflowStatus.ToDo.value,
+                ]
+                if new_value in canonical and old_value in canonical:
+                    new_rank = canonical.index(new_value)
+                    old_rank = canonical.index(old_value)
+                    # Protected fields: never allow downgrade even in overwrite
+                    if new_rank > old_rank and old_value is not None:
+                        logger.debug(
+                            f"Prevented workflow_status downgrade in overwrite mode: {old_value} -> {new_value}"
+                        )
+                        continue
+
+            if k == "file_exists":
+                new_value = normalize_file_exists(new_value)
+                old_value = normalize_file_exists(old_value)
+
+            if new_value != old_value:
+                # String comparison fallback for complex types or formatting differences
+                if str(new_value) == str(old_value):
                     continue
+
                 changes = record_field_change(
                     changes,
                     k,
-                    new_item.get(k),
-                    getattr(db_item, k),
+                    new_value,
+                    old_value,
                     "[overwrite] new value != old value",
                     db_item,
                 )
-                logger.debug(f"changes: {changes}")
         # if any changes were made we'll have 3 or more keys in the changes dict
         # if not, no need to update the db
         logger.debug("final changes:")
         logger.debug(changes)
-        if len(changes) < MIN_CHANGES_THRESHOLD:
+        # Only add modified_at if there are actual changes beyond the meta fields
+        real_changes = [
+            k
+            for k in changes.keys()
+            if k not in ["material_id", "update_time", "modified_at"]
+        ]
+        if len(real_changes) > 0:
+            changes["modified_at"] = datetime.now()
+        else:
             logger.debug(f"No changes for item {new_item.get('material_id')}.")
     except Exception as e:
         logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
@@ -489,7 +532,7 @@ async def _process_item_normal(
     new_item: dict, added_fields: dict, changeable_fields: dict
 ) -> tuple[dict, CopyrightItem | None]:
     """
-    Process a single item in normal mode using comparison logic.
+    Process a single item with merge strategies.
 
     Args:
         new_item: Dictionary with new field values
@@ -504,13 +547,24 @@ async def _process_item_normal(
     """
     try:
         db_item = await CopyrightItem.get(material_id=new_item.get("material_id"))
-        changes = {}
+        changes = {
+            "material_id": new_item.get("material_id"),
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
         changes, db_item = compare_and_update_fields(
             new_item, db_item, added_fields, changes
         )
         changes, db_item = compare_and_update_fields(
             new_item, db_item, changeable_fields, changes
         )
+        # Only add modified_at if there are actual changes beyond the meta fields
+        real_changes = [
+            k
+            for k in changes.keys()
+            if k not in ["material_id", "update_time", "modified_at"]
+        ]
+        if len(real_changes) > 0:
+            changes["modified_at"] = datetime.now()
     except Exception as e:
         logger.warning(f"Could not update item {new_item.get('material_id')}: {e}")
         raise DatabaseOperationError(
@@ -666,8 +720,8 @@ def compare_and_update_fields(
 
         # Special handling for file_exists
         if field == "file_exists":
-            new_value = _normalize_file_exists(new_value)
-            if not isinstance(new_value, bool):
+            new_value = normalize_file_exists(new_value)
+            if new_value is None:
                 continue
 
             changes = record_field_change(
@@ -799,7 +853,7 @@ def _cast_numeric_value(value: Any, target_type: type) -> int | float | None:
     return None
 
 
-def _normalize_file_exists(value: Any) -> bool | None:
+def normalize_file_exists(value: Any) -> bool | None:
     """Normalize file_exists values to boolean."""
     match value:
         case True | 1 | "1" | "true" | "True":
@@ -1218,6 +1272,29 @@ async def process_staged_faculty_updates(settings: Settings) -> None:
                             # logger.debug(
                             #    f"[STAGED][UPDATE] material_id={mid}, stage=faculty_update: Updating workflow_status"
                             # )
+
+                    # v2 classification fields from faculty sheets
+                    if update.v2_manual_classification:
+                        v2_cls = safe_enum(
+                            ClassificationV2, update.v2_manual_classification
+                        )
+                        if v2_cls and item.v2_manual_classification != v2_cls:
+                            item.v2_manual_classification = v2_cls
+                            update_fields.append("v2_manual_classification")
+
+                    if update.v2_overnamestatus:
+                        v2_overname = safe_enum(
+                            OvernameStatus, update.v2_overnamestatus
+                        )
+                        if v2_overname and item.v2_overnamestatus != v2_overname:
+                            item.v2_overnamestatus = v2_overname
+                            update_fields.append("v2_overnamestatus")
+
+                    if update.v2_lengte:
+                        v2_len = safe_enum(Lengte, update.v2_lengte)
+                        if v2_len and item.v2_lengte != v2_len:
+                            item.v2_lengte = v2_len
+                            update_fields.append("v2_lengte")
 
                     if update_fields:
                         await item.save(update_fields=update_fields)
@@ -1656,7 +1733,7 @@ async def update_workflow_status_from_db(settings: Settings) -> None:
             item.manual_classification
             and item.manual_classification.lower() in DONE_MANUAL_CLASSIFICATIONS
         ):
-            logger.info(
+            print(
                 f"Updating item {item.material_id} to Done based on manual_classification '{item.manual_classification}'"
             )
             item.workflow_status = WorkflowStatus.Done
@@ -1756,7 +1833,9 @@ async def map_v1_to_v2_classifications(settings: Settings) -> None:
                     item.v2_lengte = mapped.length
                     item.v2_overnamestatus = mapped.overname_status
                     faculty = item.faculty
+                    print(faculty, type(faculty))
                     abbreviation = faculty.abbreviation
+                    print(abbreviation, type(abbreviation))
                     v1_items = await item.v1_items.all()
                     v1_id = None
                     if v1_items:

@@ -127,10 +127,8 @@ async def export_faculty_sheets(
         # Determine which items are new (not yet present in any existing regular file for this faculty)
         existing_ids: set[int] = set()
         for file in faculty_dir.files:
-            # ignore overview files and non-excel
-            if file.extension not in [".xls", ".xlsx"]:
-                continue
-            if "overview" in file.name or "llm" in file.name:
+            # ONLY read from standard workflow files: inbox, in_progress, done
+            if file.name.lower() not in ["inbox.xlsx", "in_progress.xlsx", "done.xlsx"]:
                 continue
             try:
                 # read the Complete Data sheet from existing file

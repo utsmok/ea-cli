@@ -684,6 +684,9 @@ class StagedFacultyUpdate(Model, TimestampMixin):
 
     material_id = fields.IntField(primary_key=True)
     manual_classification = fields.CharField(max_length=2048, null=True)
+    v2_manual_classification = fields.CharField(max_length=255, null=True)
+    v2_overnamestatus = fields.CharField(max_length=255, null=True)
+    v2_lengte = fields.CharField(max_length=255, null=True)
     remarks = fields.CharField(max_length=10000, null=True)
     workflow_status = fields.CharField(max_length=255, null=True)
 

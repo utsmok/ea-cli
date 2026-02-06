@@ -238,8 +238,8 @@ university:
     url: https://people.utwente.nl/
     query_url: https://people.utwente.nl/overview?query=
   manual_department_mappings: # Manual overrides for entries that do not fit the standard structured mapping below -- e.g. alternative spellings.
-    "Master Risicomanagement": "BMS"
-    "Master Public Management": "BMS"
+    "Master Risicomanagement": "UNM"
+    "Master Public Management": "UNM"
     "BMS: Behavioural, Management and Social Sciences": "BMS"
     "EEMCS: Electrical Engineering, Mathematics and Computer Science": "EEMCS"
     "ET: Engineering Technology": "ET"

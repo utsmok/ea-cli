@@ -22,7 +22,12 @@ from openpyxl.worksheet.table import TableStyleInfo
 
 # from easy_access.settings import DEPARTMENT_MAPPING, SETTINGS, ColInfo, DirSetting # Will be passed as parameters
 from easy_access.settings import ColInfo, DirSetting, Settings  # Keep for type hinting
-from easy_access.utils import File, standardize_dataframe
+from easy_access.utils import (
+    File,
+    normalize_file_exists,
+    normalize_workflow_status,
+    standardize_dataframe,
+)
 
 
 def _read_excel_quiet(file_path: str | Path, **kwargs) -> pl.DataFrame:
@@ -574,27 +579,51 @@ def read_faculty_sheets(settings: Settings) -> pl.DataFrame:
         "workflow_status",
         "remarks",
         "manual_classification",
+        "v2_manual_classification",
+        "v2_overnamestatus",
+        "v2_lengte",
     ]
-    pl.DataFrame(schema={col: pl.Utf8 for col in select_cols})
+    # Additional known column from sheet config
+    alt_v1_col = "v1_manual_classification"
+    pl.DataFrame(schema={col: pl.Utf8 for col in select_cols + [alt_v1_col]})
 
     for faculty_dir in settings.dirs[DirSetting.FACULTIES_DIR].dirs():
         for file in faculty_dir.files_r:
-            if (
-                file.extension == ".xlsx"
-                and "overview" not in file.name
-                and "llm" not in file.name
-            ):
+            # ONLY read from standard workflow files: inbox, in_progress, done
+            if file.name.lower() in ["inbox.xlsx", "in_progress.xlsx", "done.xlsx"]:
                 try:
                     df = _read_excel_quiet(
                         file.path, sheet_name=settings.data_settings.data_entry_name
                     )
-                    for col_name in select_cols:
+
+                    # Ensure essential columns exist and are cast to string for normalization
+                    for col_name in select_cols + [alt_v1_col]:
                         if col_name not in df.columns:
                             df = df.with_columns(
                                 pl.lit(None).alias(col_name).cast(pl.Utf8)
                             )
                         else:
                             df = df.with_columns(pl.col(col_name).cast(pl.Utf8))
+
+                    # If sheet uses v1_manual_classification, map to manual_classification
+                    if alt_v1_col in df.columns:
+                        df = df.with_columns(
+                            pl.when(
+                                pl.col("manual_classification").is_null()
+                                | (pl.col("manual_classification") == "")
+                            )
+                            .then(pl.col(alt_v1_col))
+                            .otherwise(pl.col("manual_classification"))
+                            .alias("manual_classification")
+                        )
+
+                    # Normalize workflow_status if present
+                    if "workflow_status" in df.columns:
+                        normalized = df["workflow_status"].map_elements(
+                            normalize_workflow_status, return_dtype=pl.Utf8
+                        )
+                        df = df.with_columns(normalized.alias("workflow_status"))
+
                     df = df.select(
                         select_cols
                     )  # Ensure correct column order and selection

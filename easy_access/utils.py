@@ -129,6 +129,44 @@ def safe_compare_greater(a: Any, b: Any) -> bool:
     return False
 
 
+def normalize_file_exists(value: Any) -> bool | None:
+    """Normalize file_exists values to boolean."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+
+    s = str(value).strip().lower()
+    if s in ("true", "1", "yes", "y", "t", "checked"):
+        return True
+    if s in ("false", "0", "no", "n", "f", "unchecked"):
+        return False
+    return None
+
+
+def normalize_workflow_status(value: Any) -> str:
+    """Normalize workflow_status values to standard strings (ToDo, InProgress, Done)."""
+    if value is None:
+        return "ToDo"
+
+    if hasattr(value, "value"):  # Handle Enum
+        s = str(value.value).strip().lower()
+    else:
+        s = str(value).strip().lower()
+
+    if s in ("done", "d", "klaar", "gereed"):
+        return "Done"
+    if s in ("inprogress", "in progress", "in_progress", "p", "bezig"):
+        return "InProgress"
+    if s in ("todo", "to do", "to_do", "t", "te doen"):
+        return "ToDo"
+
+    # Capitalize first letter as fallback for others, e.g. "Draft" -> "Draft"
+    return s.capitalize() if s else "ToDo"
+
+
 def determine_course_code(code: str, name: str) -> set[str]:
     """Determines Osiris course code(s) from Canvas course data.
 

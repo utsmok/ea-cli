@@ -251,8 +251,7 @@ async def copyright_item_from_dict(
             item["course_name"] = item.get("course_name_canvas")
 
         # Normalize file_exists before checking if it's falsy
-        from easy_access.db.update import _normalize_file_exists
-
+        from easy_access.utils import normalize_file_exists
         original_file_exists = item.get("file_exists")
 
         # Only set to None if the original value was None or empty string
@@ -260,7 +259,7 @@ async def copyright_item_from_dict(
         if original_file_exists is None or original_file_exists == "":
             item["file_exists"] = None
         else:
-            normalized_file_exists = _normalize_file_exists(original_file_exists)
+            normalized_file_exists = normalize_file_exists(original_file_exists)
             item["file_exists"] = normalized_file_exists
 
         final_dict = {}
